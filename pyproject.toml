@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "precision-squad"
+version = "0.1.0"
+description = "Workflow control plane for OpenSWE-backed issue execution"
+readme = "README.md"
+requires-python = ">=3.14"
+authors = [{ name = "cracklings3d" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pyright>=1.1.400",
+    "pytest>=8.3.0",
+    "ruff>=0.11.0",
+]
+
+[project.scripts]
+precision-squad = "precision_squad.cli:main"
+precision-squad-bootstrap-skill = "precision_squad.bootstrap:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+precision_squad = ["data/*.json", "data/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+exclude = [".precision-squad"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+include = ["src", "tests"]

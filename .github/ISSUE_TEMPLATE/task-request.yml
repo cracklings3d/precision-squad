@@ -1,0 +1,63 @@
+name: Task Request
+description: Describe a bounded product change to implement through a linked pull request.
+title: "[Task]: "
+labels:
+  - task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use one issue for one bounded problem. The eventual PR should link back to this issue.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-line description of the requested change.
+      placeholder: Add PAT-backed GitHub issue intake
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong, missing, or risky today?
+      placeholder: The CLI cannot yet fetch and normalize GitHub issues.
+    validations:
+      required: true
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired Outcome
+      description: What should be true when this issue is complete?
+      placeholder: The CLI can fetch owner/repo#issue and persist an intake artifact.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: List the concrete checks for completion.
+      placeholder: |
+        - The issue intake artifact is persisted as JSON
+        - Broad planning issues are blocked
+        - A bounded issue is classified as runnable
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints / Non-Goals
+      description: Boundaries, exclusions, or known limits.
+      placeholder: Keep the change local. Do not add GitHub App auth.
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Files, issues, docs, or repositories that matter.
+      placeholder: docs/architecture-v1.md, PRECISION_SQUAD_HANDOFF.md
+  - type: textarea
+    id: structural-risk
+    attributes:
+      label: Structural / Parallel-System Risk
+      description: If this touches an existing concept, note the canonical path and any risk of creating a competing path.
+      placeholder: The canonical GitHub intake path should stay in src/precision_squad/... and not split into a second caller path.

@@ -1,0 +1,49 @@
+name: Bug Report
+description: Report a defect that should be fixed through an issue-linked pull request.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One-line defect summary.
+      placeholder: Broad issues are incorrectly treated as runnable
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Steps, commands, or conditions needed to reproduce the bug.
+      placeholder: |
+        1. Run precision-squad against a planning issue
+        2. Observe the resulting classification
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      placeholder: The issue should be blocked as too broad for execution.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      placeholder: The issue is treated as directly runnable.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Why does this matter?
+      placeholder: The control plane can start work on ambiguous tasks.
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      placeholder: Related issues, logs, commits, or run artifacts

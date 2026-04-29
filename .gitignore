@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.venv/
+.env
+dist/
+build/
+*.egg-info/
+.precision-squad/

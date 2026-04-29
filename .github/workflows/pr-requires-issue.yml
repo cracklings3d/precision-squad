@@ -1,0 +1,28 @@
+name: PR Requires Issue
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  require-linked-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body for linked issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const text = `${pr.title || ""}\n${pr.body || ""}`;
+            const patterns = [
+              /(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#\d+/i,
+              /(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/i,
+            ];
+            const matched = patterns.some((pattern) => pattern.test(text));
+            if (!matched) {
+              core.setFailed("PRs must reference a governing GitHub issue using a closing keyword such as 'Closes #123'.");
+            }
