@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "checklist_id": "docs-first-execution",
+  "doc_source_candidates": [
+    "README.md",
+    "readme.md",
+    "README.rst",
+    "README.txt",
+    "CONTRIBUTING.md",
+    "contributing.md",
+    "docs/README.md",
+    "docs/getting-started.md",
+    "docs/setup.md",
+    "docs/testing.md"
+  ],
+  "setup_section_headings": [
+    "installation",
+    "install",
+    "setup",
+    "development",
+    "development setup",
+    "getting started"
+  ],
+  "test_section_headings": [
+    "tests",
+    "testing",
+    "test",
+    "quality",
+    "verification"
+  ],
+  "prerequisite_section_headings": [
+    "requirements",
+    "dependencies",
+    "dependency",
+    "system dependencies",
+    "windows system dependencies",
+    "windows",
+    "linux",
+    "macos",
+    "prerequisites",
+    "environment"
+  ],
+  "manual_prerequisite_signals": [
+    "download",
+    "installer",
+    "runtime",
+    "runtime libraries",
+    "dependency",
+    "dependencies",
+    "github.com"
+  ],
+  "environment_assumption_signals": [
+    "restart your terminal",
+    "restart terminal",
+    "restart shell",
+    "restart powershell",
+    "path",
+    "dll",
+    "environment variable",
+    "runtime libraries",
+    "discoverable"
+  ],
+  "rules": [
+    {
+      "code": "docs_entrypoint_present",
+      "area": "entrypoint",
+      "blocking": true,
+      "requirement": "Provide a canonical project-facing entrypoint such as README.md or CONTRIBUTING.md.",
+      "question": "Where should a newcomer start reading?"
+    },
+    {
+      "code": "docs_setup_command_present",
+      "area": "setup",
+      "blocking": true,
+      "requirement": "State one canonical local setup command in the docs.",
+      "question": "What exact local setup command should a newcomer run first?"
+    },
+    {
+      "code": "docs_qa_command_present",
+      "area": "qa",
+      "blocking": true,
+      "requirement": "State one canonical QA command in the docs.",
+      "question": "What exact QA command should a newcomer run after making a change?"
+    },
+    {
+      "code": "docs_setup_command_unambiguous",
+      "area": "setup",
+      "blocking": true,
+      "requirement": "If multiple setup paths exist, choose one canonical path and remove ambiguity.",
+      "question": "If multiple install paths exist, which one is the canonical path this workflow should trust?"
+    },
+    {
+      "code": "docs_qa_command_unambiguous",
+      "area": "qa",
+      "blocking": true,
+      "requirement": "If multiple QA paths exist, choose one canonical path and remove ambiguity.",
+      "question": "If multiple test paths exist, which one is the canonical proof that a fix works?"
+    },
+    {
+      "code": "docs_commands_explained",
+      "area": "docs",
+      "blocking": true,
+      "requirement": "Briefly explain the setup and QA commands so a newcomer understands what they are for.",
+      "question": "What do these commands do, and why should a newcomer trust them?"
+    },
+    {
+      "code": "docs_setup_prerequisite_manual_only",
+      "area": "prerequisite",
+      "blocking": true,
+      "requirement": "If setup depends on an external prerequisite, document one exact executable acquisition or installation command instead of only prose or a URL.",
+      "question": "What exact command should a newcomer run to acquire and install this prerequisite?"
+    },
+    {
+      "code": "docs_setup_prerequisite_version_pinned",
+      "area": "prerequisite",
+      "blocking": true,
+      "requirement": "If setup depends on an external prerequisite, specify the exact version, release, or channel to install.",
+      "question": "Which exact prerequisite version or release should a newcomer install?"
+    },
+    {
+      "code": "docs_setup_prerequisite_source_unambiguous",
+      "area": "prerequisite",
+      "blocking": true,
+      "requirement": "If setup depends on an external prerequisite, state whether the newcomer should use a release artifact, package manager, or source build, and point to the exact source.",
+      "question": "Should the newcomer use a release artifact, a package manager, or a source build for this prerequisite?"
+    },
+    {
+      "code": "docs_setup_prerequisite_verification_present",
+      "area": "prerequisite",
+      "blocking": true,
+      "requirement": "Document an exact command that verifies the prerequisite is installed and visible before QA runs.",
+      "question": "What exact command proves this prerequisite is installed and visible before QA runs?"
+    },
+    {
+      "code": "docs_environment_assumptions_explicit",
+      "area": "environment",
+      "blocking": true,
+      "requirement": "Make environment assumptions explicit, including how platform runtimes, PATH changes, DLL discovery, or shell restarts are expected to affect the active environment.",
+      "question": "What environment assumptions does this setup path rely on, and how should a newcomer understand them?"
+    },
+    {
+      "code": "docs_environment_mutation_verification_present",
+      "area": "environment",
+      "blocking": true,
+      "requirement": "If setup depends on restarting the terminal, PATH changes, or runtime discovery, document an exact verification command that proves the environment mutation took effect.",
+      "question": "What exact command proves the environment mutation took effect in the active shell?"
+    }
+  ]
+}
