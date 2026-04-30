@@ -60,7 +60,7 @@ Issue Intake → Run Store → Docs-First Executor → Repair Agent → QA
 |---|---|
 | Ruff linting | All checks passed |
 | Pyright type-checking | 0 errors, 0 warnings |
-| Pytest | 109 tests, all passed |
+| Pytest | 27 integration tests (23 passed, 4 skipped -- require GITHUB_TOKEN) |
 | CI workflow | Configured (lint, typecheck, test) on push/PR |
 
 ## 5. Implemented Features
@@ -117,7 +117,6 @@ Issue Intake → Run Store → Docs-First Executor → Repair Agent → QA
 
 | Gap | Severity | Notes |
 |---|---|---|
-| No real end-to-end integration tests | **High** | 109 unit tests exist, but all mock external dependencies (GitHub, opencode, subprocess). No test exercises the full pipeline against real inputs. |
 | Python 3.14 only | **Medium** | `requires-python = ">=3.14"` locks to an unreleased/preview Python version. If this is intentional, CI should verify 3.14 is available on runners. If a mistake, constraint should be relaxed. |
 | No error-level test for `compat/imghdr.py` | **Low** | Python 3.14 removed `imghdr`; the compat shim fills the gap but has no direct test. |
 | `__version__` exported but no runtime version command tested | **Low** | CLI has `--version`, tests cover it, but packaging metadata version sync is implicit. |
@@ -144,22 +143,17 @@ Issue Intake → Run Store → Docs-First Executor → Repair Agent → QA
 
 Based on the current state, here are the highest-value next steps:
 
-### Priority 1: Integration Test Harness
-- Create at least one end-to-end test that exercises a full repair loop
-- Use a fixture repository with known docs, issue, and expected output
-- Mock only the `opencode` and GitHub write calls, let executor and QA run for real
-
-### Priority 2: Error Handling and Resilience
+### Priority 1: Error Handling and Resilience
 - Add checkpoint-based resume for interrupted runs
 - Implement structured logging with log file output
 - Add `opencode` version detection and compatibility reporting
 
-### Priority 3: Python Version Policy
+### Priority 2: Python Version Policy
 - Confirm whether Python 3.14 requirement is intentional
 - If so, add a note explaining why in docs/ or README
 - If not, relax to `>=3.12` or the earliest viable version
 
-### Priority 4: Governance Verdict Typing
+### Priority 3: Governance Verdict Typing
 - Replace `object` with `GovernanceVerdict` in `RepairIssueReport`
 - Remove the `cast(Any, ...)` calls in CLI
 
