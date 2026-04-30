@@ -25,10 +25,14 @@ from precision_squad.models import (
 
 @pytest.fixture
 def github_token() -> str:
-    """Return the GITHUB_TOKEN from the environment, or skip if not set."""
-    token = os.getenv("GITHUB_TOKEN", "")
+    """Return the GitHub token from the environment, or skip if not set.
+
+    Resolves {env:OpenCode_Github_Token} (the system-managed token) first,
+    then falls back to GITHUB_TOKEN for local development.
+    """
+    token = os.getenv("OpenCode_Github_Token", os.getenv("GITHUB_TOKEN", ""))
     if not token:
-        pytest.skip("GITHUB_TOKEN is not set")
+        pytest.skip("GitHub token is not set (checked OpenCode_Github_Token, then GITHUB_TOKEN)")
     return token
 
 
