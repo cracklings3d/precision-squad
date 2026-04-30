@@ -17,7 +17,6 @@ import pytest
 
 from precision_squad.executor import DocsFirstExecutor
 from precision_squad.models import (
-    ExecutionResult,
     GitHubIssue,
     IssueAssessment,
     IssueIntake,

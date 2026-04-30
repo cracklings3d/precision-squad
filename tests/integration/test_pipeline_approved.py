@@ -19,8 +19,8 @@ from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
     GitHubIssue,
     IssueAssessment,
-    IssueReference,
     IssueIntake,
+    IssueReference,
 )
 
 
@@ -277,13 +277,13 @@ class _ApprovedTestDependencies:
         run_dir: Path,
         contract_artifact_dir: Path,
     ):
-        from precision_squad.repair.qa import WorkspaceQaVerifier
         from precision_squad.repair.orchestration import (
             RepairStage,
             _failure_signature,
             _finalize_qa_result,
             _run_baseline_qa,
         )
+        from precision_squad.repair.qa import WorkspaceQaVerifier
 
         verifier = WorkspaceQaVerifier()
         qa_result = _run_baseline_qa(
@@ -312,7 +312,6 @@ class _ApprovedTestDependencies:
         if repair_result.status != "completed":
             return repair_result, baseline_result, qa_result
 
-        from precision_squad.models import QaResult
 
         workspace_path = Path(repair_result.workspace_path or "")
         repo_workspace = workspace_path / "repo"
@@ -350,6 +349,7 @@ class _ApprovedTestDependencies:
         return _real(execution_result)
 
     def execute_publish_plan(self, intake, plan, *, publish, run_dir=None):
+        from precision_squad.models import PublishResult
         return PublishResult(
             status="dry_run",
             target=plan.status,
@@ -359,6 +359,3 @@ class _ApprovedTestDependencies:
 
     def run_post_publish_review_if_needed(self, **kwargs):
         return None
-
-
-from precision_squad.models import PublishResult

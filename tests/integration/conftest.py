@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from precision_squad.models import (
-    ExecutionResult,
     GitHubIssue,
     IssueAssessment,
     IssueIntake,
@@ -18,7 +17,6 @@ from precision_squad.models import (
     RepairResult,
     RunRecord,
 )
-
 
 # ---------------------------------------------------------------------------
 # GitHub token

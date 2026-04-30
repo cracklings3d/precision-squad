@@ -17,7 +17,6 @@ import pytest
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import IssueIntake
 
-
 # ---------------------------------------------------------------------------
 # Tailored repair adapters for docs-remediation scenarios
 # ---------------------------------------------------------------------------

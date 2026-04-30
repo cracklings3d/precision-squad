@@ -15,8 +15,8 @@ from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
     GitHubIssue,
     IssueAssessment,
-    IssueReference,
     IssueIntake,
+    IssueReference,
 )
 from tests.integration.test_pipeline_approved import _ApprovedTestDependencies
 

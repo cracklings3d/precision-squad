@@ -7,7 +7,6 @@ occurs and the correct publish plan is produced.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -16,14 +15,8 @@ from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
     ExecutionResult,
     IssueIntake,
-    PostPublishReviewResult,
-    PublishPlan,
     PublishResult,
-    QaResult,
-    RepairResult,
-    RunRecord,
 )
-
 
 # ---------------------------------------------------------------------------
 # Blocked intake: plan issue skips the executor entirely
@@ -300,7 +293,6 @@ class _BlockedTestDependencies:
         raise AssertionError("validation should not run for blocked intake")
 
     def merge_docs_remediation_execution_result(self, *args, **kwargs):
-        from precision_squad.models import ExecutionResult
 
         return ExecutionResult(
             status="blocked",
