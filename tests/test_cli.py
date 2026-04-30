@@ -655,7 +655,7 @@ def test_run_issue_persists_repair_result_when_synthesis_artifacts_exist(
     assert "QA Status: not_run" in captured.out
 
 
-def test_run_issue_marks_baseline_tolerant_success_provisional(
+def test_run_issue_marks_baseline_tolerant_success_approved(
     capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     intake = IssueIntake(
@@ -704,13 +704,11 @@ def test_run_issue_marks_baseline_tolerant_success_provisional(
                 phase="baseline",
             ),
             __import__("precision_squad.models", fromlist=["QaResult"]).QaResult(
-                status="provisional",
-                summary=(
-                    "Repair QA improved on the baseline failure set without introducing "
-                    "new failures, but the suite is not fully green."
-                ),
-                detail_codes=("qa_baseline_improved",),
+                status="failed",
+                summary="Repair QA improved on baseline.",
+                detail_codes=("qa_failed",),
                 phase="final",
+                quality="improved",
             ),
         ),
     )
@@ -728,9 +726,8 @@ def test_run_issue_marks_baseline_tolerant_success_provisional(
     )
 
     captured = capsys.readouterr()
-    assert status == 5
-    assert "QA Status: provisional" in captured.out
-    assert "Governance: provisional" in captured.out
+    assert status == 0
+    assert "Governance: approved" in captured.out
     assert "Publish Plan: draft_pr" in captured.out
 
 

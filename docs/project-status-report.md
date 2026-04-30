@@ -41,7 +41,7 @@ Issue Intake → Run Store → Docs-First Executor → Repair Agent → QA
 | `docs_remediation.py` | Docs remediation repair detection, fingerprinting, deduplication | Done |
 | `repair/` | `OpenCodeRepairAdapter`, repair+QA orchestration loop | Done |
 | `qa.py` | QA verifier (baseline + final, strict exact-command execution) | Done |
-| `governance.py` | Three-way verdict: approved/provisional/blocked | Done |
+| `governance.py` | Two-way verdict: approved/blocked | Done |
 | `publishing.py` | Build publish plans (draft PR, issue comment, follow-up issue) | Done |
 | `publish_executor.py` | Commit repaired state, create draft PR | Done |
 | `post_publish_review.py` | Automated reviewer + architect PR review loops | Done |
@@ -92,10 +92,11 @@ Issue Intake → Run Store → Docs-First Executor → Repair Agent → QA
 - Whitelist-driven tool bootstrapping (uv, poetry pip install)
 - Baseline QA against clean clone, final QA against repaired workspace
 - Four outcome categories: passed, failed, unrunnable, failed_infra
-- Provisional classification for broken-baseline improvements
+- Quality tag for baseline-tolerant improvements (green, improved, degraded)
 
 ### 5.5 Governance
-- Three verdicts: approved, provisional, blocked
+- Two verdicts: approved, blocked
+- Quality tag on ExecutionResult: green, improved, degraded
 - Follow-up issue path for unrelated blockers
 - Blocker fingerprint deduplication across issues
 

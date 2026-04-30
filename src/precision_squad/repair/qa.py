@@ -258,24 +258,48 @@ def _finalize_qa_result(
         phase="final",
     )
     if baseline_result.status not in {"failed", "failed_infra"}:
-        return final_result
+        if qa_result.status == "passed":
+            quality: Literal["green", "degraded"] = "green"
+        else:
+            quality = "degraded"
+        return QaResult(
+            status=final_result.status,
+            summary=final_result.summary,
+            detail_codes=final_result.detail_codes,
+            command=final_result.command,
+            stdout_path=final_result.stdout_path,
+            stderr_path=final_result.stderr_path,
+            phase="final",
+            quality=quality,
+        )
 
     repaired_failure_signature = _failure_signature(qa_result)
     if repaired_failure_signature < baseline_failure_signature:
         return QaResult(
-            status="provisional",
-            summary=(
-                "Repair QA improved on the baseline failure set without introducing "
-                "new failures, but the suite is not fully green."
-            ),
-            detail_codes=("qa_baseline_improved",),
-            command=qa_result.command,
-            stdout_path=qa_result.stdout_path,
-            stderr_path=qa_result.stderr_path,
+            status=final_result.status,
+            summary=final_result.summary,
+            detail_codes=final_result.detail_codes,
+            command=final_result.command,
+            stdout_path=final_result.stdout_path,
+            stderr_path=final_result.stderr_path,
             phase="final",
+            quality="improved",
         )
 
-    return final_result
+    if qa_result.status == "passed":
+        quality = "green"
+    else:
+        quality = "degraded"
+    return QaResult(
+        status=final_result.status,
+        summary=final_result.summary,
+        detail_codes=final_result.detail_codes,
+        command=final_result.command,
+        stdout_path=final_result.stdout_path,
+        stderr_path=final_result.stderr_path,
+        phase="final",
+        quality=quality,
+    )
 
 
 def _failure_signature(qa_result: QaResult) -> frozenset[str]:

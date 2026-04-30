@@ -119,23 +119,24 @@ def test_apply_governance_approves_successful_run() -> None:
     assert verdict.status == "approved"
 
 
-def test_apply_governance_marks_baseline_tolerant_run_provisional() -> None:
+def test_apply_governance_approves_run_with_baseline_improved_detail_code() -> None:
     intake = _bounded_intake()
     execution = ExecutionResult(
         status="completed",
         executor_name="docs+repair",
         summary="Execution completed with baseline-tolerant QA.",
         detail_codes=("repair_stage_completed", "qa_baseline_improved"),
+        quality="improved",
     )
     evaluation = evaluate_run(intake, execution)
 
     verdict = apply_governance(intake, execution, evaluation)
 
-    assert verdict.status == "provisional"
+    assert verdict.status == "approved"
     assert verdict.reason_codes == ("qa_baseline_improved",)
 
 
-def test_apply_governance_marks_approximated_qa_run_provisional() -> None:
+def test_apply_governance_approves_run_with_approximated_qa_detail_code() -> None:
     intake = _bounded_intake()
     execution = ExecutionResult(
         status="completed",
@@ -147,8 +148,8 @@ def test_apply_governance_marks_approximated_qa_run_provisional() -> None:
 
     verdict = apply_governance(intake, execution, evaluation)
 
-    assert verdict.status == "provisional"
-    assert verdict.reason_codes == ("qa_approximated",)
+    assert verdict.status == "approved"
+    assert verdict.reason_codes == ()
 
 
 def test_apply_governance_blocks_unrunnable_qa_run() -> None:
@@ -210,15 +211,4 @@ def test_build_publish_plan_returns_draft_pr_for_approved() -> None:
     assert "Run ID: `run-123`" in plan.body
 
 
-def test_build_publish_plan_marks_provisional_draft_pr_context() -> None:
-    verdict = __import__("precision_squad.models", fromlist=["GovernanceVerdict"]).GovernanceVerdict(
-        status="provisional",
-        summary="Baseline-tolerant success.",
-        reason_codes=("qa_baseline_improved",),
-    )
 
-    plan = build_publish_plan(_bounded_intake(), _run_record(), verdict)
-
-    assert plan.status == "draft_pr"
-    assert "## Provisional Summary" in plan.body
-    assert "Quality state: `provisional`" in plan.body

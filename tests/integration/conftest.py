@@ -30,7 +30,7 @@ def github_token() -> str:
     Resolves {env:OpenCode_Github_Token} (the system-managed token) first,
     then falls back to GITHUB_TOKEN for local development.
     """
-    token = os.getenv("OpenCode_Github_Token", os.getenv("GITHUB_TOKEN", ""))
+    token = os.getenv("GITHUB_TOKEN", os.getenv("OpenCode_Github_Token", ""))
     if not token:
         pytest.skip("GitHub token is not set (checked OpenCode_Github_Token, then GITHUB_TOKEN)")
     return token

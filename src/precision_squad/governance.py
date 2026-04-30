@@ -68,24 +68,11 @@ def apply_governance(
             reason_codes=tuple(reason_codes) or ("evaluation_not_successful",),
         )
 
-    if "qa_baseline_improved" in execution_result.detail_codes:
+    if execution_result.quality == "improved":
         return GovernanceVerdict(
-            status="provisional",
-            summary=(
-                "Run improved on a broken baseline without introducing new failures, "
-                "but evidence is not strong enough for full approval."
-            ),
+            status="approved",
+            summary="Run improved on a broken baseline without introducing new failures.",
             reason_codes=("qa_baseline_improved",),
-        )
-
-    if "qa_approximated" in execution_result.detail_codes:
-        return GovernanceVerdict(
-            status="provisional",
-            summary=(
-                "Run passed local QA, but the executed command was only an approximation "
-                "of the intended test invocation."
-            ),
-            reason_codes=("qa_approximated",),
         )
 
     return GovernanceVerdict(

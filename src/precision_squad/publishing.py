@@ -27,15 +27,9 @@ def build_publish_plan(
     verdict: GovernanceVerdict,
 ) -> PublishPlan:
     """Prepare the first publish plan without calling GitHub yet."""
-    if verdict.status in {"approved", "provisional"}:
-        context_heading = (
-            "## Summary\n"
-            if verdict.status == "approved"
-            else "## Provisional Summary\n"
-        )
-        context_note = "" if verdict.status == "approved" else (
-            "- Quality state: `provisional` (baseline-tolerant, not fully green)\n"
-        )
+    if verdict.status == "approved":
+        context_heading = "## Summary\n"
+        context_note = ""
         rejected_pr = latest_rejected_pull_request(intake.issue.comments)
         return PublishPlan(
             status="draft_pr",

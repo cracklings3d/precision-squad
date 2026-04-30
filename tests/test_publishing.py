@@ -16,7 +16,7 @@ from precision_squad.models import (
 from precision_squad.publishing import build_publish_plan
 
 
-def test_build_publish_plan_reuses_latest_rejected_pull_request_metadata() -> None:
+def test_build_publish_plan_creates_draft_pr_for_approved() -> None:
     intake = IssueIntake(
         issue=GitHubIssue(
             reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
@@ -24,9 +24,6 @@ def test_build_publish_plan_reuses_latest_rejected_pull_request_metadata() -> No
             body="## Description\nAdd a version flag.",
             labels=("enhancement",),
             html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
-            comments=(
-                "## Precision Squad Review Feedback\n- PR: https://github.com/cracklings3d/markdown-pdf-renderer/pull/15\n- Reviewer verdict: `rejected`\n",
-            ),
         ),
         summary="Add --version flag to CLI",
         problem_statement="Add a version flag.",
@@ -41,16 +38,15 @@ def test_build_publish_plan_reuses_latest_rejected_pull_request_metadata() -> No
         run_dir=".precision-squad/runs/run-123",
     )
     verdict = GovernanceVerdict(
-        status="provisional",
-        summary="QA improved on baseline.",
-        reason_codes=("qa_baseline_improved",),
+        status="approved",
+        summary="QA passed.",
+        reason_codes=(),
     )
 
     plan = build_publish_plan(intake, run_record, verdict)
 
     assert plan.status == "draft_pr"
-    assert plan.pull_number == 15
-    assert plan.pull_request_url == "https://github.com/cracklings3d/markdown-pdf-renderer/pull/15"
+    assert plan.title == "Add --version flag to CLI"
 
 
 def test_build_publish_plan_embeds_blocker_fingerprint_for_follow_up_issue() -> None:

@@ -312,8 +312,6 @@ class RunCoordinator:
         exit_code = 0
         if verdict.status == "blocked":
             exit_code = 4
-        elif verdict.status == "provisional":
-            exit_code = 5
 
         return RepairIssueReport(
             intake=intake,

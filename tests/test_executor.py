@@ -1116,6 +1116,7 @@ def test_finalize_qa_result_accepts_strict_baseline_improvement(tmp_path: Path) 
         baseline_failure_signature=_failure_signature(baseline),
     )
 
-    assert result.status == "provisional"
+    assert result.status == "failed"
     assert result.phase == "final"
-    assert "qa_baseline_improved" in result.detail_codes
+    assert result.quality == "improved"
+    assert "qa_baseline_improved" not in result.detail_codes

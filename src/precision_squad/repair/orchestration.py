@@ -217,7 +217,7 @@ def run_repair_qa_loop(
             baseline_result=baseline_result,
             baseline_failure_signature=baseline_failure_signature,
         )
-        if qa_result.status in {"passed", "provisional"}:
+        if qa_result.status == "passed":
             return last_repair_result, baseline_result, qa_result
 
         if qa_result.status != "failed":
@@ -260,7 +260,7 @@ def merge_execution_result(
     if (
         repair_result.status == "completed"
         and qa_result is not None
-        and qa_result.status in {"passed", "provisional"}
+        and qa_result.status == "passed"
     ):
         return ExecutionResult(
             status="completed",
@@ -273,9 +273,21 @@ def merge_execution_result(
             artifact_dir=synthesis_result.artifact_dir,
             stdout_path=synthesis_result.stdout_path,
             stderr_path=synthesis_result.stderr_path,
+            quality=qa_result.quality if qa_result is not None else None,
         )
 
     if qa_result is not None and qa_result.status in {"failed", "unrunnable", "failed_infra"}:
+        if qa_result.quality == "improved":
+            return ExecutionResult(
+                status="completed",
+                executor_name="docs+repair",
+                summary=qa_result.summary,
+                detail_codes=detail_codes,
+                artifact_dir=synthesis_result.artifact_dir,
+                stdout_path=synthesis_result.stdout_path,
+                stderr_path=synthesis_result.stderr_path,
+                quality=qa_result.quality if qa_result is not None else None,
+            )
         status = "blocked" if qa_result.status in {"failed", "unrunnable"} else "failed_infra"
         return ExecutionResult(
             status=status,
@@ -285,6 +297,7 @@ def merge_execution_result(
             artifact_dir=synthesis_result.artifact_dir,
             stdout_path=synthesis_result.stdout_path,
             stderr_path=synthesis_result.stderr_path,
+            quality=qa_result.quality if qa_result is not None else None,
         )
 
     if repair_result.status == "failed_infra":

@@ -81,6 +81,7 @@ class ExecutionResult:
     artifact_dir: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None
+    quality: Literal["green", "improved", "degraded"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,26 +120,28 @@ class RepairResult:
     patch_path: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None
+    side_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class QaResult:
     """Deterministic verification result for a repaired workspace."""
 
-    status: Literal["passed", "provisional", "failed", "unrunnable", "failed_infra", "not_run"]
+    status: Literal["passed", "failed", "unrunnable", "failed_infra", "not_run"]
     summary: str
     detail_codes: tuple[str, ...]
     command: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None
     phase: Literal["baseline", "repair", "final"] = "repair"
+    quality: Literal["green", "improved", "degraded"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class GovernanceVerdict:
     """Deterministic governance decision for a run."""
 
-    status: Literal["approved", "provisional", "blocked"]
+    status: Literal["approved", "blocked"]
     summary: str
     reason_codes: tuple[str, ...]
 
