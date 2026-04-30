@@ -104,11 +104,11 @@ class _RepairAdapterThatFixesFailingTest:
 
 
 @pytest.mark.integration
-def test_broken_baseline_improved_to_provisional(
+def test_broken_baseline_improved_to_approved(
     make_repo_with_failing_tests,
     tmp_path: Path,
 ) -> None:
-    """Baseline fails (test_fail), repair removes it, final QA passes -> provisional."""
+    """Baseline fails (test_fail), repair removes it, final QA passes -> approved with quality=improved."""
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -139,24 +139,25 @@ def test_broken_baseline_improved_to_provisional(
 
     assert report.qa_result is not None
     assert report.qa_result.phase == "final"
-    assert report.qa_result.status in {"passed", "provisional"}, (
-        f"final QA should be passed or provisional: {report.qa_result.status}"
+    assert report.qa_result.status == "passed", (
+        f"final QA should be passed: {report.qa_result.status}"
     )
+    assert report.qa_result.quality == "green"
 
-    assert report.governance_verdict.status == "provisional", (
-        f"Expected provisional, got {report.governance_verdict.status}: "
+    assert report.governance_verdict.status == "approved", (
+        f"Expected approved, got {report.governance_verdict.status}: "
         f"{report.governance_verdict.summary}"
     )
     assert report.publish_plan.status == "draft_pr"
-    assert report.exit_code == 5
+    assert report.exit_code == 0
 
 
 @pytest.mark.integration
-def test_provisional_publish_plan_contains_provisional_context(
+def test_approved_publish_plan_contains_governance_verdict(
     make_repo_with_failing_tests,
     tmp_path: Path,
 ) -> None:
-    """Provisional publish plan body should mention the provisional status."""
+    """Approved publish plan body should mention the governance verdict."""
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -180,7 +181,7 @@ def test_provisional_publish_plan_contains_provisional_context(
 
     plan = report.publish_plan
     assert plan.status == "draft_pr"
-    assert "provisional" in plan.body.lower() or "qa_baseline_improved" in plan.body.lower()
+    assert "approved" in plan.body.lower()
 
 
 class _ProvisionalTestDependencies(_ApprovedTestDependencies):
