@@ -9,6 +9,7 @@ publish=True tests: real GitHub issue context, mocked publish executor (no real 
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -266,8 +267,7 @@ def test_publish_result_persisted_in_run_store(
         dependencies=deps,
     )
 
-    from precision_squad.run_store import RunStore
-
-    stored = RunStore(runs_dir).read_publish_result(Path(report.run_record.run_dir))
-    assert stored is not None
-    assert stored.status == "dry_run"
+    stored_path = Path(report.run_record.run_dir) / "publish-result.json"
+    assert stored_path.exists(), f"publish-result.json not found at {stored_path}"
+    stored = json.loads(stored_path.read_text(encoding="utf-8"))
+    assert stored["status"] == "dry_run"
