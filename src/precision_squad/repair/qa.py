@@ -259,8 +259,6 @@ def _finalize_qa_result(
     )
     if baseline_result.status not in {"failed", "failed_infra"}:
         return final_result
-    if qa_result.status not in {"failed", "failed_infra"}:
-        return final_result
 
     repaired_failure_signature = _failure_signature(qa_result)
     if repaired_failure_signature < baseline_failure_signature:
