@@ -386,7 +386,9 @@ class GitHubWriteClient:
         )
         return payload
 
-    def update_pull_request(self, owner: str, repo: str, pull_number: int, *, title: str, body: str) -> str:
+    def update_pull_request(
+        self, owner: str, repo: str, pull_number: int, *, title: str, body: str
+    ) -> str:
         gh_url = self._update_pull_request_via_gh(owner, repo, pull_number, title=title, body=body)
         if gh_url is not None:
             return gh_url

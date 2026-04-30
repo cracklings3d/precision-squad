@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from precision_squad.intake import build_issue_intake, is_docs_remediation_issue, parse_issue_reference
+from precision_squad.intake import (
+    build_issue_intake,
+    is_docs_remediation_issue,
+    parse_issue_reference,
+)
 from precision_squad.models import GitHubIssue, IssueReference
 
 PLAN_ISSUE = GitHubIssue(

@@ -35,6 +35,9 @@ precision_squad = ["data/*.json", "data/*.md"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    "integration: end-to-end tests that require GITHUB_TOKEN and network access to GitHub API",
+]
 
 [tool.ruff]
 target-version = "py314"
@@ -43,6 +46,9 @@ exclude = [".precision-squad"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.14"

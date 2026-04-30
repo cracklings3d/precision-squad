@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from precision_squad.docs_policy import (
-    DOC_SOURCE_CANDIDATES,
     DOC_POLICY_RULES,
+    DOC_SOURCE_CANDIDATES,
     questions_for_violations,
     requirements_for_violations,
 )

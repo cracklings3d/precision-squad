@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .docs_policy import (
     DOC_SOURCE_CANDIDATES,
@@ -39,7 +40,7 @@ class _DocExtraction:
 
 @dataclass(frozen=True, slots=True)
 class _DocsBlockResolution:
-    status: str
+    status: Literal["missing_docs"]
     summary: str
     detail_code: str
 
@@ -87,11 +88,16 @@ class DocsFirstExecutor(Executor):
 
         doc_sources = _resolve_doc_sources(self.repo_path)
         if not doc_sources:
-            violations = ("docs_entrypoint_present", "docs_setup_command_present", "docs_qa_command_present")
+            violations = (
+                "docs_entrypoint_present",
+                "docs_setup_command_present",
+                "docs_qa_command_present",
+            )
             summary = (
                 "Could not find project-facing documentation for this repository. A newcomer would "
                 "immediately ask: where are the setup instructions, and what exact command proves "
-                "the issue is fixed? Add a README or equivalent contributor guide before running repair."
+                "the issue is fixed? Add a README or equivalent contributor guide "
+                "before running repair."
             )
             contract = ExecutionContract(
                 source_path=None,
@@ -205,10 +211,14 @@ def _extract_from_doc(source_path: Path) -> _DocExtraction:
     findings: list[dict[str, str]] = []
 
     setup_sections = [
-        body for heading, body in sections if heading is not None and heading.lower() in SETUP_SECTION_HEADINGS
+        body
+        for heading, body in sections
+        if heading is not None and heading.lower() in SETUP_SECTION_HEADINGS
     ]
     test_sections = [
-        body for heading, body in sections if heading is not None and heading.lower() in TEST_SECTION_HEADINGS
+        body
+        for heading, body in sections
+        if heading is not None and heading.lower() in TEST_SECTION_HEADINGS
     ]
     prerequisite_sections = [
         (heading, body)
@@ -261,7 +271,9 @@ def _extract_from_doc(source_path: Path) -> _DocExtraction:
             )
         if signals and not prerequisite_commands and not _extract_commands(body):
             verification_gaps.append(
-                f"{source_path.name}::{heading}: prerequisite guidance is prose-only and does not include an exact executable install or verification command."
+                f"{source_path.name}::{heading}: prerequisite guidance is prose-only "
+                "and does not include an exact executable install or verification "
+                "command."
             )
             findings.append(
                 _finding(
@@ -273,7 +285,8 @@ def _extract_from_doc(source_path: Path) -> _DocExtraction:
             )
         if signals and not _contains_pinned_version(body):
             verification_gaps.append(
-                f"{source_path.name}::{heading}: prerequisite guidance does not specify an exact version, release, or channel."
+                f"{source_path.name}::{heading}: prerequisite guidance does not "
+                "specify an exact version, release, or channel."
             )
             findings.append(
                 _finding(
@@ -285,7 +298,9 @@ def _extract_from_doc(source_path: Path) -> _DocExtraction:
             )
         if signals and _source_is_ambiguous(body):
             verification_gaps.append(
-                f"{source_path.name}::{heading}: prerequisite guidance does not say whether to use a release artifact, package manager, or source build."
+                f"{source_path.name}::{heading}: prerequisite guidance does not say "
+                "whether to use a release artifact, package manager, or source "
+                "build."
             )
             findings.append(
                 _finding(
@@ -297,7 +312,9 @@ def _extract_from_doc(source_path: Path) -> _DocExtraction:
             )
         if assumptions and not _extract_commands(body):
             verification_gaps.append(
-                f"{source_path.name}::{heading}: environment assumptions are described, but there is no exact command that proves they took effect in the active shell."
+                f"{source_path.name}::{heading}: environment assumptions are "
+                "described, but there is no exact command that proves they took "
+                "effect in the active shell."
             )
             findings.append(
                 _finding(
@@ -337,7 +354,9 @@ def _build_execution_contract(
     environment_assumptions = tuple(
         item for extraction in extractions for item in extraction.environment_assumptions
     )
-    verification_gaps = tuple(item for extraction in extractions for item in extraction.verification_gaps)
+    verification_gaps = tuple(
+        item for extraction in extractions for item in extraction.verification_gaps
+    )
     findings = [finding for extraction in extractions for finding in extraction.findings]
 
     violations: list[str] = []
@@ -370,7 +389,8 @@ def _build_execution_contract(
         if ambiguity_summary is None:
             ambiguity_summary = (
                 "The documentation describes multiple competing QA commands. A newcomer would ask: "
-                "which command is the canonical proof that a fix works, and which test path should this "
+                "which command is the canonical proof that a fix works, and which "
+                "test path should this "
                 "workflow trust? Consolidate the docs before running repair."
             )
 
@@ -412,7 +432,9 @@ def _build_execution_contract(
         )
     if any(finding["rule_id"] == "docs_setup_prerequisite_manual_only" for finding in findings):
         violations.append("docs_setup_prerequisite_manual_only")
-    if manual_prerequisites and any("does not specify an exact version" in gap for gap in verification_gaps):
+    if manual_prerequisites and any(
+        "does not specify an exact version" in gap for gap in verification_gaps
+    ):
         violations.append("docs_setup_prerequisite_version_pinned")
     if manual_prerequisites and any(
         "does not say whether to use a release artifact, package manager, or source build" in gap
@@ -428,7 +450,11 @@ def _build_execution_contract(
         finding["rule_id"] == "docs_environment_assumptions_explicit" for finding in findings
     ):
         violations.append("docs_environment_assumptions_explicit")
-    if any("there is no exact command that proves they took effect" in gap for gap in verification_gaps):
+    if any(
+        "there is no exact command that proves they took effect"
+        in gap
+        for gap in verification_gaps
+    ):
         violations.append("docs_environment_mutation_verification_present")
 
     source_path = source_paths[0] if len(source_paths) == 1 else ", ".join(source_paths)
@@ -468,13 +494,18 @@ def _classify_missing_contract_parts(
         "docs_environment_mutation_verification_present",
     }
     if any(code in prerequisite_or_environment_violations for code in contract.violations):
-        findings = list(contract.manual_prerequisites + contract.environment_assumptions + contract.verification_gaps)
+        findings = list(
+            contract.manual_prerequisites
+            + contract.environment_assumptions
+            + contract.verification_gaps
+        )
         finding_summary = " ".join(findings[:3])
         return _DocsBlockResolution(
             status="missing_docs",
             summary=(
-                "The docs describe human-readable prerequisites or environment assumptions, but they do not reduce "
-                "that uncertainty into one deterministic automation-safe setup path. "
+                "The docs describe human-readable prerequisites or environment "
+                "assumptions, but they do not reduce that uncertainty into one "
+                "deterministic automation-safe setup path. "
                 f"Detected findings: {finding_summary}"
             ),
             detail_code="docs_setup_prerequisites_ambiguous",
@@ -483,9 +514,11 @@ def _classify_missing_contract_parts(
         return _DocsBlockResolution(
             status="missing_docs",
             summary=(
-                "Could not find a documented local setup command in the repository instructions. A newcomer "
-                "would ask: how am I supposed to install this project, which package manager should I use, "
-                "and what is the first command I should run in a clean checkout? Document that explicitly "
+                "Could not find a documented local setup command in the repository "
+                "instructions. A newcomer would ask: how am I supposed to install "
+                "this project, which package manager should I use, and what is the "
+                "first command I should run in a clean checkout? Document that "
+                "explicitly "
                 "before asking the repair workflow to proceed."
             ),
             detail_code="docs_setup_command_missing",
@@ -493,9 +526,10 @@ def _classify_missing_contract_parts(
     return _DocsBlockResolution(
         status="missing_docs",
         summary=(
-            "Could not find a documented QA command for this repository. A newcomer would ask: after "
-            "making a fix, what exact command should I run in PowerShell to prove the change works, "
-            "and which test or test subset is the intended signal for this issue? Document that command "
+            "Could not find a documented QA command for this repository. A "
+            "newcomer would ask: after making a fix, what exact command should I "
+            "run in PowerShell to prove the change works, and which test or test "
+            "subset is the intended signal for this issue? Document that command "
             "explicitly before asking the repair workflow to proceed."
         ),
         detail_code="docs_qa_command_missing",
@@ -541,7 +575,9 @@ def _extract_qa_commands(commands: list[str]) -> list[str]:
     qa_commands: list[str] = []
     for command in commands:
         lowered = command.lower()
-        if lowered.startswith(("python -m pytest", "pytest ", "uv run pytest ", "poetry run pytest ")):
+        if lowered.startswith(
+            ("python -m pytest", "pytest ", "uv run pytest ", "poetry run pytest ")
+        ):
             qa_commands.append(command)
     return qa_commands
 
@@ -632,11 +668,14 @@ def _write_doc_fix_prompt(
 ) -> None:
     requirements = requirements_for_violations(violations)
     requirement_lines = "\n".join(f"- {item}" for item in requirements) or "- none"
-    question_lines = "\n".join(f"- {item}" for item in questions_for_violations(violations)) or "- none"
+    question_lines = (
+        "\n".join(f"- {item}" for item in questions_for_violations(violations)) or "- none"
+    )
     violation_lines = "\n".join(f"- {item}" for item in violations) or "- none"
     prompt = "\n".join(
         [
-            "Create or update the repository documentation so a newcomer can run this project locally.",
+            "Create or update the repository documentation so a newcomer can run "
+            "this project locally.",
             f"Repository: {repo_path}",
             f"Docs status: {status}",
             f"Problem summary: {summary}",
@@ -647,13 +686,22 @@ def _write_doc_fix_prompt(
             "Questions the docs must answer:",
             question_lines,
             "Output expectations:",
-            "- Update README.md or CONTRIBUTING.md with one canonical setup path and one canonical QA path.",
+            "- Update README.md or CONTRIBUTING.md with one canonical setup path "
+            "and one canonical QA path.",
             "- Keep the change focused on documentation only.",
-            "- Do not invent multiple alternatives unless the docs clearly designate one as canonical.",
-            "- Do not use ambiguous wording such as `latest`, `stable`, `current`, or `recent` when the checklist requires a deterministic prerequisite version, release, or channel.",
-            "- If a prerequisite is external, state whether the canonical source is a release artifact, package manager, or source build.",
-            "- If the docs mention an installer or environment mutation, include an exact post-install verification command that a newcomer can run in the active shell.",
-            "- If you cannot document an exact deterministic prerequisite path yet, do not soften the requirement with prose; make the missing requirement explicit in the docs.",
+            "- Do not invent multiple alternatives unless the docs clearly "
+            "designate one as canonical.",
+            "- Do not use ambiguous wording such as `latest`, `stable`, "
+            "`current`, or `recent` when the checklist requires a deterministic "
+            "prerequisite version, release, or channel.",
+            "- If a prerequisite is external, state whether the canonical source "
+            "is a release artifact, package manager, or source build.",
+            "- If the docs mention an installer or environment mutation, include "
+            "an exact post-install verification command that a newcomer can run "
+            "in the active shell.",
+            "- If you cannot document an exact deterministic prerequisite path "
+            "yet, do not soften the requirement with prose; make the missing "
+            "requirement explicit in the docs.",
         ]
     )
     (contract_dir / "docs-fix-prompt.txt").write_text(prompt + "\n", encoding="utf-8")
@@ -709,11 +757,16 @@ def _source_is_ambiguous(section_text: str) -> bool:
     lowered = section_text.lower()
     mentions_url = URL_PATTERN.search(section_text) is not None
     mentions_source = "source" in lowered or "build" in lowered
-    mentions_package_manager = any(token in lowered for token in ("winget", "choco", "scoop", "apt", "brew"))
-    mentions_release_artifact = any(
-        token in lowered for token in ("release artifact", "release installer", "download the release")
+    mentions_package_manager = any(
+        token in lowered for token in ("winget", "choco", "scoop", "apt", "brew")
     )
-    if mentions_url and not (mentions_source or mentions_package_manager or mentions_release_artifact):
+    mentions_release_artifact = any(
+        token in lowered
+        for token in ("release artifact", "release installer", "download the release")
+    )
+    if mentions_url and not (
+        mentions_source or mentions_package_manager or mentions_release_artifact
+    ):
         return True
     if mentions_source and not mentions_release_artifact and not mentions_package_manager:
         return True
@@ -734,7 +787,9 @@ def _normalize_subject_key(text: str) -> str:
     return normalized or "docs-subject"
 
 
-def _finding(*, rule_id: str, source_path: str, section_key: str, subject_key: str) -> dict[str, str]:
+def _finding(
+    *, rule_id: str, source_path: str, section_key: str, subject_key: str
+) -> dict[str, str]:
     return {
         "rule_id": rule_id,
         "source_path": _normalize_path_key(source_path),

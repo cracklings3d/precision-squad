@@ -72,7 +72,9 @@ class RunRecord:
 class ExecutionResult:
     """Normalized executor output."""
 
-    status: Literal["pending", "blocked", "failed_infra", "missing_docs", "ambiguous_docs", "completed"]
+    status: Literal[
+        "pending", "blocked", "failed_infra", "missing_docs", "ambiguous_docs", "completed"
+    ]
     executor_name: str
     summary: str
     detail_codes: tuple[str, ...]

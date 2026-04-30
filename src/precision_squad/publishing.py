@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .docs_remediation import (
@@ -29,7 +28,11 @@ def build_publish_plan(
 ) -> PublishPlan:
     """Prepare the first publish plan without calling GitHub yet."""
     if verdict.status in {"approved", "provisional"}:
-        context_heading = "## Summary\n" if verdict.status == "approved" else "## Provisional Summary\n"
+        context_heading = (
+            "## Summary\n"
+            if verdict.status == "approved"
+            else "## Provisional Summary\n"
+        )
         context_note = "" if verdict.status == "approved" else (
             "- Quality state: `provisional` (baseline-tolerant, not fully green)\n"
         )

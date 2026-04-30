@@ -1,0 +1,1 @@
+"""precision-squad integration tests."""

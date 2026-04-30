@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 DOCS_REMEDIATION_MARKER = "<!-- precision-squad:docs-remediation -->"
@@ -208,7 +208,8 @@ def summarize_docs_findings(findings: Sequence[dict[str, str]], limit: int = 3) 
     items = []
     for finding in list(findings)[:limit]:
         items.append(
-            f"{finding['rule_id']} @ {finding['source_path']}::{finding['section_key']}::{finding['subject_key']}"
+            f"{finding['rule_id']} @ {finding['source_path']}::"
+            f"{finding['section_key']}::{finding['subject_key']}"
         )
     return "; ".join(items)
 

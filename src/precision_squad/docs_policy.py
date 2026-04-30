@@ -21,9 +21,13 @@ CHECKLIST = _load_checklist()
 DOC_SOURCE_CANDIDATES = tuple(str(item) for item in CHECKLIST["doc_source_candidates"])
 SETUP_SECTION_HEADINGS = tuple(str(item) for item in CHECKLIST["setup_section_headings"])
 TEST_SECTION_HEADINGS = tuple(str(item) for item in CHECKLIST["test_section_headings"])
-PREREQUISITE_SECTION_HEADINGS = tuple(str(item) for item in CHECKLIST["prerequisite_section_headings"])
+PREREQUISITE_SECTION_HEADINGS = tuple(
+    str(item) for item in CHECKLIST["prerequisite_section_headings"]
+)
 MANUAL_PREREQUISITE_SIGNALS = tuple(str(item) for item in CHECKLIST["manual_prerequisite_signals"])
-ENVIRONMENT_ASSUMPTION_SIGNALS = tuple(str(item) for item in CHECKLIST["environment_assumption_signals"])
+ENVIRONMENT_ASSUMPTION_SIGNALS = tuple(
+    str(item) for item in CHECKLIST["environment_assumption_signals"]
+)
 DOC_POLICY_RULES: tuple[dict[str, Any], ...] = tuple(
     dict(rule) for rule in CHECKLIST["rules"] if isinstance(rule, dict)
 )

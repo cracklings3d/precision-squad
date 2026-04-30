@@ -1,0 +1,23 @@
+{
+  "assessment": {
+    "reason_codes": [
+      "issue_marked_as_plan"
+    ],
+    "status": "blocked"
+  },
+  "issue": {
+    "body": "## Project Plan",
+    "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/issues/1",
+    "labels": [
+      "plan"
+    ],
+    "reference": {
+      "number": 1,
+      "owner": "cracklings3d",
+      "repo": "markdown-pdf-renderer"
+    },
+    "title": "[Plan] Markdown to PDF Renderer"
+  },
+  "problem_statement": "Project plan",
+  "summary": "Markdown to PDF Renderer"
+}

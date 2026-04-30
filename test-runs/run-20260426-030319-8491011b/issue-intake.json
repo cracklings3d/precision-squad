@@ -1,0 +1,21 @@
+{
+  "assessment": {
+    "reason_codes": [],
+    "status": "runnable"
+  },
+  "issue": {
+    "body": "## Description\nAdd a version flag.",
+    "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+    "labels": [
+      "enhancement"
+    ],
+    "reference": {
+      "number": 9,
+      "owner": "cracklings3d",
+      "repo": "markdown-pdf-renderer"
+    },
+    "title": "[Enhancement] Add --version flag to CLI"
+  },
+  "problem_statement": "Add a version flag.",
+  "summary": "Add --version flag to CLI"
+}

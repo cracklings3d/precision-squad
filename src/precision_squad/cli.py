@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import __version__
+from .coordinator import PublishRunParams, RepairIssueParams, RunCoordinator
 from .env import load_local_env
 from .executor import DocsFirstExecutor
 from .github_client import GitHubClientError, GitHubWriteClient
-from .governance import apply_governance, evaluate_run
-from .intake import is_docs_remediation_issue, load_issue_intake
+from .intake import load_issue_intake
 from .models import (
+    ExecutionResult,
     GitHubIssue,
     IssueAssessment,
     IssueIntake,
@@ -24,12 +25,12 @@ from .models import (
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
+    QaResult,
+    RepairResult,
     RunRecord,
-    RunRequest,
 )
 from .post_publish_review import OpenCodePrReviewAgent, run_post_publish_review
 from .publish_executor import execute_publish_plan
-from .publishing import build_publish_plan
 from .repair import (
     OpenCodeRepairAdapter,
     evaluate_docs_remediation_validation,
@@ -39,7 +40,9 @@ from .repair import (
     run_repair_qa_loop,
     synthesis_artifacts_ready,
 )
-from .run_store import RunStore
+
+# Keep a local alias so tests can monkeypatch the shared executor class through this module.
+_CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -143,10 +146,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _repair_issue(args: argparse.Namespace) -> int:
     intake = load_issue_intake(args.issue_ref)
-    store = RunStore(Path(args.runs_dir))
-    request = RunRequest(issue_ref=args.issue_ref, runs_dir=args.runs_dir)
-    record = store.create_run(request, intake)
-    run_dir = Path(record.run_dir).resolve()
+    report = RunCoordinator().repair_issue(
+        params=RepairIssueParams(
+            issue_ref=args.issue_ref,
+            runs_dir=Path(args.runs_dir),
+            repo_path=Path(args.repo_path),
+            publish=args.publish,
+            repair_agent=args.repair_agent,
+            repair_model=args.repair_model,
+            review_model=args.review_model,
+        ),
+        intake=intake,
+        dependencies=_CliRepairDependencies(),
+    )
+    record = report.run_record
 
     print(f"Issue: {intake.issue.reference}")
     print(f"Title: {intake.issue.title}")
@@ -159,111 +172,25 @@ def _repair_issue(args: argparse.Namespace) -> int:
         for reason_code in intake.assessment.reason_codes:
             print(f"- {reason_code}")
 
-    if intake.assessment.status == "blocked":
-        verdict = apply_governance(intake, execution_result=None, evaluation_result=None)
-        publish_plan = build_publish_plan(intake, record, verdict)
-        store.write_governance_verdict(run_dir, verdict)
-        store.write_publish_plan(run_dir, publish_plan)
-        publish_result = execute_publish_plan(intake, publish_plan, publish=args.publish)
-        store.write_publish_result(run_dir, publish_result)
-
+    if report.execution_result is None:
+        verdict = cast(Any, report.governance_verdict)
+        publish_plan = cast(PublishPlan, report.publish_plan)
+        publish_result = cast(PublishResult, report.publish_result)
         print(f"Governance: {verdict.status}")
         print(f"Governance Summary: {verdict.summary}")
         print(f"Publish Plan: {publish_plan.status}")
         print(f"Publish Result: {publish_result.status}")
         print(f"Publish Summary: {publish_result.summary}")
-        return 3
+        return report.exit_code
 
-    synthesis_result = DocsFirstExecutor(repo_path=Path(args.repo_path)).execute(
-        intake, record, run_dir
-    )
-    repair_result = None
-    baseline_qa_result = None
-    qa_result = None
-    execution_result = synthesis_result
-    docs_remediation_issue = is_docs_remediation_issue(intake)
-    if docs_remediation_issue and synthesis_artifacts_ready(synthesis_result):
-        repair_adapter = None
-        if args.repair_agent == "opencode":
-            repair_adapter = OpenCodeRepairAdapter(model=args.repair_model)
-        repair_result = run_docs_remediation_repair(
-            repo_path=Path(args.repo_path),
-            adapter=repair_adapter,
-            intake=intake,
-            run_record=record,
-            run_dir=run_dir,
-            contract_artifact_dir=(
-                Path(synthesis_result.artifact_dir).resolve()
-                if synthesis_result.artifact_dir
-                else run_dir
-            ),
-        )
-        store.write_repair_result(run_dir, repair_result)
-        validation_result = None
-        validation_scope_summary = None
-        if repair_result.status == "completed" and repair_result.workspace_path:
-            validation_run_dir = run_dir / "docs-remediation-validation"
-            validation_repo_path = Path(repair_result.workspace_path).resolve() / "repo"
-            validation_result = DocsFirstExecutor(repo_path=validation_repo_path).execute(
-                intake,
-                record,
-                validation_run_dir,
-            )
-            validation_result, validation_scope_summary = evaluate_docs_remediation_validation(
-                intake=intake,
-                validation_result=validation_result,
-            )
-        execution_result = merge_docs_remediation_execution_result(
-            synthesis_result,
-            repair_result,
-            validation_result,
-            validation_scope_summary,
-        )
-    elif synthesis_result.status == "completed" and synthesis_artifacts_ready(synthesis_result):
-        repair_adapter = None
-        if args.repair_agent == "opencode":
-            repair_adapter = OpenCodeRepairAdapter(model=args.repair_model)
-        repair_result, baseline_qa_result, qa_result = run_repair_qa_loop(
-            repo_path=Path(args.repo_path),
-            adapter=repair_adapter,
-            intake=intake,
-            run_record=record,
-            run_dir=run_dir,
-            contract_artifact_dir=(
-                Path(synthesis_result.artifact_dir).resolve()
-                if synthesis_result.artifact_dir
-                else run_dir
-            ),
-        )
-        store.write_repair_result(run_dir, repair_result)
-        if baseline_qa_result is not None:
-            store.write_qa_result(run_dir, baseline_qa_result)
-        if qa_result is not None:
-            store.write_qa_result(run_dir, qa_result)
-        execution_result = merge_execution_result(synthesis_result, repair_result, qa_result)
-    store.write_execution_result(run_dir, execution_result)
-    evaluation_result = evaluate_run(intake, execution_result)
-    store.write_evaluation_result(run_dir, evaluation_result)
-    verdict = apply_governance(intake, execution_result, evaluation_result)
-    store.write_governance_verdict(run_dir, verdict)
-    publish_plan = build_publish_plan(intake, record, verdict)
-    store.write_publish_plan(run_dir, publish_plan)
-    publish_result = execute_publish_plan(
-        intake,
-        publish_plan,
-        publish=args.publish,
-        run_dir=run_dir,
-    )
-    store.write_publish_result(run_dir, publish_result)
-    post_publish_review_result = _run_post_publish_review_if_needed(
-        intake=intake,
-        run_record=record,
-        run_dir=run_dir,
-        publish_result=publish_result,
-        review_model=args.review_model,
-    )
-    if post_publish_review_result is not None:
-        store.write_post_publish_review_result(run_dir, post_publish_review_result)
+    execution_result = report.execution_result
+    evaluation_result = cast(Any, report.evaluation_result)
+    verdict = cast(Any, report.governance_verdict)
+    publish_plan = cast(PublishPlan, report.publish_plan)
+    publish_result = cast(PublishResult, report.publish_result)
+    repair_result = report.repair_result
+    qa_result = report.qa_result
+    post_publish_review_result = report.post_publish_review_result
 
     print(f"Summary: {intake.summary}")
     print(f"Problem: {intake.problem_statement}")
@@ -288,11 +215,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
         print(f"Post-Publish Summary: {post_publish_review_result.summary}")
         if post_publish_review_result.issue_comment_url:
             print(f"Review Feedback URL: {post_publish_review_result.issue_comment_url}")
-    if verdict.status == "blocked":
-        return 4
-    if verdict.status == "provisional":
-        return 5
-    return 0
+    return report.exit_code
 
 
 def _publish_run(args: argparse.Namespace) -> int:
@@ -300,54 +223,177 @@ def _publish_run(args: argparse.Namespace) -> int:
     if not run_dir.exists():
         raise ValueError(f"Run directory not found: {run_dir}")
 
-    intake = _read_issue_intake(run_dir)
-    run_record = _read_run_record(run_dir)
-    plan = _read_publish_plan(run_dir)
-    existing_result = _read_publish_result(run_dir)
-    existing_review_result = _read_post_publish_review_result(run_dir)
-    result = existing_result
+    report = RunCoordinator().publish_run(
+        params=PublishRunParams(
+            run_id=args.run_id,
+            runs_dir=Path(args.runs_dir),
+            review_model=args.review_model,
+        ),
+        intake=_read_issue_intake(run_dir),
+        run_record=_read_run_record(run_dir),
+        publish_plan=_read_publish_plan(run_dir),
+        existing_result=_read_publish_result(run_dir),
+        existing_review_result=_read_post_publish_review_result(run_dir),
+        dependencies=_CliPublishDependencies(),
+    )
 
-    if existing_result is not None and existing_result.status == "published":
-        review_result = existing_review_result
-        if review_result is None or review_result.status in {"failed_infra", "not_run"} or _post_publish_review_is_stale(intake, review_result):
-            review_result = _run_post_publish_review_if_needed(
-                intake=intake,
-                run_record=run_record,
-                run_dir=run_dir,
-                publish_result=existing_result,
-                review_model=args.review_model,
-            )
-            if review_result is not None:
-                RunStore(Path(args.runs_dir)).write_post_publish_review_result(run_dir, review_result)
-    else:
-        result = execute_publish_plan(intake, plan, publish=True, run_dir=run_dir)
-        RunStore(Path(args.runs_dir)).write_publish_result(run_dir, result)
-        review_result = _run_post_publish_review_if_needed(
+    print(f"Run ID: {args.run_id}")
+    print(f"Run Dir: {report.run_dir}")
+    print(f"Publish Plan: {report.publish_plan.status}")
+    print(f"Publish Result: {report.publish_result.status}")
+    print(f"Publish Summary: {report.publish_result.summary}")
+    if report.publish_result.url:
+        print(f"Publish URL: {report.publish_result.url}")
+    if report.post_publish_review_result is not None:
+        print(f"Post-Publish Review: {report.post_publish_review_result.status}")
+        print(f"Post-Publish Summary: {report.post_publish_review_result.summary}")
+        if report.post_publish_review_result.issue_comment_url:
+            print(f"Review Feedback URL: {report.post_publish_review_result.issue_comment_url}")
+    return 0
+
+
+class _CliRepairDependencies:
+    def create_repair_adapter(
+        self, *, repair_agent: str, repair_model: str | None
+    ) -> OpenCodeRepairAdapter | None:
+        if repair_agent != "opencode":
+            return None
+        return OpenCodeRepairAdapter(model=repair_model)
+
+    def run_repair_qa_loop(
+        self,
+        *,
+        repo_path: Path,
+        adapter: OpenCodeRepairAdapter | None,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        contract_artifact_dir: Path,
+    ) -> tuple[RepairResult, QaResult, QaResult]:
+        return run_repair_qa_loop(
+            repo_path=repo_path,
+            adapter=adapter,
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
-            publish_result=result,
-            review_model=args.review_model,
+            contract_artifact_dir=contract_artifact_dir,
         )
-        if review_result is not None:
-            RunStore(Path(args.runs_dir)).write_post_publish_review_result(run_dir, review_result)
 
-    if result is None:
-        raise ValueError(f"Run {args.run_id} is missing publish-result.json")
+    def run_docs_remediation_repair(
+        self,
+        *,
+        repo_path: Path,
+        adapter: OpenCodeRepairAdapter | None,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        contract_artifact_dir: Path,
+    ) -> RepairResult:
+        return run_docs_remediation_repair(
+            repo_path=repo_path,
+            adapter=adapter,
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            contract_artifact_dir=contract_artifact_dir,
+        )
 
-    print(f"Run ID: {args.run_id}")
-    print(f"Run Dir: {run_dir}")
-    print(f"Publish Plan: {plan.status}")
-    print(f"Publish Result: {result.status}")
-    print(f"Publish Summary: {result.summary}")
-    if result.url:
-        print(f"Publish URL: {result.url}")
-    if review_result is not None:
-        print(f"Post-Publish Review: {review_result.status}")
-        print(f"Post-Publish Summary: {review_result.summary}")
-        if review_result.issue_comment_url:
-            print(f"Review Feedback URL: {review_result.issue_comment_url}")
-    return 0
+    def evaluate_docs_remediation_validation(
+        self,
+        *,
+        intake: IssueIntake,
+        validation_result: ExecutionResult,
+    ) -> tuple[ExecutionResult, str | None]:
+        return evaluate_docs_remediation_validation(
+            intake=intake,
+            validation_result=validation_result,
+        )
+
+    def merge_docs_remediation_execution_result(
+        self,
+        synthesis_result: ExecutionResult,
+        repair_result: RepairResult,
+        validation_result: ExecutionResult | None,
+        validation_scope_summary: str | None = None,
+    ) -> ExecutionResult:
+        return merge_docs_remediation_execution_result(
+            synthesis_result,
+            repair_result,
+            validation_result,
+            validation_scope_summary,
+        )
+
+    def merge_execution_result(
+        self,
+        synthesis_result: ExecutionResult,
+        repair_result: RepairResult,
+        qa_result: QaResult | None = None,
+    ) -> ExecutionResult:
+        return merge_execution_result(synthesis_result, repair_result, qa_result)
+
+    def synthesis_artifacts_ready(self, execution_result: ExecutionResult) -> bool:
+        return synthesis_artifacts_ready(execution_result)
+
+    def execute_publish_plan(
+        self,
+        intake: IssueIntake,
+        plan: PublishPlan,
+        *,
+        publish: bool,
+        run_dir: Path | None = None,
+    ) -> PublishResult:
+        return execute_publish_plan(intake, plan, publish=publish, run_dir=run_dir)
+
+    def run_post_publish_review_if_needed(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        publish_result: PublishResult,
+        review_model: str | None,
+    ) -> PostPublishReviewResult | None:
+        return _run_post_publish_review_if_needed(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            publish_result=publish_result,
+            review_model=review_model,
+        )
+
+
+class _CliPublishDependencies:
+    def execute_publish_plan(
+        self,
+        intake: IssueIntake,
+        plan: PublishPlan,
+        *,
+        publish: bool,
+        run_dir: Path | None = None,
+    ) -> PublishResult:
+        return execute_publish_plan(intake, plan, publish=publish, run_dir=run_dir)
+
+    def run_post_publish_review_if_needed(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        publish_result: PublishResult,
+        review_model: str | None,
+    ) -> PostPublishReviewResult | None:
+        return _run_post_publish_review_if_needed(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            publish_result=publish_result,
+            review_model=review_model,
+        )
+
+    def post_publish_review_is_stale(
+        self, intake: IssueIntake, review_result: PostPublishReviewResult
+    ) -> bool:
+        return _post_publish_review_is_stale(intake, review_result)
 
 
 def _install_skill(args: argparse.Namespace) -> int:
