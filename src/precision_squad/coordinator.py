@@ -180,8 +180,77 @@ class RunCoordinator:
     ) -> RepairIssueReport:
         store = RunStore(params.runs_dir)
         request = RunRequest(issue_ref=params.issue_ref, runs_dir=str(params.runs_dir))
+<<<<<<< Updated upstream
         record = store.create_run(request, intake)
         run_dir = Path(record.run_dir).resolve()
+
+=======
+
+        # Handle retry logic
+        attempt = 1
+        if params.retry_from is not None:
+            try:
+                previous_record = store.load_run(params.retry_from)
+                attempt = previous_record.attempt + 1
+            except ValueError:
+                return RepairIssueReport(
+                    intake=intake,
+                    run_record=RunRecord(
+                        run_id="",
+                        issue_ref=params.issue_ref,
+                        status="blocked",
+                        created_at="",
+                        updated_at="",
+                        run_dir="",
+                    ),
+                    exit_code=3,
+                )
+
+        # Check if escalated (max 3 attempts exceeded)
+        if attempt > 3:
+            record = store.create_run(request, intake)
+            run_dir = Path(record.run_dir).resolve()
+            record = record.with_attempt(attempt)
+            store.write_run_record(record)
+
+            escalated_result = RepairResult(
+                status="escalated",
+                summary=f"Repair escalated after {attempt - 1} failed attempts.",
+                detail_codes=("escalated_after_retries",),
+            )
+            store.write_repair_result(run_dir, escalated_result)
+
+            verdict = GovernanceVerdict(
+                status="blocked",
+                summary=f"Repair escalated after {attempt - 1} failed attempts.",
+                reason_codes=("escalated_after_retries",),
+            )
+            store.write_governance_verdict(run_dir, verdict)
+            publish_plan = build_publish_plan(intake, record, verdict)
+            store.write_publish_plan(run_dir, publish_plan)
+            publish_result = dependencies.execute_publish_plan(
+                intake,
+                publish_plan,
+                publish=params.publish,
+            )
+            store.write_publish_result(run_dir, publish_result)
+            return RepairIssueReport(
+                intake=intake,
+                run_record=record,
+                governance_verdict=verdict,
+                publish_plan=publish_plan,
+                publish_result=publish_result,
+                repair_result=escalated_result,
+                exit_code=4,
+            )
+
+        record = store.create_run(request, intake)
+        run_dir = Path(record.run_dir).resolve()
+
+        # Update attempt counter if retrying
+        if attempt > 1:
+            record = record.with_attempt(attempt)
+            store.write_run_record(record)
 
         if intake.assessment.status == "blocked":
             verdict = apply_governance(intake, execution_result=None, evaluation_result=None)
