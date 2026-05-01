@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from .github_client import GitHubWriteClient
+from .json_events import extract_json_events
 from .models import IssueIntake, PostPublishReviewResult, ReviewAgentResult, RunRecord
 from .opencode_model import resolve_opencode_model
 
@@ -79,7 +80,7 @@ class OpenCodePrReviewAgent:
         )
         stdout_path.write_text(completed.stdout, encoding="utf-8", errors="ignore")
         stderr_path.write_text(completed.stderr, encoding="utf-8", errors="ignore")
-        events = _extract_json_events(completed.stdout)
+        events = extract_json_events(completed.stdout)
         transcript_path.write_text(json.dumps(events, indent=2) + "\n", encoding="utf-8")
         parsed = _parse_review_output(events)
 
@@ -228,21 +229,6 @@ def _build_review_prompt(
             "Do not include markdown fences.",
         ]
     )
-
-
-def _extract_json_events(stdout: str) -> list[dict]:
-    events: list[dict] = []
-    for line in stdout.splitlines():
-        text = line.strip()
-        if not text.startswith("{"):
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            events.append(payload)
-    return events
 
 
 def _parse_review_output(events: list[dict]) -> dict[str, Any] | None:

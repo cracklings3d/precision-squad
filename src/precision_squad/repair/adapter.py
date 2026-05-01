@@ -12,6 +12,7 @@ from jsonschema import ValidationError, validate
 
 from ..docs_remediation import extract_docs_target_findings
 from ..intake import is_docs_remediation_issue
+from ..json_events import extract_json_events
 from ..models import IssueIntake, RepairResult, RunRecord, SideIssue
 from ..opencode_model import resolve_opencode_model
 
@@ -138,7 +139,7 @@ class OpenCodeRepairAdapter:
         stdout_path.write_text(command_result.stdout, encoding="utf-8", errors="ignore")
         stderr_path.write_text(command_result.stderr, encoding="utf-8", errors="ignore")
         transcript_path.write_text(
-            json.dumps(_extract_json_events(command_result.stdout), indent=2) + "\n",
+            json.dumps(extract_json_events(command_result.stdout), indent=2) + "\n",
             encoding="utf-8",
         )
 
@@ -203,7 +204,7 @@ class OpenCodeRepairAdapter:
 
 def _parse_repair_json(stdout: str) -> dict | None:
     """Parse and validate JSON output from the repair agent."""
-    events = _extract_json_events(stdout)
+    events = extract_json_events(stdout)
     if not events:
         return None
     last_event = events[-1]
@@ -362,18 +363,3 @@ def _build_repair_prompt(
     if qa_feedback:
         lines.extend(["QA feedback from the previous attempt:", qa_feedback])
     return "\n".join(lines)
-
-
-def _extract_json_events(stdout: str) -> list[dict]:
-    events: list[dict] = []
-    for line in stdout.splitlines():
-        text = line.strip()
-        if not text.startswith("{"):
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            events.append(payload)
-    return events
