@@ -68,6 +68,18 @@ class RunRecord:
     run_dir: str
     attempt: int = 1
 
+    def with_attempt(self, attempt: int) -> RunRecord:
+        """Return a copy with a different attempt number."""
+        return RunRecord(
+            run_id=self.run_id,
+            issue_ref=self.issue_ref,
+            status=self.status,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            run_dir=self.run_dir,
+            attempt=attempt,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionResult:
