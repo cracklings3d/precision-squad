@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, cast
 from uuid import uuid4
 
 from .models import (
@@ -64,6 +65,19 @@ class RunStore:
         self._write_issue_context(run_dir / "issue.md", intake)
         self._write_json(run_dir / "run-record.json", record)
         return record
+
+    def load_run(self, run_id: str) -> RunRecord:
+        """Load an existing run record by run ID."""
+        run_dir = self.root / run_id
+        record_path = run_dir / "run-record.json"
+        if not record_path.exists():
+            raise ValueError(f"Run record not found: {record_path}")
+        return _read_run_record(record_path)
+
+    def write_run_record(self, record: RunRecord) -> None:
+        """Write an updated run record."""
+        run_dir = Path(record.run_dir).resolve()
+        self._write_json(run_dir / "run-record.json", record)
 
     def write_execution_result(self, run_dir: Path, result: ExecutionResult) -> None:
         self._write_json(run_dir / "execution-result.json", result)
@@ -134,3 +148,22 @@ def _build_run_id(created_at: str) -> str:
     stamp = created_at.replace(":", "").replace("-", "")
     stamp = stamp.replace("T", "-").replace("Z", "")
     return f"run-{stamp}-{uuid4().hex[:8]}"
+
+
+def _read_run_record(path: Path) -> RunRecord:
+    """Read a run record from a JSON file."""
+    with path.open(encoding="utf-8") as f:
+        payload = json.load(f)
+    status = cast(
+        Literal["intake_complete", "blocked", "runnable"],
+        str(payload["status"]),
+    )
+    return RunRecord(
+        run_id=str(payload["run_id"]),
+        issue_ref=str(payload["issue_ref"]),
+        status=status,
+        created_at=str(payload["created_at"]),
+        updated_at=str(payload["updated_at"]),
+        run_dir=str(payload["run_dir"]),
+        attempt=int(payload.get("attempt", 1)),
+    )

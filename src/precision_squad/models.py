@@ -66,6 +66,7 @@ class RunRecord:
     created_at: str
     updated_at: str
     run_dir: str
+    attempt: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +124,7 @@ class SideIssue:
 class RepairResult:
     """Normalized result for the post-synthesis repair stage."""
 
-    status: Literal["not_configured", "blocked", "failed_infra", "completed"]
+    status: Literal["not_configured", "blocked", "failed_infra", "completed", "escalated"]
     summary: str
     detail_codes: tuple[str, ...]
     workspace_path: str | None = None
