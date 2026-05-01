@@ -78,6 +78,7 @@ def test_approved_happy_path(
     assert report.repair_result.status == "completed"
     assert report.qa_result is not None
     assert report.qa_result.status == "passed"
+    assert report.qa_result.quality == "green"
     assert report.baseline_qa_result is not None
     assert report.governance_verdict.status == "approved"
     assert report.publish_plan.status == "draft_pr"

@@ -1,8 +1,8 @@
-"""Integration tests: provisional (baseline-tolerant) pipeline path.
+"""Integration tests: quality tag (baseline-tolerant) pipeline path.
 
 Exercises the baseline-tolerance logic: when the baseline QA fails but the
 repair improves the failure set without introducing new failures, governance
-marks the run as provisional.
+marks the run as approved with quality=improved.
 """
 
 from __future__ import annotations
@@ -49,6 +49,12 @@ class _RepairAdapterThatFixesFailingTest:
         self.agent: str | None = None
         self.model: str | None = None
         self.qa_feedback: str | None = None
+
+    def with_qa_feedback(self, feedback: str) -> _RepairAdapterThatFixesFailingTest:
+        """Return a copy of this adapter with the given QA feedback."""
+        new = _RepairAdapterThatFixesFailingTest()
+        new.qa_feedback = feedback
+        return new
 
     def repair(
         self,
