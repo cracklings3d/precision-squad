@@ -151,7 +151,7 @@ class RepairIssueReport:
     run_record: RunRecord
     execution_result: ExecutionResult | None = None
     evaluation_result: EvaluationResult | None = None
-    governance_verdict: object | None = None
+    governance_verdict: GovernanceVerdict | None = None
     publish_plan: PublishPlan | None = None
     publish_result: PublishResult | None = None
     repair_result: RepairResult | None = None
