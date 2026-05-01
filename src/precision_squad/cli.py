@@ -103,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional model override for post-publish review agents.",
     )
+    issue_parser.add_argument(
+        "--retry-from",
+        default=None,
+        help="Existing run ID to retry from. Increments attempt counter.",
+    )
     issue_parser.set_defaults(handler=_repair_issue)
 
     publish_parser = subparsers.add_parser(
@@ -157,6 +162,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
             repair_agent=args.repair_agent,
             repair_model=args.repair_model,
             review_model=args.review_model,
+            retry_from=args.retry_from,
         ),
         intake=intake,
         dependencies=_CliRepairDependencies(),
