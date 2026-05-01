@@ -181,11 +181,11 @@ def _repair_issue(args: argparse.Namespace) -> int:
             print(f"- {reason_code}")
 
     if report.execution_result is None:
-        verdict = cast(Any, report.governance_verdict)
+        verdict = report.governance_verdict
         publish_plan = cast(PublishPlan, report.publish_plan)
         publish_result = cast(PublishResult, report.publish_result)
-        print(f"Governance: {verdict.status}")
-        print(f"Governance Summary: {verdict.summary}")
+        print(f"Governance: {verdict.status if verdict else 'N/A'}")
+        print(f"Governance Summary: {verdict.summary if verdict else 'N/A'}")
         print(f"Publish Plan: {publish_plan.status}")
         print(f"Publish Result: {publish_result.status}")
         print(f"Publish Summary: {publish_result.summary}")
@@ -193,7 +193,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
 
     execution_result = report.execution_result
     evaluation_result = cast(Any, report.evaluation_result)
-    verdict = cast(Any, report.governance_verdict)
+    verdict = report.governance_verdict
     publish_plan = cast(PublishPlan, report.publish_plan)
     publish_result = cast(PublishResult, report.publish_result)
     repair_result = report.repair_result
@@ -212,7 +212,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
         print(f"QA Status: {qa_result.status}")
         print(f"QA Summary: {qa_result.summary}")
     print(f"Evaluation Status: {evaluation_result.status}")
-    print(f"Governance: {verdict.status}")
+    print(f"Governance: {verdict.status if verdict else 'N/A'}")
     print(f"Publish Plan: {publish_plan.status}")
     print(f"Publish Result: {publish_result.status}")
     print(f"Publish Summary: {publish_result.summary}")
