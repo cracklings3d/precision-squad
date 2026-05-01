@@ -205,40 +205,13 @@ class RunCoordinator:
 
         # Check if escalated (max 3 attempts exceeded)
         if attempt > 3:
-            record = store.create_run(request, intake)
-            run_dir = Path(record.run_dir).resolve()
-            record = record.with_attempt(attempt)
-            store.write_run_record(record)
-
-            escalated_result = RepairResult(
-                status="escalated",
-                summary=f"Repair escalated after {attempt - 1} failed attempts.",
-                detail_codes=("escalated_after_retries",),
-            )
-            store.write_repair_result(run_dir, escalated_result)
-
-            verdict = GovernanceVerdict(
-                status="blocked",
-                summary=f"Repair escalated after {attempt - 1} failed attempts.",
-                reason_codes=("escalated_after_retries",),
-            )
-            store.write_governance_verdict(run_dir, verdict)
-            publish_plan = build_publish_plan(intake, record, verdict)
-            store.write_publish_plan(run_dir, publish_plan)
-            publish_result = dependencies.execute_publish_plan(
-                intake,
-                publish_plan,
-                publish=params.publish,
-            )
-            store.write_publish_result(run_dir, publish_result)
-            return RepairIssueReport(
+            return self._handle_escalation(
+                store=store,
+                request=request,
                 intake=intake,
-                run_record=record,
-                governance_verdict=verdict,
-                publish_plan=publish_plan,
-                publish_result=publish_result,
-                repair_result=escalated_result,
-                exit_code=4,
+                attempt=attempt,
+                dependencies=dependencies,
+                params=params,
             )
 
         record = store.create_run(request, intake)
@@ -282,75 +255,198 @@ class RunCoordinator:
         if is_docs_remediation_issue(intake) and dependencies.synthesis_artifacts_ready(
             synthesis_result
         ):
-            repair_adapter = dependencies.create_repair_adapter(
-                repair_agent=params.repair_agent,
-                repair_model=params.repair_model,
-            )
-            repair_result = dependencies.run_docs_remediation_repair(
-                repo_path=params.repo_path,
-                adapter=repair_adapter,
+            execution_result, repair_result = self._run_docs_remediation_repair(
+                synthesis_result=synthesis_result,
                 intake=intake,
-                run_record=record,
+                record=record,
                 run_dir=run_dir,
-                contract_artifact_dir=(
-                    Path(synthesis_result.artifact_dir).resolve()
-                    if synthesis_result.artifact_dir
-                    else run_dir
-                ),
-            )
-            store.write_repair_result(run_dir, repair_result)
-            validation_result = None
-            validation_scope_summary = None
-            if repair_result.status == "completed" and repair_result.workspace_path:
-                validation_run_dir = run_dir / "docs-remediation-validation"
-                validation_repo_path = Path(repair_result.workspace_path).resolve() / "repo"
-                validation_result = DocsFirstExecutor(repo_path=validation_repo_path).execute(
-                    intake,
-                    record,
-                    validation_run_dir,
-                )
-                validation_result, validation_scope_summary = (
-                    dependencies.evaluate_docs_remediation_validation(
-                        intake=intake,
-                        validation_result=validation_result,
-                    )
-                )
-            execution_result = dependencies.merge_docs_remediation_execution_result(
-                synthesis_result,
-                repair_result,
-                validation_result,
-                validation_scope_summary,
+                params=params,
+                dependencies=dependencies,
+                store=store,
             )
         elif synthesis_result.status == "completed" and dependencies.synthesis_artifacts_ready(
             synthesis_result
         ):
-            repair_adapter = dependencies.create_repair_adapter(
-                repair_agent=params.repair_agent,
-                repair_model=params.repair_model,
-            )
-            repair_result, baseline_qa_result, qa_result = dependencies.run_repair_qa_loop(
-                repo_path=params.repo_path,
-                adapter=repair_adapter,
-                intake=intake,
-                run_record=record,
-                run_dir=run_dir,
-                contract_artifact_dir=(
-                    Path(synthesis_result.artifact_dir).resolve()
-                    if synthesis_result.artifact_dir
-                    else run_dir
-                ),
-            )
-            store.write_repair_result(run_dir, repair_result)
-            if baseline_qa_result is not None:
-                store.write_qa_result(run_dir, baseline_qa_result)
-            if qa_result is not None:
-                store.write_qa_result(run_dir, qa_result)
-            execution_result = dependencies.merge_execution_result(
-                synthesis_result,
-                repair_result,
-                qa_result,
+            execution_result, repair_result, baseline_qa_result, qa_result = (
+                self._run_standard_repair(
+                    synthesis_result=synthesis_result,
+                    intake=intake,
+                    record=record,
+                    run_dir=run_dir,
+                    params=params,
+                    dependencies=dependencies,
+                    store=store,
+                )
             )
 
+        return self._evaluate_and_publish(
+            store=store,
+            intake=intake,
+            record=record,
+            run_dir=run_dir,
+            execution_result=execution_result,
+            repair_result=repair_result,
+            baseline_qa_result=baseline_qa_result,
+            qa_result=qa_result,
+            params=params,
+            dependencies=dependencies,
+        )
+
+    def _handle_escalation(
+        self,
+        *,
+        store: RunStore,
+        request: RunRequest,
+        intake: IssueIntake,
+        attempt: int,
+        dependencies: RepairDependencies,
+        params: RepairIssueParams,
+    ) -> RepairIssueReport:
+        """Handle escalation when max attempts exceeded."""
+        record = store.create_run(request, intake)
+        run_dir = Path(record.run_dir).resolve()
+        record = record.with_attempt(attempt)
+        store.write_run_record(record)
+
+        escalated_result = RepairResult(
+            status="escalated",
+            summary=f"Repair escalated after {attempt - 1} failed attempts.",
+            detail_codes=("escalated_after_retries",),
+        )
+        store.write_repair_result(run_dir, escalated_result)
+
+        verdict = GovernanceVerdict(
+            status="blocked",
+            summary=f"Repair escalated after {attempt - 1} failed attempts.",
+            reason_codes=("escalated_after_retries",),
+        )
+        store.write_governance_verdict(run_dir, verdict)
+        publish_plan = build_publish_plan(intake, record, verdict)
+        store.write_publish_plan(run_dir, publish_plan)
+        publish_result = dependencies.execute_publish_plan(
+            intake,
+            publish_plan,
+            publish=params.publish,
+        )
+        store.write_publish_result(run_dir, publish_result)
+        return RepairIssueReport(
+            intake=intake,
+            run_record=record,
+            governance_verdict=verdict,
+            publish_plan=publish_plan,
+            publish_result=publish_result,
+            repair_result=escalated_result,
+            exit_code=4,
+        )
+
+    def _run_docs_remediation_repair(
+        self,
+        *,
+        synthesis_result: ExecutionResult,
+        intake: IssueIntake,
+        record: RunRecord,
+        run_dir: Path,
+        params: RepairIssueParams,
+        dependencies: RepairDependencies,
+        store: RunStore,
+    ) -> tuple[ExecutionResult, RepairResult]:
+        """Run docs-remediation repair."""
+        repair_adapter = dependencies.create_repair_adapter(
+            repair_agent=params.repair_agent,
+            repair_model=params.repair_model,
+        )
+        repair_result = dependencies.run_docs_remediation_repair(
+            repo_path=params.repo_path,
+            adapter=repair_adapter,
+            intake=intake,
+            run_record=record,
+            run_dir=run_dir,
+            contract_artifact_dir=(
+                Path(synthesis_result.artifact_dir).resolve()
+                if synthesis_result.artifact_dir
+                else run_dir
+            ),
+        )
+        store.write_repair_result(run_dir, repair_result)
+        validation_result = None
+        validation_scope_summary = None
+        if repair_result.status == "completed" and repair_result.workspace_path:
+            validation_run_dir = run_dir / "docs-remediation-validation"
+            validation_repo_path = Path(repair_result.workspace_path).resolve() / "repo"
+            validation_result = DocsFirstExecutor(repo_path=validation_repo_path).execute(
+                intake,
+                record,
+                validation_run_dir,
+            )
+            validation_result, validation_scope_summary = (
+                dependencies.evaluate_docs_remediation_validation(
+                    intake=intake,
+                    validation_result=validation_result,
+                )
+            )
+        execution_result = dependencies.merge_docs_remediation_execution_result(
+            synthesis_result,
+            repair_result,
+            validation_result,
+            validation_scope_summary,
+        )
+        return execution_result, repair_result
+
+    def _run_standard_repair(
+        self,
+        *,
+        synthesis_result: ExecutionResult,
+        intake: IssueIntake,
+        record: RunRecord,
+        run_dir: Path,
+        params: RepairIssueParams,
+        dependencies: RepairDependencies,
+        store: RunStore,
+    ) -> tuple[ExecutionResult, RepairResult | None, QaResult | None, QaResult | None]:
+        """Run standard repair with QA loop."""
+        repair_adapter = dependencies.create_repair_adapter(
+            repair_agent=params.repair_agent,
+            repair_model=params.repair_model,
+        )
+        repair_result, baseline_qa_result, qa_result = dependencies.run_repair_qa_loop(
+            repo_path=params.repo_path,
+            adapter=repair_adapter,
+            intake=intake,
+            run_record=record,
+            run_dir=run_dir,
+            contract_artifact_dir=(
+                Path(synthesis_result.artifact_dir).resolve()
+                if synthesis_result.artifact_dir
+                else run_dir
+            ),
+        )
+        store.write_repair_result(run_dir, repair_result)
+        if baseline_qa_result is not None:
+            store.write_qa_result(run_dir, baseline_qa_result)
+        if qa_result is not None:
+            store.write_qa_result(run_dir, qa_result)
+        execution_result = dependencies.merge_execution_result(
+            synthesis_result,
+            repair_result,
+            qa_result,
+        )
+        return execution_result, repair_result, baseline_qa_result, qa_result
+
+    def _evaluate_and_publish(
+        self,
+        *,
+        store: RunStore,
+        intake: IssueIntake,
+        record: RunRecord,
+        run_dir: Path,
+        execution_result: ExecutionResult,
+        repair_result: RepairResult | None,
+        baseline_qa_result: QaResult | None,
+        qa_result: QaResult | None,
+        params: RepairIssueParams,
+        dependencies: RepairDependencies,
+    ) -> RepairIssueReport:
+        """Run evaluation, governance, and publish."""
         store.write_execution_result(run_dir, execution_result)
         evaluation_result = evaluate_run(intake, execution_result)
         store.write_evaluation_result(run_dir, evaluation_result)
