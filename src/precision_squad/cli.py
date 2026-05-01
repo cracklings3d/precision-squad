@@ -490,6 +490,7 @@ def _read_run_record(run_dir: Path) -> RunRecord:
         created_at=_as_str(payload["created_at"]),
         updated_at=_as_str(payload["updated_at"]),
         run_dir=_as_str(payload["run_dir"]),
+        attempt=_as_int(payload.get("attempt", 1)),
     )
 
 

@@ -272,6 +272,26 @@ def _build_repair_prompt(
             str(finding.get("rule_id", "")).strip()
             for finding in extract_docs_target_findings(intake.issue.body)
         }
+        # Build conditional requirements based on target rule IDs
+        conditional_requirements: list[str] = []
+        if "docs_setup_prerequisite_manual_only" in target_rule_ids:
+            conditional_requirements.append(
+                "- When the target finding is `docs_setup_prerequisite_manual_only`, "
+                "include at least one exact executable acquisition or install "
+                "command for the prerequisite in a fenced code block.",
+            )
+        if "docs_setup_prerequisite_source_unambiguous" in target_rule_ids:
+            conditional_requirements.append(
+                "- When the target finding is `docs_setup_prerequisite_source_unambiguous`, "
+                "explicitly label the canonical source as one of: `release artifact`, "
+                "`package manager`, or `source build`.",
+            )
+        if "docs_environment_assumptions_explicit" in target_rule_ids:
+            conditional_requirements.append(
+                "- When the target finding is `docs_environment_assumptions_explicit`, "
+                "include a literal `Environment assumptions:` line in the edited "
+                "docs section and spell the assumptions out directly.",
+            )
         lines = [
             "Repair the issue in this repository workspace.",
             f"Run ID: {run_record.run_id}",
@@ -293,6 +313,7 @@ def _build_repair_prompt(
             "- The goal is not to make the docs more helpful in general; the goal "
             "is to make the tracked findings disappear under the same extractor and "
             "checklist.",
+            *conditional_requirements,
             "- Keep changes minimal and focused.",
             "- Do not ask questions.",
             "- Do not commit.",
@@ -308,27 +329,6 @@ def _build_repair_prompt(
             "",
             json_instruction,
         ]
-        if "docs_setup_prerequisite_manual_only" in target_rule_ids:
-            lines.insert(
-                8,
-                "- When the target finding is `docs_setup_prerequisite_manual_only`, "
-                "include at least one exact executable acquisition or install "
-                "command for the prerequisite in a fenced code block.",
-            )
-        if "docs_setup_prerequisite_source_unambiguous" in target_rule_ids:
-            lines.insert(
-                9,
-                "- When the target finding is `docs_setup_prerequisite_source_unambiguous`, "
-                "explicitly label the canonical source as one of: `release artifact`, "
-                "`package manager`, or `source build`.",
-            )
-        if "docs_environment_assumptions_explicit" in target_rule_ids:
-            lines.insert(
-                10,
-                "- When the target finding is `docs_environment_assumptions_explicit`, "
-                "include a literal `Environment assumptions:` line in the edited "
-                "docs section and spell the assumptions out directly.",
-            )
     else:
         lines = [
             "Repair the issue in this repository workspace.",
