@@ -207,15 +207,7 @@ class RunCoordinator:
         if attempt > 3:
             record = store.create_run(request, intake)
             run_dir = Path(record.run_dir).resolve()
-            record = RunRecord(
-                run_id=record.run_id,
-                issue_ref=record.issue_ref,
-                status=record.status,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-                run_dir=record.run_dir,
-                attempt=attempt,
-            )
+            record = record.with_attempt(attempt)
             store.write_run_record(record)
 
             escalated_result = RepairResult(
@@ -254,15 +246,7 @@ class RunCoordinator:
 
         # Update attempt counter if retrying
         if attempt > 1:
-            record = RunRecord(
-                run_id=record.run_id,
-                issue_ref=record.issue_ref,
-                status=record.status,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-                run_dir=record.run_dir,
-                attempt=attempt,
-            )
+            record = record.with_attempt(attempt)
             store.write_run_record(record)
 
         if intake.assessment.status == "blocked":
