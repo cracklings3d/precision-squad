@@ -189,7 +189,6 @@ def _prepare_publish_workspace(run_dir: Path, source_repo_dir: Path) -> Path:
 
     for relative_path in (
         Path(".pytest_cache"),
-        Path("src") / "markdown_pdf_renderer.egg-info",
     ):
         candidate = publish_workspace / relative_path
         if candidate.exists():
@@ -197,6 +196,10 @@ def _prepare_publish_workspace(run_dir: Path, source_repo_dir: Path) -> Path:
                 shutil.rmtree(candidate)
             else:
                 candidate.unlink()
+
+    for egg_info in publish_workspace.rglob("*.egg-info"):
+        if egg_info.is_dir():
+            shutil.rmtree(egg_info)
 
     for pycache in publish_workspace.rglob("__pycache__"):
         shutil.rmtree(pycache)
