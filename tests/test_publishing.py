@@ -11,7 +11,9 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    RepairResult,
     RunRecord,
+    SideIssue,
 )
 from precision_squad.publishing import build_publish_plan
 
@@ -189,5 +191,100 @@ def test_build_publish_plan_does_not_recurse_follow_up_issue_for_docs_remediatio
     )
 
     plan = build_publish_plan(intake, run_record, verdict)
+
+    assert plan.status == "issue_comment"
+
+
+def test_build_publish_plan_creates_follow_up_issue_for_side_issues() -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    run_record = RunRecord(
+        run_id="run-123",
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        status="runnable",
+        created_at="2026-04-28T00:00:00Z",
+        updated_at="2026-04-28T00:00:00Z",
+        run_dir=".precision-squad/runs/run-123",
+    )
+    verdict = GovernanceVerdict(
+        status="blocked",
+        summary="QA failed.",
+        reason_codes=("qa_failed",),
+    )
+    repair_result = RepairResult(
+        status="completed",
+        summary="Repair completed with side issues.",
+        detail_codes=("repair_stage_completed",),
+        side_issues=(
+            SideIssue(
+                title="Missing version pin",
+                summary="requirements.txt lacks version pin for pytest",
+                body="Full details here",
+                labels=("docs", "bug"),
+            ),
+            SideIssue(
+                title="CI badge broken",
+                summary="Travis CI badge returns 404",
+                body="The badge URL has changed",
+                labels=("ci",),
+            ),
+        ),
+    )
+
+    plan = build_publish_plan(intake, run_record, verdict, repair_result)
+
+    assert plan.status == "follow_up_issue"
+    assert "Side issues surfaced" in plan.title
+    assert "Missing version pin" in plan.body
+    assert "CI badge broken" in plan.body
+    assert "`docs`, `bug`" in plan.body
+    assert "`ci`" in plan.body
+    assert "requirements.txt lacks version pin" in plan.body
+
+
+def test_build_publish_plan_returns_issue_comment_when_no_side_issues() -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    run_record = RunRecord(
+        run_id="run-123",
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        status="runnable",
+        created_at="2026-04-28T00:00:00Z",
+        updated_at="2026-04-28T00:00:00Z",
+        run_dir=".precision-squad/runs/run-123",
+    )
+    verdict = GovernanceVerdict(
+        status="blocked",
+        summary="QA failed.",
+        reason_codes=("qa_failed",),
+    )
+    repair_result = RepairResult(
+        status="completed",
+        summary="Repair completed.",
+        detail_codes=("repair_stage_completed",),
+        side_issues=(),
+    )
+
+    plan = build_publish_plan(intake, run_record, verdict, repair_result)
 
     assert plan.status == "issue_comment"

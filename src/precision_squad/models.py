@@ -110,6 +110,16 @@ class EvaluationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SideIssue:
+    """A secondary issue discovered during repair that is unrelated to the primary issue."""
+
+    title: str
+    summary: str
+    body: str
+    labels: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class RepairResult:
     """Normalized result for the post-synthesis repair stage."""
 
@@ -120,7 +130,7 @@ class RepairResult:
     patch_path: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None
-    side_issues: tuple[str, ...] = ()
+    side_issues: tuple[SideIssue, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

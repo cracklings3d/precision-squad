@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "What the agent did — one paragraph max."
+    },
+    "side_issues": {
+      "type": "array",
+      "description": "Secondary issues discovered that are unrelated to the primary issue being worked.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One-line issue identifier."
+          },
+          "summary": {
+            "type": "string",
+            "description": "Concise synthesis of the finding — what needs fixing and why. Aim for ~500 chars."
+          },
+          "body": {
+            "type": "string",
+            "description": "Full verbose output for audit purposes. Not used in publish context."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "GitHub labels to apply to the follow-up issue."
+          }
+        },
+        "required": ["title", "summary", "body"]
+      }
+    }
+  },
+  "required": ["summary"]
+}

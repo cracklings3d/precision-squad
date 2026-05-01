@@ -9,7 +9,7 @@ description = "Workflow control plane for OpenSWE-backed issue execution"
 readme = "README.md"
 requires-python = ">=3.14"
 authors = [{ name = "cracklings3d" }]
-dependencies = []
+dependencies = ["jsonschema>=4.26.0"]
 
 [project.optional-dependencies]
 dev = [
