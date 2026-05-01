@@ -268,112 +268,142 @@ def _build_repair_prompt(
     )
 
     if is_docs_remediation_issue(intake):
-        target_rule_ids = {
-            str(finding.get("rule_id", "")).strip()
-            for finding in extract_docs_target_findings(intake.issue.body)
-        }
-        # Build conditional requirements based on target rule IDs
-        conditional_requirements: list[str] = []
-        if "docs_setup_prerequisite_manual_only" in target_rule_ids:
-            conditional_requirements.append(
-                "- When the target finding is `docs_setup_prerequisite_manual_only`, "
-                "include at least one exact executable acquisition or install "
-                "command for the prerequisite in a fenced code block.",
-            )
-        if "docs_setup_prerequisite_source_unambiguous" in target_rule_ids:
-            conditional_requirements.append(
-                "- When the target finding is `docs_setup_prerequisite_source_unambiguous`, "
-                "explicitly label the canonical source as one of: `release artifact`, "
-                "`package manager`, or `source build`.",
-            )
-        if "docs_environment_assumptions_explicit" in target_rule_ids:
-            conditional_requirements.append(
-                "- When the target finding is `docs_environment_assumptions_explicit`, "
-                "include a literal `Environment assumptions:` line in the edited "
-                "docs section and spell the assumptions out directly.",
-            )
-        lines = [
-            "Repair the issue in this repository workspace.",
-            f"Run ID: {run_record.run_id}",
-            f"Issue: {intake.issue.reference}",
-            f"Title: {intake.issue.title}",
-            "Requirements:",
-            "- Update repository documentation in the current workspace to resolve the issue.",
-            "- Treat this as a docs-remediation issue, not a product code change.",
-            "- Use the docs-fix prompt (inlined below), execution contract, and executor logs as "
-            "the source of truth.",
-            "- Eliminate every tracked target finding in this issue's hidden "
-            "target-findings metadata.",
-            "- Prefer one exact canonical command path. Do not document multiple "
-            "alternatives unless the target findings explicitly require ambiguity "
-            "removal and one option is marked canonical.",
-            "- If a deterministic path is impossible to document, say that "
-            "explicitly in the docs rather than disguising uncertainty with advice "
-            "like restart your shell, maybe, if prompted, should, or typically.",
-            "- The goal is not to make the docs more helpful in general; the goal "
-            "is to make the tracked findings disappear under the same extractor and "
-            "checklist.",
-            *conditional_requirements,
-            "- Keep changes minimal and focused.",
-            "- Do not ask questions.",
-            "- Do not commit.",
-            "- After edits, output your JSON result.",
-            "Context files:",
-            f"- Issue statement: {run_dir / 'issue.md'}",
-            f"- Docs fix prompt (inlined):\n\n{docs_fix_prompt_content}\n",
-            f"- Execution contract: {contract_artifact_dir / 'contract.json'}",
-            f"- README snapshot: {contract_artifact_dir / 'README.snapshot.md'}",
-            f"- Executor stdout log: {run_dir / 'executor.stdout.log'}",
-            f"- Executor stderr log: {run_dir / 'executor.stderr.log'}",
-            f"Workspace repo: {repo_workspace}",
-            "",
-            json_instruction,
-        ]
+        lines = _build_docs_remediation_prompt(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            contract_artifact_dir=contract_artifact_dir,
+            repo_workspace=repo_workspace,
+            docs_fix_prompt_content=docs_fix_prompt_content,
+            json_instruction=json_instruction,
+        )
     else:
-        lines = [
-            "Repair the issue in this repository workspace.",
-            f"Run ID: {run_record.run_id}",
-            f"Issue: {intake.issue.reference}",
-            f"Title: {intake.issue.title}",
-            "Requirements:",
-            "- Modify code in the current workspace to resolve the issue.",
-            "- Use the documented local setup/test contract as the source of truth.",
-            "- Do not ask questions.",
-            "- Keep changes minimal and focused.",
-            "- Do not commit.",
-            "- After edits, output your JSON result.",
-            "Context files:",
-            f"- Issue statement: {run_dir / 'issue.md'}",
-            f"- Execution contract: {contract_artifact_dir / 'contract.json'}",
-            f"- README snapshot: {contract_artifact_dir / 'README.snapshot.md'}",
-            f"- Executor stdout log: {run_dir / 'executor.stdout.log'}",
-            f"- Executor stderr log: {run_dir / 'executor.stderr.log'}",
-            f"Workspace repo: {repo_workspace}",
-        ]
-        if docs_fix_prompt_content:
-            lines.insert(
-                -2,
-                "- The following secondary issues were detected in the documentation "
-                "but are not the primary focus of this repair. "
-                "Recommend surfacing them as separate GitHub issues via the JSON output:\n"
-                + f"\n{docs_fix_prompt_content}\n",
-            )
-        lines.insert(-1, json_instruction)
+        lines = _build_standard_repair_prompt(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            contract_artifact_dir=contract_artifact_dir,
+            repo_workspace=repo_workspace,
+            docs_fix_prompt_content=docs_fix_prompt_content,
+            json_instruction=json_instruction,
+        )
     if qa_feedback:
         lines.extend(["QA feedback from the previous attempt:", qa_feedback])
     return "\n".join(lines)
 
 
-def _extract_json_events(stdout: str) -> list[dict]:
-    events: list[dict] = []
-    for line in stdout.splitlines():
-        text = line.strip()
-        if not text.startswith("{"):
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            events.append(payload)
-    return events
+def _build_docs_remediation_prompt(
+    *,
+    intake: IssueIntake,
+    run_record: RunRecord,
+    run_dir: Path,
+    contract_artifact_dir: Path,
+    repo_workspace: Path,
+    docs_fix_prompt_content: str,
+    json_instruction: str,
+) -> list[str]:
+    """Build prompt for docs-remediation issues."""
+    target_rule_ids = {
+        str(finding.get("rule_id", "")).strip()
+        for finding in extract_docs_target_findings(intake.issue.body)
+    }
+    # Build conditional requirements based on target rule IDs
+    conditional_requirements: list[str] = []
+    if "docs_setup_prerequisite_manual_only" in target_rule_ids:
+        conditional_requirements.append(
+            "- When the target finding is `docs_setup_prerequisite_manual_only`, "
+            "include at least one exact executable acquisition or install "
+            "command for the prerequisite in a fenced code block.",
+        )
+    if "docs_setup_prerequisite_source_unambiguous" in target_rule_ids:
+        conditional_requirements.append(
+            "- When the target finding is `docs_setup_prerequisite_source_unambiguous`, "
+            "explicitly label the canonical source as one of: `release artifact`, "
+            "`package manager`, or `source build`.",
+        )
+    if "docs_environment_assumptions_explicit" in target_rule_ids:
+        conditional_requirements.append(
+            "- When the target finding is `docs_environment_assumptions_explicit`, "
+            "include a literal `Environment assumptions:` line in the edited "
+            "docs section and spell the assumptions out directly.",
+        )
+    return [
+        "Repair the issue in this repository workspace.",
+        f"Run ID: {run_record.run_id}",
+        f"Issue: {intake.issue.reference}",
+        f"Title: {intake.issue.title}",
+        "Requirements:",
+        "- Update repository documentation in the current workspace to resolve the issue.",
+        "- Treat this as a docs-remediation issue, not a product code change.",
+        "- Use the docs-fix prompt (inlined below), execution contract, and executor logs as "
+        "the source of truth.",
+        "- Eliminate every tracked target finding in this issue's hidden "
+        "target-findings metadata.",
+        "- Prefer one exact canonical command path. Do not document multiple "
+        "alternatives unless the target findings explicitly require ambiguity "
+        "removal and one option is marked canonical.",
+        "- If a deterministic path is impossible to document, say that "
+        "explicitly in the docs rather than disguising uncertainty with advice "
+        "like restart your shell, maybe, if prompted, should, or typically.",
+        "- The goal is not to make the docs more helpful in general; the goal "
+        "is to make the tracked findings disappear under the same extractor and "
+        "checklist.",
+        *conditional_requirements,
+        "- Keep changes minimal and focused.",
+        "- Do not ask questions.",
+        "- Do not commit.",
+        "- After edits, output your JSON result.",
+        "Context files:",
+        f"- Issue statement: {run_dir / 'issue.md'}",
+        f"- Docs fix prompt (inlined):\n\n{docs_fix_prompt_content}\n",
+        f"- Execution contract: {contract_artifact_dir / 'contract.json'}",
+        f"- README snapshot: {contract_artifact_dir / 'README.snapshot.md'}",
+        f"- Executor stdout log: {run_dir / 'executor.stdout.log'}",
+        f"- Executor stderr log: {run_dir / 'executor.stderr.log'}",
+        f"Workspace repo: {repo_workspace}",
+        "",
+        json_instruction,
+    ]
+
+
+def _build_standard_repair_prompt(
+    *,
+    intake: IssueIntake,
+    run_record: RunRecord,
+    run_dir: Path,
+    contract_artifact_dir: Path,
+    repo_workspace: Path,
+    docs_fix_prompt_content: str,
+    json_instruction: str,
+) -> list[str]:
+    """Build prompt for standard repair issues."""
+    lines = [
+        "Repair the issue in this repository workspace.",
+        f"Run ID: {run_record.run_id}",
+        f"Issue: {intake.issue.reference}",
+        f"Title: {intake.issue.title}",
+        "Requirements:",
+        "- Modify code in the current workspace to resolve the issue.",
+        "- Use the documented local setup/test contract as the source of truth.",
+        "- Do not ask questions.",
+        "- Keep changes minimal and focused.",
+        "- Do not commit.",
+        "- After edits, output your JSON result.",
+        "Context files:",
+        f"- Issue statement: {run_dir / 'issue.md'}",
+        f"- Execution contract: {contract_artifact_dir / 'contract.json'}",
+        f"- README snapshot: {contract_artifact_dir / 'README.snapshot.md'}",
+        f"- Executor stdout log: {run_dir / 'executor.stdout.log'}",
+        f"- Executor stderr log: {run_dir / 'executor.stderr.log'}",
+        f"Workspace repo: {repo_workspace}",
+    ]
+    if docs_fix_prompt_content:
+        lines.insert(
+            -2,
+            "- The following secondary issues were detected in the documentation "
+            "but are not the primary focus of this repair. "
+            "Recommend surfacing them as separate GitHub issues via the JSON output:\n"
+            + f"\n{docs_fix_prompt_content}\n",
+        )
+    lines.insert(-1, json_instruction)
+    return lines
