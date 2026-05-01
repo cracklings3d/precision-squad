@@ -6,6 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from jsonschema import ValidationError, validate
 
@@ -13,6 +14,23 @@ from ..docs_remediation import extract_docs_target_findings
 from ..intake import is_docs_remediation_issue
 from ..models import IssueIntake, RepairResult, RunRecord, SideIssue
 from ..opencode_model import resolve_opencode_model
+
+
+@runtime_checkable
+class RepairAdapter(Protocol):
+    """Common interface for repair adapters."""
+
+    def repair(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        contract_artifact_dir: Path,
+        repo_workspace: Path,
+    ) -> RepairResult: ...
+
+    def with_qa_feedback(self, feedback: str) -> RepairAdapter: ...
 
 REPAIR_RESULT_SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -62,6 +80,15 @@ class OpenCodeRepairAdapter:
     agent: str = "build"
     model: str | None = None
     qa_feedback: str | None = None
+
+    def with_qa_feedback(self, feedback: str) -> OpenCodeRepairAdapter:
+        """Return a copy of this adapter with the given QA feedback."""
+        return OpenCodeRepairAdapter(
+            binary=self.binary,
+            agent=self.agent,
+            model=self.model,
+            qa_feedback=feedback,
+        )
 
     def repair(
         self,

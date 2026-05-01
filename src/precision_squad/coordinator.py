@@ -21,7 +21,7 @@ from .models import (
     RunRequest,
 )
 from .publishing import build_publish_plan
-from .repair import OpenCodeRepairAdapter
+from .repair import RepairAdapter
 from .run_store import RunStore
 
 
@@ -30,13 +30,13 @@ class RepairDependencies(Protocol):
 
     def create_repair_adapter(
         self, *, repair_agent: str, repair_model: str | None
-    ) -> OpenCodeRepairAdapter | None: ...
+    ) -> RepairAdapter | None: ...
 
     def run_repair_qa_loop(
         self,
         *,
         repo_path: Path,
-        adapter: OpenCodeRepairAdapter | None,
+        adapter: RepairAdapter | None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,
@@ -47,7 +47,7 @@ class RepairDependencies(Protocol):
         self,
         *,
         repo_path: Path,
-        adapter: OpenCodeRepairAdapter | None,
+        adapter: RepairAdapter | None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,
