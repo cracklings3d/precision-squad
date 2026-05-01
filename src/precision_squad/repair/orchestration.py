@@ -23,6 +23,8 @@ from .qa import (
     build_qa_feedback,
 )
 
+DOCS_REPAIR_EXECUTOR = "docs+repair"
+
 
 class RepairStage:
     """Prepares a clean workspace and delegates repair to an adapter."""
@@ -259,7 +261,7 @@ def merge_execution_result(
     ):
         return ExecutionResult(
             status="completed",
-            executor_name="docs+repair",
+            executor_name=DOCS_REPAIR_EXECUTOR,
             summary=(
                 "Documented local setup/test instructions were extracted, the repair "
                 "stage produced source changes, and QA passed."
@@ -275,7 +277,7 @@ def merge_execution_result(
         if qa_result.quality == "improved":
             return ExecutionResult(
                 status="completed",
-                executor_name="docs+repair",
+                executor_name=DOCS_REPAIR_EXECUTOR,
                 summary=qa_result.summary,
                 detail_codes=detail_codes,
                 artifact_dir=synthesis_result.artifact_dir,
@@ -286,7 +288,7 @@ def merge_execution_result(
         status = "blocked" if qa_result.status in {"failed", "unrunnable"} else "failed_infra"
         return ExecutionResult(
             status=status,
-            executor_name="docs+repair",
+            executor_name=DOCS_REPAIR_EXECUTOR,
             summary=qa_result.summary,
             detail_codes=detail_codes,
             artifact_dir=synthesis_result.artifact_dir,
@@ -298,7 +300,7 @@ def merge_execution_result(
     if repair_result.status == "failed_infra":
         return ExecutionResult(
             status="failed_infra",
-            executor_name="docs+repair",
+            executor_name=DOCS_REPAIR_EXECUTOR,
             summary=repair_result.summary,
             detail_codes=detail_codes,
             artifact_dir=synthesis_result.artifact_dir,
@@ -308,7 +310,7 @@ def merge_execution_result(
 
     return ExecutionResult(
         status="blocked",
-        executor_name="docs+repair",
+        executor_name=DOCS_REPAIR_EXECUTOR,
         summary=repair_result.summary,
         detail_codes=detail_codes,
         artifact_dir=synthesis_result.artifact_dir,
@@ -339,7 +341,7 @@ def merge_docs_remediation_execution_result(
         if validation_result.status == "completed":
             return ExecutionResult(
                 status="completed",
-                executor_name="docs+repair",
+                executor_name=DOCS_REPAIR_EXECUTOR,
                 summary=(
                     validation_scope_summary
                     or (
@@ -357,7 +359,7 @@ def merge_docs_remediation_execution_result(
 
         return ExecutionResult(
             status=validation_result.status,
-            executor_name="docs+repair",
+            executor_name=DOCS_REPAIR_EXECUTOR,
             summary=validation_scope_summary or validation_result.summary,
             detail_codes=detail_codes,
             artifact_dir=validation_result.artifact_dir,
@@ -368,7 +370,7 @@ def merge_docs_remediation_execution_result(
     if repair_result.status == "completed":
         return ExecutionResult(
             status="failed_infra",
-            executor_name="docs+repair",
+            executor_name=DOCS_REPAIR_EXECUTOR,
             summary=(
                 "Docs-remediation repair completed, but the repaired workspace was "
                 "not revalidated."
@@ -382,7 +384,7 @@ def merge_docs_remediation_execution_result(
     if repair_result.status == "failed_infra":
         return ExecutionResult(
             status="failed_infra",
-            executor_name="docs+repair",
+            executor_name=DOCS_REPAIR_EXECUTOR,
             summary=repair_result.summary,
             detail_codes=detail_codes,
             artifact_dir=synthesis_result.artifact_dir,
@@ -392,7 +394,7 @@ def merge_docs_remediation_execution_result(
 
     return ExecutionResult(
         status="blocked",
-        executor_name="docs+repair",
+        executor_name=DOCS_REPAIR_EXECUTOR,
         summary=repair_result.summary,
         detail_codes=detail_codes,
         artifact_dir=synthesis_result.artifact_dir,
