@@ -33,6 +33,8 @@ from .post_publish_review import OpenCodePrReviewAgent, run_post_publish_review
 from .publish_executor import execute_publish_plan
 from .repair import (
     OpenCodeRepairAdapter,
+    RepairAdapter,
+    VercelAIRepairAdapter,
     evaluate_docs_remediation_validation,
     merge_docs_remediation_execution_result,
     merge_execution_result,
@@ -88,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument(
         "--repair-agent",
         default="opencode",
-        choices=("none", "opencode"),
+        choices=("none", "opencode", "vercel-ai"),
         help="Repair agent adapter to run after the documented execution contract is prepared.",
     )
     issue_parser.add_argument(
@@ -255,16 +257,18 @@ def _publish_run(args: argparse.Namespace) -> int:
 class _CliRepairDependencies:
     def create_repair_adapter(
         self, *, repair_agent: str, repair_model: str | None
-    ) -> OpenCodeRepairAdapter | None:
-        if repair_agent != "opencode":
-            return None
-        return OpenCodeRepairAdapter(model=repair_model)
+    ) -> RepairAdapter | None:
+        if repair_agent == "opencode":
+            return OpenCodeRepairAdapter(model=repair_model)
+        if repair_agent == "vercel-ai":
+            return VercelAIRepairAdapter(model=repair_model)
+        return None
 
     def run_repair_qa_loop(
         self,
         *,
         repo_path: Path,
-        adapter: OpenCodeRepairAdapter | None,
+        adapter: RepairAdapter | None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,
@@ -283,7 +287,7 @@ class _CliRepairDependencies:
         self,
         *,
         repo_path: Path,
-        adapter: OpenCodeRepairAdapter | None,
+        adapter: RepairAdapter | None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,

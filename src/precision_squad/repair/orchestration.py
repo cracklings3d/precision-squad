@@ -14,7 +14,7 @@ from ..docs_remediation import (
 from ..github_client import GitHubClientError, GitHubWriteClient
 from ..models import ExecutionResult, IssueIntake, QaResult, RepairResult, RunRecord
 from ..rerun_context import latest_rejected_pull_request
-from .adapter import OpenCodeRepairAdapter
+from .adapter import RepairAdapter
 from .qa import (
     WorkspaceQaVerifier,
     _failure_signature,
@@ -31,7 +31,7 @@ class RepairStage:
         self,
         *,
         repo_path: Path,
-        adapter: OpenCodeRepairAdapter | None,
+        adapter: RepairAdapter | None,
         rerun_branch: str | None = None,
         rerun_remote_url: str | None = None,
     ) -> None:
@@ -144,7 +144,7 @@ class RepairStage:
 def run_repair_qa_loop(
     *,
     repo_path: Path,
-    adapter: OpenCodeRepairAdapter | None,
+    adapter: RepairAdapter | None,
     intake: IssueIntake,
     run_record: RunRecord,
     run_dir: Path,
@@ -183,12 +183,7 @@ def run_repair_qa_loop(
     for iteration in range(1, max_iterations + 1):
         iteration_adapter = None
         if adapter is not None:
-            iteration_adapter = OpenCodeRepairAdapter(
-                binary=adapter.binary,
-                agent=adapter.agent,
-                model=adapter.model,
-                qa_feedback=qa_feedback,
-            )
+            iteration_adapter = adapter.with_qa_feedback(qa_feedback) if qa_feedback else adapter
         last_repair_result = RepairStage(
             repo_path=repo_path,
             adapter=iteration_adapter,
@@ -409,7 +404,7 @@ def merge_docs_remediation_execution_result(
 def run_docs_remediation_repair(
     *,
     repo_path: Path,
-    adapter: OpenCodeRepairAdapter | None,
+    adapter: RepairAdapter | None,
     intake: IssueIntake,
     run_record: RunRecord,
     run_dir: Path,
