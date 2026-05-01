@@ -60,7 +60,7 @@ Issue Intake → Run Store → Docs-First Executor → Repair Agent → QA
 |---|---|
 | Ruff linting | All checks passed |
 | Pyright type-checking | 0 errors, 0 warnings |
-| Pytest | 27 integration tests (23 passed, 4 skipped -- require GITHUB_TOKEN) |
+| Pytest | 28 integration tests (24 passed, 4 skipped -- require GITHUB_TOKEN) |
 | CI workflow | Configured (lint, typecheck, test) on push/PR |
 
 ## 5. Implemented Features

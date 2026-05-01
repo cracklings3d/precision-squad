@@ -272,6 +272,61 @@ def test_blocked_execution_result_blocks_pipeline(
 
 
 # ---------------------------------------------------------------------------
+# QA failed: repair completes but QA fails -> blocked verdict, quality=degraded
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_qa_failed_blocks_pipeline(
+    make_clean_repo,
+    tmp_path: Path,
+) -> None:
+    """When repair completes but QA fails, governance blocks with quality=degraded."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+
+    params = RepairIssueParams(
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        runs_dir=runs_dir,
+        repo_path=make_clean_repo,
+        publish=False,
+        repair_agent="opencode",
+        repair_model=None,
+        review_model=None,
+    )
+
+    from precision_squad.models import GitHubIssue, IssueAssessment, IssueReference
+
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    deps = _QaFailedTestDependencies()
+
+    report = RunCoordinator().repair_issue(
+        params=params,
+        intake=intake,
+        dependencies=deps,
+    )
+
+    assert report.repair_result is not None
+    assert report.repair_result.status == "completed"
+    assert report.qa_result is not None
+    assert report.qa_result.status == "failed"
+    assert report.qa_result.quality == "degraded"
+    assert report.governance_verdict.status == "blocked"
+    assert report.exit_code == 4
+
+
+# ---------------------------------------------------------------------------
 # Test dependencies (blocks executor + all external calls)
 # ---------------------------------------------------------------------------
 
@@ -317,3 +372,101 @@ class _BlockedTestDependencies:
 
     def run_post_publish_review_if_needed(self, **kwargs):
         return None
+
+
+class _QaFailedTestDependencies:
+    """Dependencies that simulate a QA failure after successful repair."""
+
+    def __init__(self) -> None:
+        self._adapter = _StubRepairAdapter()
+
+    def create_repair_adapter(
+        self, *, repair_agent: str, repair_model: str | None
+    ):
+        if repair_agent == "none":
+            return None
+        return self._adapter
+
+    def run_repair_qa_loop(self, *, repo_path, adapter, intake, run_record, run_dir, contract_artifact_dir):
+        from precision_squad.models import QaResult, RepairResult
+
+        repair_result = RepairResult(
+            status="completed",
+            summary="Stub repair completed.",
+            detail_codes=("repair_stage_completed",),
+            workspace_path=str(repo_path.parent),
+        )
+        baseline_result = QaResult(
+            status="passed",
+            summary="Baseline QA passed.",
+            detail_codes=(),
+            phase="baseline",
+            quality="green",
+        )
+        qa_result = QaResult(
+            status="failed",
+            summary="QA failed: test_new_feature FAILED",
+            detail_codes=("qa_failed",),
+            phase="final",
+            quality="degraded",
+        )
+        return repair_result, baseline_result, qa_result
+
+    def run_docs_remediation_repair(self, **kwargs):
+        raise AssertionError("docs remediation should not run")
+
+    def evaluate_docs_remediation_validation(self, **kwargs):
+        raise AssertionError("validation should not run")
+
+    def merge_docs_remediation_execution_result(self, *args, **kwargs):
+        raise AssertionError("docs remediation merge should not run")
+
+    def merge_execution_result(self, synthesis_result, repair_result, qa_result=None):
+        from precision_squad.models import ExecutionResult
+
+        if qa_result and qa_result.status == "failed":
+            return ExecutionResult(
+                status="blocked",
+                executor_name="docs+repair",
+                summary=f"QA failed: {qa_result.summary}",
+                detail_codes=("qa_failed",),
+                quality="degraded",
+            )
+        return synthesis_result
+
+    def synthesis_artifacts_ready(self, execution_result):
+        return True
+
+    def execute_publish_plan(self, intake, plan, *, publish, run_dir=None):
+        return PublishResult(
+            status="dry_run",
+            target=plan.status,
+            summary="dry_run (test)",
+            url=None,
+        )
+
+    def run_post_publish_review_if_needed(self, **kwargs):
+        return None
+
+
+class _StubRepairAdapter:
+    """Trivial repair adapter that makes a minor change."""
+
+    def __init__(self) -> None:
+        self.binary: str | None = None
+        self.agent: str | None = None
+        self.model: str | None = None
+        self.qa_feedback: str | None = None
+
+    def repair(self, *, intake, run_record, run_dir, contract_artifact_dir, repo_workspace):
+        from precision_squad.models import RepairResult
+
+        return RepairResult(
+            status="completed",
+            summary="Stub repair completed.",
+            detail_codes=("repair_stage_completed",),
+            workspace_path=str(repo_workspace.parent),
+        )
+
+    def with_qa_feedback(self, feedback: str):
+        return self
