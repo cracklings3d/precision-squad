@@ -658,7 +658,7 @@ def test_opencode_repair_adapter_uses_docs_remediation_prompt_for_docs_issue(
     )
 
     assert "Treat this as a docs-remediation issue" in seen_prompt["value"]
-    assert str(contract_dir / "docs-fix-prompt.txt") in seen_prompt["value"]
+    assert "Update README only" in seen_prompt["value"]
     assert "Eliminate every tracked target finding" in seen_prompt["value"]
     assert "include at least one exact executable acquisition or install command" in seen_prompt["value"]
     assert "explicitly label the canonical source as one of: `release artifact`, `package manager`, or `source build`" in seen_prompt["value"]
@@ -1120,3 +1120,177 @@ def test_finalize_qa_result_accepts_strict_baseline_improvement(tmp_path: Path) 
     assert result.phase == "final"
     assert result.quality == "improved"
     assert "qa_baseline_improved" not in result.detail_codes
+
+
+def test_parse_repair_json_extracts_summary() -> None:
+    from precision_squad.repair.adapter import _parse_repair_json
+
+    stdout = '{"type":"text","part":{"text":"done"}}\n{"summary":"Fixed the issue by updating README"}\n'
+    result = _parse_repair_json(stdout)
+    assert result is not None
+    assert result["summary"] == "Fixed the issue by updating README"
+
+
+def test_parse_repair_json_returns_none_when_no_summary() -> None:
+    from precision_squad.repair.adapter import _parse_repair_json
+
+    stdout = '{"type":"text","part":{"text":"done"}}\n{"other":"field"}\n'
+    result = _parse_repair_json(stdout)
+    assert result is None
+
+
+def test_parse_repair_json_returns_none_when_no_json() -> None:
+    from precision_squad.repair.adapter import _parse_repair_json
+
+    stdout = '{"type":"text","part":{"text":"done"}}\njust plain text\n'
+    result = _parse_repair_json(stdout)
+    assert result is None
+
+
+def test_extract_side_issues_parses_valid_data() -> None:
+    from precision_squad.repair.adapter import _extract_side_issues
+
+    repair_json = {
+        "summary": "Fixed issue",
+        "side_issues": [
+            {
+                "title": "Missing version pin",
+                "summary": "requirements.txt lacks version pin for pytest",
+                "body": "Full details about missing version pin...",
+                "labels": ["docs", "bug"],
+            },
+            {
+                "title": "CI badge broken",
+                "summary": "Travis CI badge returns 404",
+                "body": "The Travis CI badge URL has changed",
+                "labels": ["ci"],
+            },
+        ],
+    }
+    result = _extract_side_issues(repair_json)
+    assert len(result) == 2
+    assert result[0].title == "Missing version pin"
+    assert result[0].summary == "requirements.txt lacks version pin for pytest"
+    assert result[0].body == "Full details about missing version pin..."
+    assert result[0].labels == ("docs", "bug")
+    assert result[1].title == "CI badge broken"
+    assert result[1].labels == ("ci",)
+
+
+def test_extract_side_issues_skips_invalid_items() -> None:
+    from precision_squad.repair.adapter import _extract_side_issues
+
+    repair_json = {
+        "summary": "Fixed issue",
+        "side_issues": [
+            {
+                "title": "Valid issue",
+                "summary": "This is valid",
+                "body": "Body",
+            },
+            {
+                "title": "Missing summary field",
+                "body": "No summary",
+            },
+            {
+                "not_a_title": "Missing title",
+                "summary": "Has summary",
+                "body": "Body",
+            },
+        ],
+    }
+    result = _extract_side_issues(repair_json)
+    assert len(result) == 1
+    assert result[0].title == "Valid issue"
+
+
+def test_extract_side_issues_returns_empty_for_no_side_issues() -> None:
+    from precision_squad.repair.adapter import _extract_side_issues
+
+    repair_json = {"summary": "Fixed issue"}
+    result = _extract_side_issues(repair_json)
+    assert result == ()
+
+
+def test_extract_side_issues_returns_empty_for_non_list() -> None:
+    from precision_squad.repair.adapter import _extract_side_issues
+
+    repair_json = {"summary": "Fixed issue", "side_issues": "not a list"}
+    result = _extract_side_issues(repair_json)
+    assert result == ()
+
+
+def test_opencode_repair_adapter_prompt_includes_json_output_instruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from precision_squad.repair.adapter import _build_repair_prompt
+
+    repo_workspace = tmp_path / "workspace" / "repo"
+    repo_workspace.mkdir(parents=True)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    _write_contract(contract_dir, ["python -m pip install -e .[dev]"], "python -m pytest tests/test_cli.py")
+
+    prompt = _build_repair_prompt(
+        intake=_intake(),
+        run_record=_record(run_dir),
+        run_dir=run_dir,
+        contract_artifact_dir=contract_dir,
+        repo_workspace=repo_workspace,
+        qa_feedback=None,
+    )
+
+    assert "Output a single JSON object with at least a `summary` field" in prompt
+    assert "side_issues" in prompt
+    assert "title" in prompt
+    assert "summary" in prompt
+    assert "body" in prompt
+
+
+def test_opencode_repair_adapter_prompt_inlines_docs_fix_prompt_for_docs_remediation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from precision_squad.repair.adapter import _build_repair_prompt
+
+    repo_workspace = tmp_path / "workspace" / "repo"
+    repo_workspace.mkdir(parents=True)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "issue.md").write_text(
+        "# Issue\n\nFix docs only.\n",
+        encoding="utf-8",
+    )
+    contract_dir = run_dir / "execution-contract"
+    _write_contract(contract_dir, ["python -m pip install -e .[dev]"], "python -m pytest tests/test_cli.py")
+    docs_fix_content = "Add a setup command to README."
+    (contract_dir / "docs-fix-prompt.txt").write_text(docs_fix_content, encoding="utf-8")
+
+    docs_intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 16),
+            title="Docs blocker surfaced while repairing #9: clarify deterministic setup and QA",
+            body=(
+                "<!-- precision-squad:docs-remediation -->\n"
+                "<!-- precision-squad:target-findings:[{\"rule_id\":\"docs_setup_command_present\",\"section_key\":\"setup\",\"source_path\":\"readme.md\",\"subject_key\":\"setup-command\"}] -->\n\n"
+                "## Context"
+            ),
+            labels=(),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/16",
+        ),
+        summary="Fix docs",
+        problem_statement="Fix docs.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    prompt = _build_repair_prompt(
+        intake=docs_intake,
+        run_record=_record(run_dir),
+        run_dir=run_dir,
+        contract_artifact_dir=contract_dir,
+        repo_workspace=repo_workspace,
+        qa_feedback=None,
+    )
+
+    assert docs_fix_content in prompt
+    assert str(contract_dir / "docs-fix-prompt.txt") not in prompt

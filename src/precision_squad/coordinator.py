@@ -290,7 +290,7 @@ class RunCoordinator:
         store.write_evaluation_result(run_dir, evaluation_result)
         verdict = apply_governance(intake, execution_result, evaluation_result)
         store.write_governance_verdict(run_dir, verdict)
-        publish_plan = build_publish_plan(intake, record, verdict)
+        publish_plan = build_publish_plan(intake, record, verdict, repair_result)
         store.write_publish_plan(run_dir, publish_plan)
         publish_result = dependencies.execute_publish_plan(
             intake,

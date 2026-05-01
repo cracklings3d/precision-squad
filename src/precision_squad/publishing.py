@@ -17,7 +17,7 @@ from .docs_remediation import (
     normalize_docs_findings,
 )
 from .intake import is_docs_remediation_issue
-from .models import GovernanceVerdict, IssueIntake, PublishPlan, RunRecord
+from .models import GovernanceVerdict, IssueIntake, PublishPlan, RepairResult, RunRecord
 from .rerun_context import latest_rejected_pull_request
 
 
@@ -25,6 +25,7 @@ def build_publish_plan(
     intake: IssueIntake,
     run_record: RunRecord,
     verdict: GovernanceVerdict,
+    repair_result: RepairResult | None = None,
 ) -> PublishPlan:
     """Prepare the first publish plan without calling GitHub yet."""
     if verdict.status == "approved":
@@ -90,6 +91,36 @@ def build_publish_plan(
             ),
             reason_codes=verdict.reason_codes,
         )
+
+    if verdict.status == "blocked":
+        side_issues = repair_result.side_issues if repair_result else ()
+        if side_issues:
+            side_issues_lines = []
+            for si in side_issues:
+                labels_str = ", ".join(f"`{l}`" for l in si.labels) if si.labels else "no labels"
+                side_issues_lines.append(
+                    f"### {si.title}\n"
+                    f"**Labels:** {labels_str}\n\n"
+                    f"{si.summary}\n"
+                )
+            side_issues_body = "\n---\n\n".join(side_issues_lines)
+            return PublishPlan(
+                status="follow_up_issue",
+                title=f"Side issues surfaced while repairing #{intake.issue.reference.number}",
+                body=(
+                    f"## Side Issues Surfaced\n"
+                    f"- Surfaced while repairing: `{intake.issue.reference}`\n"
+                    f"- Source issue URL: {intake.issue.html_url}\n"
+                    f"- Requested change: {intake.summary}\n"
+                    f"- Run ID: `{run_record.run_id}`\n"
+                    f"- Governance verdict: `{verdict.status}`\n"
+                    f"- Summary: {verdict.summary}\n"
+                    "\n"
+                    "## Side Issues\n"
+                    f"{side_issues_body}\n"
+                ),
+                reason_codes=verdict.reason_codes,
+            )
 
     reason_lines = "\n".join(f"- {code}" for code in verdict.reason_codes) or "- blocked"
     return PublishPlan(
