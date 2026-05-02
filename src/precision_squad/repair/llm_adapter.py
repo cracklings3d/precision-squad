@@ -27,15 +27,15 @@ _SYSTEM_PROMPT = (
 
 
 @dataclass(frozen=True, slots=True)
-class VercelAIRepairAdapter:
+class OpenAIRepairAdapter:
     """Repair adapter that calls an OpenAI-compatible LLM API directly."""
 
     model: str | None = None
     qa_feedback: str | None = None
 
-    def with_qa_feedback(self, feedback: str) -> VercelAIRepairAdapter:
+    def with_qa_feedback(self, feedback: str) -> OpenAIRepairAdapter:
         """Return a copy of this adapter with the given QA feedback."""
-        return VercelAIRepairAdapter(model=self.model, qa_feedback=feedback)
+        return OpenAIRepairAdapter(model=self.model, qa_feedback=feedback)
 
     def repair(
         self,

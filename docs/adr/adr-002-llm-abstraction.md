@@ -19,9 +19,9 @@ The implementation plan (Phase 3) proposed replacing this with a direct LLM API 
 Replace the `opencode` binary dependency with a direct LLM API call using the `openai` Python SDK. Introduce a `RepairAdapter` protocol that abstracts the repair mechanism, allowing multiple implementations:
 
 1. **`OpenCodeRepairAdapter`** — the original binary-based adapter (preserved for backward compatibility)
-2. **`VercelAIRepairAdapter`** — direct LLM API adapter using `openai` SDK
+2. **`OpenAIRepairAdapter`** — direct LLM API adapter using `openai` SDK
 
-The coordinator selects the adapter based on the `--repair-agent` CLI argument (`none`, `opencode`, `vercel-ai`).
+The coordinator selects the adapter based on the `--repair-agent` CLI argument (`none`, `opencode`, `openai`).
 
 ## Rationale
 
@@ -76,8 +76,7 @@ The coordinator selects the adapter based on the `--repair-agent` CLI argument (
 ## Consequences
 
 - `openai` is a required dependency in `pyproject.toml`.
-- `VercelAIRepairAdapter` uses the OpenAI SDK directly, not the Vercel AI SDK.
-- The adapter name `VercelAIRepairAdapter` is a historical artifact; the implementation uses OpenAI SDK. (See issue #25 for naming cleanup.)
+- `OpenAIRepairAdapter` uses the OpenAI SDK directly.
 - The `OpenCodeRepairAdapter` is preserved for backward compatibility but is not the default.
 - The `--repair-agent` CLI argument selects the adapter.
 - The `RepairAdapter` protocol defines the contract for all adapters.

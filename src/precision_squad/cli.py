@@ -32,9 +32,9 @@ from .models import (
 from .post_publish_review import OpenCodePrReviewAgent, run_post_publish_review
 from .publish_executor import execute_publish_plan
 from .repair import (
+    OpenAIRepairAdapter,
     OpenCodeRepairAdapter,
     RepairAdapter,
-    VercelAIRepairAdapter,
     evaluate_docs_remediation_validation,
     merge_docs_remediation_execution_result,
     merge_execution_result,
@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument(
         "--repair-agent",
         default="opencode",
-        choices=("none", "opencode", "vercel-ai"),
+        choices=("none", "opencode", "openai"),
         help="Repair agent adapter to run after the documented execution contract is prepared.",
     )
     issue_parser.add_argument(
@@ -266,8 +266,8 @@ class _CliRepairDependencies:
     ) -> RepairAdapter | None:
         if repair_agent == "opencode":
             return OpenCodeRepairAdapter(model=repair_model)
-        if repair_agent == "vercel-ai":
-            return VercelAIRepairAdapter(model=repair_model)
+        if repair_agent == "openai":
+            return OpenAIRepairAdapter(model=repair_model)
         return None
 
     def run_repair_qa_loop(
@@ -676,6 +676,8 @@ def _post_publish_review_is_stale(
     if head_sha is None:
         return False
     return head_sha != review_result.pull_head_sha
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
     load_local_env(Path(__file__).resolve().parent.parent.parent)

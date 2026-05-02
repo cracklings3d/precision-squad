@@ -135,7 +135,7 @@ When verdict is `blocked` and `side_issues` is non-empty on the associated `Repa
 
 ### 3.1 — New `repair/llm_adapter.py`
 
-Create `VercelAIRepairAdapter` (or similar):
+Create `OpenAIRepairAdapter` (or similar):
 
 - Uses `openai` SDK directly (what Vercel AI SDK wraps) or the `@ai-sdk/openai` package.
 - Reads `OPENAI_API_KEY` (or `VERCEL_API_KEY`) from environment.
@@ -148,12 +148,12 @@ Create `VercelAIRepairAdapter` (or similar):
 
 ### 3.2 — `repair/__init__.py` (or `repair/adapter.py`)
 
-Export both `OpenCodeRepairAdapter` and `VercelAIRepairAdapter`.
+Export both `OpenCodeRepairAdapter` and `OpenAIRepairAdapter`.
 
 ### 3.3 — `coordinator.py` / `cli.py`
 
-- [ ] Update `RepairDependencies.create_repair_adapter` to return the new adapter when `repair_agent == "vercel-ai"` (new choice).
-- [ ] Add `--repair-agent` choice: `none`, `opencode`, `vercel-ai`.
+- [ ] Update `RepairDependencies.create_repair_adapter` to return the new adapter when `repair_agent == "openai"` (new choice).
+- [ ] Add `--repair-agent` choice: `none`, `opencode`, `openai`.
 - [ ] `OpenCodeRepairAdapter` remains functional for existing users.
 
 ### 3.4 — Dependency

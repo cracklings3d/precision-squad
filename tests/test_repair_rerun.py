@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from precision_squad.models import GitHubIssue, IssueAssessment, IssueIntake, IssueReference
-from precision_squad.repair import _resolve_rerun_branch
+from precision_squad.repair.orchestration import _resolve_rerun_branch
 
 
 def test_resolve_rerun_branch_uses_latest_rejected_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:

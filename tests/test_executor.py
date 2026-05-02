@@ -22,12 +22,11 @@ from precision_squad.repair import (
     OpenCodeRepairAdapter,
     RepairStage,
     WorkspaceQaVerifier,
-    _failure_signature,
-    _finalize_qa_result,
     evaluate_docs_remediation_validation,
     merge_docs_remediation_execution_result,
     merge_execution_result,
 )
+from precision_squad.repair.qa import _failure_signature, _finalize_qa_result
 
 
 def _intake() -> IssueIntake:

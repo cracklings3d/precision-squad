@@ -16,7 +16,7 @@ from precision_squad.models import (
     RunRecord,
 )
 from precision_squad.repair.llm_adapter import (
-    VercelAIRepairAdapter,
+    OpenAIRepairAdapter,
     _parse_llm_response,
 )
 
@@ -86,7 +86,7 @@ def test_parse_llm_response_pretty_printed_json() -> None:
 
 
 # ---------------------------------------------------------------------------
-# VercelAIRepairAdapter.repair
+# OpenAIRepairAdapter.repair
 # ---------------------------------------------------------------------------
 
 
@@ -135,7 +135,7 @@ def test_repair_adapter_completed_with_changes(tmp_path: Path) -> None:
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai.return_value = mock_client
 
-        adapter = VercelAIRepairAdapter(model="gpt-4o")
+        adapter = OpenAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
             intake=intake,
             run_record=run_record,
@@ -168,7 +168,7 @@ def test_repair_adapter_completed_no_changes(tmp_path: Path) -> None:
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai.return_value = mock_client
 
-        adapter = VercelAIRepairAdapter(model="gpt-4o")
+        adapter = OpenAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
             intake=intake,
             run_record=run_record,
@@ -200,7 +200,7 @@ def test_repair_adapter_diff_failed(tmp_path: Path) -> None:
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai.return_value = mock_client
 
-        adapter = VercelAIRepairAdapter(model="gpt-4o")
+        adapter = OpenAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
             intake=intake,
             run_record=run_record,
@@ -227,7 +227,7 @@ def test_repair_adapter_api_failure(tmp_path: Path) -> None:
         mock_client.chat.completions.create.side_effect = Exception("API error")
         mock_openai.return_value = mock_client
 
-        adapter = VercelAIRepairAdapter(model="gpt-4o")
+        adapter = OpenAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
             intake=intake,
             run_record=run_record,
@@ -259,7 +259,7 @@ def test_repair_adapter_invalid_response(tmp_path: Path) -> None:
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai.return_value = mock_client
 
-        adapter = VercelAIRepairAdapter(model="gpt-4o")
+        adapter = OpenAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
             intake=intake,
             run_record=run_record,
@@ -302,7 +302,7 @@ def test_repair_adapter_with_side_issues(tmp_path: Path) -> None:
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai.return_value = mock_client
 
-        adapter = VercelAIRepairAdapter(model="gpt-4o")
+        adapter = OpenAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
             intake=intake,
             run_record=run_record,
@@ -337,7 +337,7 @@ def test_repair_adapter_model_from_env(tmp_path: Path, monkeypatch: pytest.Monke
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai.return_value = mock_client
 
-        adapter = VercelAIRepairAdapter()
+        adapter = OpenAIRepairAdapter()
         adapter.repair(
                 intake=intake,
                 run_record=run_record,
@@ -352,7 +352,7 @@ def test_repair_adapter_model_from_env(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_repair_adapter_with_qa_feedback(tmp_path: Path) -> None:
-    adapter = VercelAIRepairAdapter(model="gpt-4o")
+    adapter = OpenAIRepairAdapter(model="gpt-4o")
     new_adapter = adapter.with_qa_feedback("Tests failed: test_foo")
     assert new_adapter.qa_feedback == "Tests failed: test_foo"
     assert new_adapter.model == "gpt-4o"
@@ -360,8 +360,8 @@ def test_repair_adapter_with_qa_feedback(tmp_path: Path) -> None:
 
 
 def test_repair_adapter_protocol_compliance() -> None:
-    """Verify VercelAIRepairAdapter satisfies RepairAdapter protocol."""
+    """Verify OpenAIRepairAdapter satisfies RepairAdapter protocol."""
     from precision_squad.repair.adapter import RepairAdapter
 
-    adapter = VercelAIRepairAdapter()
+    adapter = OpenAIRepairAdapter()
     assert isinstance(adapter, RepairAdapter)
