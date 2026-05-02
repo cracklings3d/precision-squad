@@ -147,6 +147,8 @@ def test_repair_adapter_completed_with_changes(tmp_path: Path) -> None:
     assert result.status == "completed"
     assert result.summary == "Fixed the bug."
     assert result.stdout_path is not None
+    assert result.stderr_path is not None
+    assert result.workspace_path == str(repo_workspace.parent)
 
 
 def test_repair_adapter_completed_no_changes(tmp_path: Path) -> None:
@@ -238,6 +240,8 @@ def test_repair_adapter_api_failure(tmp_path: Path) -> None:
 
     assert result.status == "failed_infra"
     assert "LLM API call failed" in result.summary
+    assert result.workspace_path == str(repo_workspace.parent)
+    assert result.stderr_path is not None
 
 
 def test_repair_adapter_invalid_response(tmp_path: Path) -> None:
@@ -270,6 +274,8 @@ def test_repair_adapter_invalid_response(tmp_path: Path) -> None:
 
     assert result.status == "blocked"
     assert "did not match" in result.summary
+    assert result.workspace_path == str(repo_workspace.parent)
+    assert result.stderr_path is not None
 
 
 def test_repair_adapter_with_side_issues(tmp_path: Path) -> None:

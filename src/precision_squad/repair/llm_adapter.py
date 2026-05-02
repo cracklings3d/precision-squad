@@ -28,7 +28,15 @@ _SYSTEM_PROMPT = (
 
 @dataclass(frozen=True, slots=True)
 class OpenAIRepairAdapter:
-    """Repair adapter that calls an OpenAI-compatible LLM API directly."""
+    """Repair adapter that calls an OpenAI-compatible LLM API directly.
+
+    This adapter generates a repair plan as JSON via the LLM but does **not**
+    modify files in the workspace.  The ``workspace_path`` in the returned
+    :class:`RepairResult` points to the cloned workspace prepared by
+    :class:`RepairStage` so that the QA loop can locate it, but the workspace
+    itself is unchanged.  Use :class:`OpenCodeRepairAdapter` when you need an
+    adapter that applies changes to the filesystem.
+    """
 
     model: str | None = None
     qa_feedback: str | None = None
@@ -47,6 +55,7 @@ class OpenAIRepairAdapter:
         repo_workspace: Path,
     ) -> RepairResult:
         stdout_path = run_dir / "repair.stdout.log"
+        stderr_path = run_dir / "repair.stderr.log"
 
         prompt = _build_repair_prompt(
             intake=intake,
@@ -75,10 +84,13 @@ class OpenAIRepairAdapter:
                 status="failed_infra",
                 summary=f"LLM API call failed: {exc}",
                 detail_codes=("llm_api_failed",),
+                workspace_path=str(repo_workspace.parent),
                 stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
             )
 
         stdout_path.write_text(raw_content, encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
 
         repair_json = _parse_llm_response(raw_content)
         side_issues: tuple[SideIssue, ...] = ()
@@ -90,14 +102,18 @@ class OpenAIRepairAdapter:
                 status="blocked",
                 summary="LLM response did not match the expected repair result schema.",
                 detail_codes=("llm_response_invalid",),
+                workspace_path=str(repo_workspace.parent),
                 stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
             )
 
         return RepairResult(
             status="completed",
             summary=repair_json.get("summary", "Repair agent completed."),
             detail_codes=("repair_stage_completed",),
+            workspace_path=str(repo_workspace.parent),
             stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
             side_issues=side_issues,
         )
 
