@@ -2,11 +2,21 @@
 
 ## Status
 
-Accepted
+Superseded
 
 ## Date
 
 2026-05-01
+
+## Superseded By
+
+[ADR-005: Standardize the Repair Agent Seam Around Tool Adapters, OpenCode First](./adr-005-tool-backed-repair-agent-adapters.md)
+
+## Supersession Note
+
+This ADR recorded the first move away from a hard-wired external repair binary and toward an explicit adapter seam.
+
+That part remains useful, but the primary decision in this ADR no longer matches the product direction. The system is no longer standardizing on direct LLM SDK integration as the main repair path. It is standardizing on a tool-neutral repair-agent adapter seam with `OpenCode` as the first implementation and room for future tool adapters behind the same interface.
 
 ## Context
 
@@ -115,5 +125,6 @@ The adapter parses the LLM response as JSON, validates it against the repair-res
 - [CONTEXT.md](../../CONTEXT.md) — Repair Agent
 - [Implementation Plan](../implementation-plan.md) — Phase 3
 - [architecture.md](../architecture.md) — Repair Stage section (updated)
+- [ADR-005](./adr-005-tool-backed-repair-agent-adapters.md) — supersedes the direct-LLM-first decision in this ADR
 - [Issue #4](https://github.com/cracklings3d/precision-squad/issues/4) — LLM Adapter implementation
 - [Issue #25](https://github.com/cracklings3d/precision-squad/issues/25) — Naming cleanup
