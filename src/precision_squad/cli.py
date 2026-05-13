@@ -488,7 +488,7 @@ def _read_publish_result(run_dir: Path) -> PublishResult | None:
         summary=_as_str(payload["summary"]),
         url=_as_optional_str(payload.get("url")),
         branch_name=_as_optional_str(payload.get("branch_name")),
-        pull_number=_as_optional_int(payload.get("pull_number"]),
+        pull_number=_as_optional_int(payload.get("pull_number")),
     )
 
 
@@ -741,6 +741,8 @@ def _post_publish_review_is_stale(
     if head_sha is None:
         return False
     return head_sha != review_result.pull_head_sha
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
     load_local_env(Path(__file__).resolve().parent.parent.parent)
