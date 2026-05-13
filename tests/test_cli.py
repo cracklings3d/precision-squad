@@ -11,6 +11,7 @@ from precision_squad import __version__
 from precision_squad.bootstrap import main as bootstrap_main
 from precision_squad.cli import main
 from precision_squad.models import (
+    ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
     IssueAssessment,
@@ -1162,3 +1163,329 @@ def test_publish_run_retries_stale_rejected_post_publish_review(
     assert "Post-Publish Review: approved" in captured.out
     assert review_payload["status"] == "approved"
     assert review_payload["pull_head_sha"] == "new-sha"
+
+
+def test_run_issue_with_approved_plan_path_persists_approved_plan(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+    monkeypatch.setattr(
+        "precision_squad.cli.DocsFirstExecutor.execute",
+        lambda self, intake, record, run_dir: ExecutionResult(
+            status="completed",
+            executor_name="docs",
+            summary="Stub execution completed.",
+            detail_codes=(),
+        ),
+    )
+
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Add --version flag using click.",
+                "implementation_steps": ["Add click.option('--version')", "Bump __version__"],
+                "named_references": ["src/cli.py"],
+                "retrieval_surface_summary": "src/",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(
+        [
+            "run",
+            "issue",
+            "cracklings3d/markdown-pdf-renderer#9",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    run_dir_line = next(line for line in captured.out.splitlines() if line.startswith("Run Dir:"))
+    run_dir = Path(run_dir_line.removeprefix("Run Dir:").strip())
+
+    assert status == 0
+    assert (run_dir / "approved-plan.json").exists()
+    plan_payload = json.loads((run_dir / "approved-plan.json").read_text(encoding="utf-8"))
+    assert plan_payload["issue_ref"] == "cracklings3d/markdown-pdf-renderer#9"
+    assert plan_payload["plan_summary"] == "Add --version flag using click."
+    assert plan_payload["implementation_steps"] == [
+        "Add click.option('--version')",
+        "Bump __version__",
+    ]
+
+
+def test_run_issue_with_mismatched_approved_plan_issue_ref_raises(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#99",
+                "plan_summary": "Different issue plan",
+                "implementation_steps": ["Step 1"],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(
+        [
+            "run",
+            "issue",
+            "cracklings3d/markdown-pdf-renderer#9",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    assert status == 1
+    captured = capsys.readouterr()
+    assert "does not match CLI issue_ref" in captured.err
+
+
+def test_load_approved_plan_rejects_missing_plan_summary(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "",
+                "implementation_steps": ["Step 1"],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(
+        [
+            "run",
+            "issue",
+            "cracklings3d/markdown-pdf-renderer#9",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    assert status == 1
+    captured = capsys.readouterr()
+    assert "non-empty" in captured.err.lower() or "plan_summary" in captured.err.lower()
+
+
+def test_load_approved_plan_rejects_missing_implementation_steps(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "A valid plan",
+                "implementation_steps": [],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(
+        [
+            "run",
+            "issue",
+            "cracklings3d/markdown-pdf-renderer#9",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    assert status == 1
+    captured = capsys.readouterr()
+    assert "implementation steps" in captured.err.lower()
+
+
+class TestLoadApprovedPlanValidation:
+    def test_rejects_missing_issue_ref(self, tmp_path: Path) -> None:
+        plan_path = tmp_path / "approved-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "plan_summary": "A plan",
+                    "implementation_steps": ["Step 1"],
+                    "named_references": [],
+                    "retrieval_surface_summary": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+        from precision_squad.cli import _load_approved_plan
+
+        with pytest.raises(ValueError, match="issue_ref"):
+            _load_approved_plan(plan_path, "owner/repo#1")
+
+    def test_rejects_wrong_issue_ref(self, tmp_path: Path) -> None:
+        plan_path = tmp_path / "approved-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "issue_ref": "owner/repo#99",
+                    "plan_summary": "A plan",
+                    "implementation_steps": ["Step 1"],
+                    "named_references": [],
+                    "retrieval_surface_summary": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+        from precision_squad.cli import _load_approved_plan
+
+        with pytest.raises(ValueError, match="does not match"):
+            _load_approved_plan(plan_path, "owner/repo#1")
+
+    def test_rejects_empty_plan_summary(self, tmp_path: Path) -> None:
+        plan_path = tmp_path / "approved-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "issue_ref": "owner/repo#1",
+                    "plan_summary": "   ",
+                    "implementation_steps": ["Step 1"],
+                    "named_references": [],
+                    "retrieval_surface_summary": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+        from precision_squad.cli import _load_approved_plan
+
+        with pytest.raises(ValueError, match="plan_summary"):
+            _load_approved_plan(plan_path, "owner/repo#1")
+
+    def test_rejects_empty_implementation_steps(self, tmp_path: Path) -> None:
+        plan_path = tmp_path / "approved-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "issue_ref": "owner/repo#1",
+                    "plan_summary": "A plan",
+                    "implementation_steps": [],
+                    "named_references": [],
+                    "retrieval_surface_summary": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+        from precision_squad.cli import _load_approved_plan
+
+        with pytest.raises(ValueError, match="implementation steps"):
+            _load_approved_plan(plan_path, "owner/repo#1")
+
+    def test_returns_approved_plan(self, tmp_path: Path) -> None:
+        plan_path = tmp_path / "approved-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "issue_ref": "owner/repo#1",
+                    "plan_summary": "Fix the bug",
+                    "implementation_steps": ["Step 1", "Step 2"],
+                    "named_references": ["src/main.py"],
+                    "retrieval_surface_summary": "src/",
+                    "approved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        from precision_squad.cli import _load_approved_plan
+
+        plan = _load_approved_plan(plan_path, "owner/repo#1")
+        assert isinstance(plan, ApprovedPlan)
+        assert plan.issue_ref == "owner/repo#1"
+        assert plan.plan_summary == "Fix the bug"
+        assert plan.implementation_steps == ("Step 1", "Step 2")
+        assert tuple(ref.name for ref in plan.named_references) == ("src/main.py",)
+        assert plan.retrieval_surface_summary == "src/"
+        assert plan.approved is True
