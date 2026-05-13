@@ -6,11 +6,17 @@ import argparse
 import importlib.resources
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import __version__
+from .config import (
+    format_config_search_locations,
+    load_command_config,
+    merge_config_into_args,
+)
 from .coordinator import PublishRunParams, RepairIssueParams, RunCoordinator
 from .env import load_local_env
 from .executor import DocsFirstExecutor
@@ -48,6 +54,8 @@ from .repair import (
 # Keep a local alias so tests can monkeypatch the shared executor class through this module.
 _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
 
+_REPAIR_AGENT_CHOICES = ("none", "opencode", "vercel-ai")
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI parser."""
@@ -76,43 +84,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_parser.add_argument(
         "--runs-dir",
-        default=".precision-squad/runs",
+        default=argparse.SUPPRESS,
         help="Directory where run artifacts will be stored.",
     )
     issue_parser.add_argument(
         "--publish",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
         help="Apply the publish plan to GitHub instead of only preparing it.",
     )
     issue_parser.add_argument(
         "--repo-path",
-        required=True,
+        default=argparse.SUPPRESS,
         help="Local filesystem path to the target repository checkout.",
     )
     issue_parser.add_argument(
         "--repair-agent",
-        default="opencode",
-        choices=("none", "opencode", "vercel-ai"),
+        choices=_REPAIR_AGENT_CHOICES,
+        default=argparse.SUPPRESS,
         help="Repair agent adapter to run after the documented execution contract is prepared.",
     )
     issue_parser.add_argument(
         "--repair-model",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Optional model override for the repair agent runtime.",
     )
     issue_parser.add_argument(
         "--review-model",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Optional model override for post-publish review agents.",
     )
     issue_parser.add_argument(
         "--retry-from",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Existing run ID to retry from. Increments attempt counter.",
     )
     issue_parser.add_argument(
         "--approved-plan-path",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Path to an approved-plan.json file to pass to the coordinator.",
     )
     issue_parser.set_defaults(handler=_repair_issue)
@@ -129,12 +138,12 @@ def build_parser() -> argparse.ArgumentParser:
     publish_run_parser.add_argument("run_id", help="Existing run ID to publish.")
     publish_run_parser.add_argument(
         "--runs-dir",
-        default=".precision-squad/runs",
+        default=argparse.SUPPRESS,
         help="Directory where run artifacts are stored.",
     )
     publish_run_parser.add_argument(
         "--review-model",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Optional model override for post-publish review agents.",
     )
     publish_run_parser.set_defaults(handler=_publish_run)
@@ -145,12 +154,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     install_skill_parser.add_argument(
         "--project-root",
-        default=".",
+        default=argparse.SUPPRESS,
         help="Project root where SKILL.md should be written.",
     )
     install_skill_parser.add_argument(
         "--force",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
         help="Overwrite an existing SKILL.md file.",
     )
     install_skill_parser.set_defaults(handler=_install_skill)
@@ -743,18 +753,206 @@ def _post_publish_review_is_stale(
     return head_sha != review_result.pull_head_sha
 
 
+@dataclass(frozen=True)
+class _CommandConfigSpec:
+    table: tuple[str, ...]
+    supported_keys: frozenset[str]
+    defaults: dict[str, Any]
+    validate: Callable[[dict[str, Any]], None]
+    discovery_root: Callable[[argparse.Namespace], Path]
+
+
+def _validate_repair_issue_args(args: dict[str, Any]) -> None:
+    _require_config_value(args, "repo_path")
+    args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
+    args["repo_path"] = _config_str(args.get("repo_path"), key="repo_path")
+    args["publish"] = _coerce_bool(args.get("publish"), key="publish")
+    args["repair_agent"] = _validate_repair_agent(args.get("repair_agent"))
+    _normalize_optional_path_arg(args, "approved_plan_path")
+    _normalize_optional_str_arg(args, "repair_model")
+    _normalize_optional_str_arg(args, "review_model")
+
+
+def _validate_publish_run_args(args: dict[str, Any]) -> None:
+    args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
+    _normalize_optional_str_arg(args, "review_model")
+
+
+def _validate_install_skill_args(args: dict[str, Any]) -> None:
+    args["project_root"] = _config_str(args.get("project_root"), key="project_root")
+    args["force"] = _coerce_bool(args.get("force"), key="force")
+
+
+def _repair_issue_config_root(args: argparse.Namespace) -> Path:
+    repo_path = getattr(args, "repo_path", argparse.SUPPRESS)
+    if repo_path is argparse.SUPPRESS:
+        return Path.cwd()
+    return Path(repo_path)
+
+
+def _publish_run_config_root(args: argparse.Namespace) -> Path:
+    del args
+    return Path.cwd()
+
+
+def _install_skill_config_root(args: argparse.Namespace) -> Path:
+    project_root = getattr(args, "project_root", argparse.SUPPRESS)
+    if project_root is argparse.SUPPRESS:
+        return Path.cwd()
+    return Path(project_root)
+
+
+_COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigSpec] = {
+    _repair_issue: _CommandConfigSpec(
+        table=("repair", "issue"),
+        supported_keys=frozenset(
+            {
+                "runs_dir",
+                "publish",
+                "repo_path",
+                "repair_agent",
+                "repair_model",
+                "review_model",
+                "approved_plan_path",
+            }
+        ),
+        defaults={
+            "runs_dir": ".precision-squad/runs",
+            "publish": False,
+            "repair_agent": "opencode",
+            "repair_model": None,
+            "review_model": None,
+            "retry_from": None,
+            "approved_plan_path": None,
+        },
+        validate=_validate_repair_issue_args,
+        discovery_root=_repair_issue_config_root,
+    ),
+    _publish_run: _CommandConfigSpec(
+        table=("publish", "run"),
+        supported_keys=frozenset({"runs_dir", "review_model"}),
+        defaults={"runs_dir": ".precision-squad/runs", "review_model": None},
+        validate=_validate_publish_run_args,
+        discovery_root=_publish_run_config_root,
+    ),
+    _install_skill: _CommandConfigSpec(
+        table=("install-skill",),
+        supported_keys=frozenset({"project_root", "force"}),
+        defaults={"project_root": ".", "force": False},
+        validate=_validate_install_skill_args,
+        discovery_root=_install_skill_config_root,
+    ),
+}
+
+
+def _resolve_cli_args(
+    parser: argparse.ArgumentParser, argv: Sequence[str] | None
+) -> argparse.Namespace:
+    parsed_args = parser.parse_args(list(argv) if argv is not None else None)
+    handler = getattr(parsed_args, "handler", None)
+    if handler is None:
+        return parsed_args
+
+    spec = _COMMAND_CONFIG_SPECS.get(handler)
+    if spec is None:
+        return parsed_args
+
+    args_dict = vars(parsed_args)
+    for key in spec.supported_keys:
+        args_dict.setdefault(key, argparse.SUPPRESS)
+    config = load_command_config(
+        start_dir=spec.discovery_root(parsed_args),
+        table=spec.table,
+        supported_tables={
+            command_spec.table: command_spec.supported_keys
+            for command_spec in _COMMAND_CONFIG_SPECS.values()
+        },
+    )
+    merged = merge_config_into_args(config, args_dict)
+    resolved = _apply_config_defaults(merged, spec)
+    _validate_resolved_args(resolved, spec)
+    return argparse.Namespace(**resolved)
+
+
+def _apply_config_defaults(args: dict[str, Any], spec: _CommandConfigSpec) -> dict[str, Any]:
+    resolved = dict(args)
+    for key, value in spec.defaults.items():
+        if resolved.get(key, argparse.SUPPRESS) is argparse.SUPPRESS:
+            resolved[key] = value
+    return resolved
+
+
+def _validate_resolved_args(args: dict[str, Any], spec: _CommandConfigSpec) -> None:
+    spec.validate(args)
+
+
+def _arg_reference(key: str) -> str:
+    return f"'{key}' (--{key.replace('_', '-')})"
+
+
+def _require_config_value(args: dict[str, Any], key: str) -> None:
+    value = args.get(key, argparse.SUPPRESS)
+    if value is argparse.SUPPRESS or value is None:
+        raise ValueError(
+            f"Missing required value for {_arg_reference(key)}. "
+            f"Provide --{key.replace('_', '-')} or set it in a precision-squad config file "
+            f"at {format_config_search_locations()} under the active command's discovery root."
+        )
+    if isinstance(value, str) and not value.strip():
+        raise ValueError(
+            f"Missing required value for {_arg_reference(key)}. "
+            f"Provide --{key.replace('_', '-')} or set it in a precision-squad config file "
+            f"at {format_config_search_locations()} under the active command's discovery root."
+        )
+
+
+def _normalize_optional_str_arg(args: dict[str, Any], key: str) -> None:
+    value = args.get(key)
+    if value is None:
+        return
+    args[key] = _config_str(value, key=key)
+
+
+def _normalize_optional_path_arg(args: dict[str, Any], key: str) -> None:
+    value = args.get(key)
+    if value is None:
+        return
+    args[key] = _config_str(value, key=key)
+
+
+def _config_str(value: Any, *, key: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Invalid value for {_arg_reference(key)}: expected a non-empty string")
+    return value
+
+
+def _validate_repair_agent(value: Any) -> str:
+    repair_agent = _config_str(value, key="repair_agent")
+    if repair_agent not in _REPAIR_AGENT_CHOICES:
+        expected = ", ".join(_REPAIR_AGENT_CHOICES)
+        raise ValueError(
+            f"Invalid value for {_arg_reference('repair_agent')}: "
+            f"{repair_agent!r}. Expected one of: {expected}"
+        )
+    return repair_agent
+
+
+def _coerce_bool(value: Any, *, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"Invalid value for {_arg_reference(key)}: expected a boolean")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
     load_local_env(Path(__file__).resolve().parent.parent.parent)
     parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
-
-    handler = getattr(args, "handler", None)
-    if handler is None:
-        parser.print_help()
-        return 0
-
     try:
+        args = _resolve_cli_args(parser, argv)
+        handler = getattr(args, "handler", None)
+        if handler is None:
+            parser.print_help()
+            return 0
         return handler(args)
     except (GitHubClientError, NotImplementedError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

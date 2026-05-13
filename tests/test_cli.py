@@ -10,14 +10,20 @@ import pytest
 from precision_squad import __version__
 from precision_squad.bootstrap import main as bootstrap_main
 from precision_squad.cli import main
+from precision_squad.coordinator import RepairIssueReport
 from precision_squad.models import (
     ApprovedPlan,
+    EvaluationResult,
     ExecutionResult,
     GitHubIssue,
+    GovernanceVerdict,
     IssueAssessment,
     IssueIntake,
     IssueReference,
     PostPublishReviewResult,
+    PublishPlan,
+    PublishResult,
+    RunRecord,
 )
 
 
@@ -53,6 +59,29 @@ def test_install_skill_refuses_to_overwrite_without_force(tmp_path: Path) -> Non
     skill_path.write_text("existing\n", encoding="utf-8")
 
     status = main(["install-skill", "--project-root", str(tmp_path)])
+
+    assert status == 1
+    assert skill_path.read_text(encoding="utf-8") == "existing\n"
+
+
+def test_install_skill_no_force_overrides_true_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    skill_path = project_root / "SKILL.md"
+    skill_path.write_text("existing\n", encoding="utf-8")
+    (tmp_path / ".precision-squad.toml").write_text(
+        (
+            "[install-skill]\n"
+            f'project_root = "{project_root.as_posix()}"\n'
+            "force = true\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    status = main(["install-skill", "--no-force"])
 
     assert status == 1
     assert skill_path.read_text(encoding="utf-8") == "existing\n"
@@ -1163,6 +1192,577 @@ def test_publish_run_retries_stale_rejected_post_publish_review(
     assert "Post-Publish Review: approved" in captured.out
     assert review_payload["status"] == "approved"
     assert review_payload["pull_head_sha"] == "new-sha"
+
+
+def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Config file values are used when CLI args are not provided."""
+    repo_path = tmp_path / "repo-from-config"
+    runs_dir = tmp_path / "runs-from-config"
+    config_file = tmp_path / ".precision-squad.toml"
+    config_file.write_text(
+        (
+            "[repair.issue]\n"
+            f'repo_path = "{repo_path.as_posix()}"\n'
+            f'runs_dir = "{runs_dir.as_posix()}"\n'
+            'repair_agent = "none"\n'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Example issue",
+            body="Example body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Example summary",
+        problem_statement="Example problem",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    captured_params: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured_params["repo_path"] = params.repo_path
+        captured_params["runs_dir"] = params.runs_dir
+        captured_params["repair_agent"] = params.repair_agent
+        return RepairIssueReport(
+            intake=intake,
+            run_record=RunRecord(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs-from-config" / "run-1"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="Stub execution completed.",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(
+                status="success",
+                summary="Stub evaluation completed.",
+                detail_codes=(),
+            ),
+            governance_verdict=GovernanceVerdict(
+                status="approved",
+                summary="Approved",
+                reason_codes=(),
+            ),
+            publish_plan=PublishPlan(
+                status="draft_pr",
+                title="title",
+                body="body",
+                reason_codes=(),
+            ),
+            publish_result=PublishResult(
+                status="dry_run",
+                target="draft_pr",
+                summary="dry run",
+                url=None,
+            ),
+            repair_result=None,
+            qa_result=None,
+            post_publish_review_result=None,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(["repair", "issue", "owner/repo#1"])
+
+    assert status == 0
+    assert captured_params["repo_path"] == repo_path
+    assert captured_params["runs_dir"] == runs_dir
+    assert captured_params["repair_agent"] == "none"
+
+
+def test_cli_args_override_config_file_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_file = tmp_path / ".precision-squad.toml"
+    config_file.write_text(
+        (
+            "[repair.issue]\n"
+            'repo_path = "/from/config"\n'
+            'runs_dir = "/config/runs"\n'
+            'repair_agent = "none"\n'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Example issue",
+            body="Example body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Example summary",
+        problem_statement="Example problem",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    captured_params: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured_params["repo_path"] = params.repo_path
+        captured_params["runs_dir"] = params.runs_dir
+        captured_params["repair_agent"] = params.repair_agent
+        return RepairIssueReport(
+            intake=intake,
+            run_record=RunRecord(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-1"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="Stub execution completed.",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(
+                status="success",
+                summary="Stub evaluation completed.",
+                detail_codes=(),
+            ),
+            governance_verdict=GovernanceVerdict(
+                status="approved",
+                summary="Approved",
+                reason_codes=(),
+            ),
+            publish_plan=PublishPlan(
+                status="draft_pr",
+                title="title",
+                body="body",
+                reason_codes=(),
+            ),
+            publish_result=PublishResult(
+                status="dry_run",
+                target="draft_pr",
+                summary="dry run",
+                url=None,
+            ),
+            repair_result=None,
+            qa_result=None,
+            post_publish_review_result=None,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo-from-cli"),
+            "--runs-dir",
+            str(tmp_path / "runs-from-cli"),
+            "--repair-agent",
+            "opencode",
+        ]
+    )
+
+    assert status == 0
+    assert captured_params["repo_path"] == tmp_path / "repo-from-cli"
+    assert captured_params["runs_dir"] == tmp_path / "runs-from-cli"
+    assert captured_params["repair_agent"] == "opencode"
+
+
+def test_invalid_config_file_format_returns_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    (tmp_path / ".precision-squad.toml").write_text("this is not valid toml [[[", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    status = main(["repair", "issue", "owner/repo#1"])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Invalid config file format" in captured.err
+
+
+def test_empty_parent_namespace_config_returns_schema_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    (tmp_path / ".precision-squad.toml").write_text("[repair]\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    status = main(["repair", "issue", "owner/repo#1"])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Unknown config section [repair]" in captured.err
+
+
+def test_invalid_config_repair_agent_returns_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        '[repair.issue]\nrepo_path = "/tmp/repo"\nrepair_agent = "openai"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    status = main(["repair", "issue", "owner/repo#1"])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Invalid value for 'repair_agent' (--repair-agent)" in captured.err
+
+
+def test_invalid_cli_repair_agent_is_rejected_by_parser(capsys, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "repair",
+                "issue",
+                "owner/repo#1",
+                "--repo-path",
+                str(tmp_path),
+                "--repair-agent",
+                "openai",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "invalid choice" in captured.err
+    assert "opencode" in captured.err
+    assert "vercel-ai" in captured.err
+
+
+def test_missing_repo_path_error_lists_supported_config_locations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    status = main(["repair", "issue", "owner/repo#1"])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "./.precision-squad.toml" in captured.err
+    assert "./.precision-squad/precision-squad.toml" in captured.err
+    assert "active command's discovery root" in captured.err
+
+
+def test_publish_run_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    runs_dir = tmp_path / "runs-from-config"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (tmp_path / ".precision-squad.toml").write_text(
+        f'[publish.run]\nruns_dir = "{runs_dir.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    (run_dir / "issue-intake.json").write_text(
+        json.dumps(
+            {
+                "issue": {
+                    "reference": {"owner": "owner", "repo": "repo", "number": 1},
+                    "title": "Issue",
+                    "body": "Body",
+                    "labels": [],
+                    "html_url": "https://github.com/owner/repo/issues/1",
+                },
+                "summary": "Summary",
+                "problem_statement": "Problem",
+                "assessment": {"status": "runnable", "reason_codes": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "publish-plan.json").write_text(
+        json.dumps({"status": "draft_pr", "title": "title", "body": "body", "reason_codes": []}),
+        encoding="utf-8",
+    )
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "publish-result.json").write_text(
+        json.dumps({"status": "dry_run", "target": "draft_pr", "summary": "dry run"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.cli.execute_publish_plan",
+        lambda intake, plan, publish, run_dir: PublishResult(
+            status="dry_run", target=plan.status, summary="dry run", url=None
+        ),
+    )
+    monkeypatch.setattr("precision_squad.cli._run_post_publish_review_if_needed", lambda **kwargs: None)
+
+    status = main(["publish", "run", "run-123"])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Run ID: run-123" in captured.out
+
+
+def test_install_skill_uses_config_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (tmp_path / ".precision-squad.toml").write_text(
+        f'[install-skill]\nproject_root = "{project_root.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    status = main(["install-skill"])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert (project_root / "SKILL.md").exists()
+    assert "Installed skill:" in captured.out
+
+
+def test_repair_issue_no_publish_cli_overrides_true_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo-from-config"
+    runs_dir = tmp_path / "runs-from-config"
+    (tmp_path / ".precision-squad.toml").write_text(
+        (
+            "[repair.issue]\n"
+            f'repo_path = "{repo_path.as_posix()}"\n'
+            f'runs_dir = "{runs_dir.as_posix()}"\n'
+            "publish = true\n"
+            'repair_agent = "none"\n'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Example issue",
+            body="Example body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Example summary",
+        problem_statement="Example problem",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    captured_params: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured_params["publish"] = params.publish
+        return RepairIssueReport(
+            intake=intake,
+            run_record=RunRecord(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs-from-config" / "run-1"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="Stub execution completed.",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(
+                status="success",
+                summary="Stub evaluation completed.",
+                detail_codes=(),
+            ),
+            governance_verdict=GovernanceVerdict(
+                status="approved",
+                summary="Approved",
+                reason_codes=(),
+            ),
+            publish_plan=PublishPlan(
+                status="draft_pr",
+                title="title",
+                body="body",
+                reason_codes=(),
+            ),
+            publish_result=PublishResult(
+                status="dry_run",
+                target="draft_pr",
+                summary="dry run",
+                url=None,
+            ),
+            repair_result=None,
+            qa_result=None,
+            post_publish_review_result=None,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(["repair", "issue", "owner/repo#1", "--no-publish"])
+
+    assert status == 0
+    assert captured_params["publish"] is False
+
+
+def test_repair_issue_uses_explicit_repo_path_as_config_discovery_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repo_path = tmp_path / "target-repo"
+    repo_path.mkdir()
+    (workspace / ".precision-squad.toml").write_text(
+        (
+            "[repair.issue]\n"
+            f'runs_dir = "{(workspace / "runs-from-cwd").as_posix()}"\n'
+            'repair_agent = "vercel-ai"\n'
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / ".precision-squad.toml").write_text(
+        (
+            "[repair.issue]\n"
+            f'runs_dir = "{(repo_path / "runs-from-repo").as_posix()}"\n'
+            'repair_agent = "none"\n'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(workspace)
+
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Example issue",
+            body="Example body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Example summary",
+        problem_statement="Example problem",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    captured_params: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured_params["runs_dir"] = params.runs_dir
+        captured_params["repair_agent"] = params.repair_agent
+        return RepairIssueReport(
+            intake=intake,
+            run_record=RunRecord(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(workspace / "runs-from-cwd" / "run-1"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="Stub execution completed.",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(
+                status="success",
+                summary="Stub evaluation completed.",
+                detail_codes=(),
+            ),
+            governance_verdict=GovernanceVerdict(
+                status="approved",
+                summary="Approved",
+                reason_codes=(),
+            ),
+            publish_plan=PublishPlan(
+                status="draft_pr",
+                title="title",
+                body="body",
+                reason_codes=(),
+            ),
+            publish_result=PublishResult(
+                status="dry_run",
+                target="draft_pr",
+                summary="dry run",
+                url=None,
+            ),
+            repair_result=None,
+            qa_result=None,
+            post_publish_review_result=None,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(repo_path),
+        ]
+    )
+
+    assert status == 0
+    assert captured_params["runs_dir"] == repo_path / "runs-from-repo"
+    assert captured_params["repair_agent"] == "none"
+
+
+def test_install_skill_uses_explicit_project_root_as_config_discovery_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    skill_path = project_root / "SKILL.md"
+    skill_path.write_text("existing\n", encoding="utf-8")
+
+    (project_root / ".precision-squad.toml").write_text(
+        "[install-skill]\nforce = true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(workspace)
+
+    status = main(["install-skill", "--project-root", str(project_root)])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert skill_path.exists()
+    assert "Installed skill:" in captured.out
 
 
 def test_run_issue_with_approved_plan_path_persists_approved_plan(

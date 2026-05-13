@@ -81,6 +81,65 @@ Primary repair command:
 python -m precision_squad.cli repair issue owner/repo#number --repo-path <local-repo>
 ```
 
+Optional project config:
+
+- locations, in search order: `./.precision-squad.toml` and `./.precision-squad/precision-squad.toml`
+- precedence: CLI flags override config values
+- boolean overrides: use `--publish` / `--no-publish` and `--force` / `--no-force`
+- schema: command-shaped TOML tables only; top-level scalar keys are invalid
+- discovery root:
+  - `repair issue`: `--repo-path` when provided, otherwise the current working directory
+  - `publish run`: the current working directory
+  - `install-skill`: `--project-root` when provided, otherwise the current working directory
+- relative path values from config are resolved relative to the config file that supplied them
+
+Example:
+
+```toml
+[repair.issue]
+repo_path = "."
+runs_dir = ".precision-squad/runs"
+repair_agent = "opencode"
+publish = false
+repair_model = "model-name"
+review_model = "model-name"
+approved_plan_path = "approved-plan.json"
+
+[publish.run]
+runs_dir = ".precision-squad/runs"
+review_model = "model-name"
+
+[install-skill]
+project_root = "."
+force = false
+```
+
+Supported keys for `repair issue`:
+
+- `repo_path`
+- `runs_dir`
+- `publish`
+- `repair_agent`
+- `repair_model`
+- `review_model`
+- `approved_plan_path`
+
+Supported keys for `publish run`:
+
+- `runs_dir`
+- `review_model`
+
+Supported keys for `install-skill`:
+
+- `project_root`
+- `force`
+
+CLI-only for this feature:
+
+- positional arguments such as `issue_ref` and `run_id`
+- command and subcommand names
+- `retry_from`, because run selection remains an explicit invocation-scoped operator choice
+
 Legacy alias still supported:
 
 ```bash
