@@ -10,10 +10,12 @@ from typing import Literal, cast
 from uuid import uuid4
 
 from .models import (
+    ApprovedPlan,
     EvaluationResult,
     ExecutionResult,
     GovernanceVerdict,
     IssueIntake,
+    NamedReference,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -24,7 +26,8 @@ from .models import (
 )
 
 PersistedArtifact = (
-    EvaluationResult
+    ApprovedPlan
+    | EvaluationResult
     | ExecutionResult
     | GovernanceVerdict
     | IssueIntake
@@ -81,6 +84,16 @@ class RunStore:
 
     def write_execution_result(self, run_dir: Path, result: ExecutionResult) -> None:
         self._write_json(run_dir / "execution-result.json", result)
+
+    def write_approved_plan(self, run_dir: Path, plan: ApprovedPlan) -> None:
+        self._write_json(run_dir / "approved-plan.json", plan)
+
+    @staticmethod
+    def load_approved_plan(run_dir: Path) -> ApprovedPlan | None:
+        plan_path = run_dir / "approved-plan.json"
+        if not plan_path.exists():
+            return None
+        return _read_approved_plan(plan_path)
 
     def write_evaluation_result(self, run_dir: Path, result: EvaluationResult) -> None:
         self._write_json(run_dir / "evaluation-result.json", result)
@@ -166,4 +179,39 @@ def _read_run_record(path: Path) -> RunRecord:
         updated_at=str(payload["updated_at"]),
         run_dir=str(payload["run_dir"]),
         attempt=int(payload.get("attempt", 1)),
+    )
+
+
+def _read_approved_plan(path: Path) -> ApprovedPlan:
+    """Read an approved plan from a JSON file."""
+    with path.open(encoding="utf-8") as f:
+        payload = json.load(f)
+    named_refs: list[NamedReference] = []
+    allowed_types = {"file", "interface", "symbol", "example"}
+    for ref in payload.get("named_references", []):
+        if isinstance(ref, dict):
+            name = str(ref.get("name", ""))
+            if not name:
+                raise ValueError("Named reference has empty name")
+            ref_type = ref.get("reference_type", "file")
+            if ref_type not in allowed_types:
+                raise ValueError(
+                    f"Named reference has invalid reference_type '{ref_type}'; expected one of {allowed_types}"
+                )
+            named_refs.append(
+                NamedReference(
+                    name=name,
+                    reference_type=ref_type,
+                    description=str(ref.get("description", "")),
+                )
+            )
+        else:
+            named_refs.append(NamedReference(name=str(ref)))
+    return ApprovedPlan(
+        issue_ref=str(payload["issue_ref"]),
+        plan_summary=str(payload["plan_summary"]),
+        implementation_steps=tuple(str(step) for step in payload.get("implementation_steps", [])),
+        named_references=tuple(named_refs),
+        retrieval_surface_summary=str(payload.get("retrieval_surface_summary", "")),
+        approved=bool(payload.get("approved", True)),
     )

@@ -208,6 +208,27 @@ class ReviewAgentResult:
 
 
 @dataclass(frozen=True, slots=True)
+class NamedReference:
+    """A named reference (file path, interface, symbol, or example) from the approved plan."""
+
+    name: str
+    reference_type: Literal["file", "interface", "symbol", "example"] = "file"
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedPlan:
+    """Canonical approved-plan artifact for downstream stage consumption."""
+
+    issue_ref: str
+    plan_summary: str
+    implementation_steps: tuple[str, ...]
+    named_references: tuple[NamedReference, ...]
+    retrieval_surface_summary: str
+    approved: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class PostPublishReviewResult:
     """Combined result for post-publish PR review."""
 
