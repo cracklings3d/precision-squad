@@ -10,6 +10,7 @@ from .executor import DocsFirstExecutor
 from .governance import apply_governance, evaluate_run
 from .intake import IssueIntake, is_docs_remediation_issue
 from .models import (
+    ApprovedPlan,
     EvaluationResult,
     ExecutionResult,
     GovernanceVerdict,
@@ -136,6 +137,7 @@ class RepairIssueParams:
     repair_model: str | None
     review_model: str | None
     retry_from: str | None = None
+    approved_plan: ApprovedPlan | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,10 +187,30 @@ class RunCoordinator:
 
         # Handle retry logic
         attempt = 1
+        previous_run_dir: Path | None = None
         if params.retry_from is not None:
             try:
                 previous_record = store.load_run(params.retry_from)
                 attempt = previous_record.attempt + 1
+                previous_run_dir = Path(previous_record.run_dir).resolve()
+            except ValueError:
+                return RepairIssueReport(
+                    intake=intake,
+                    run_record=RunRecord(
+                        run_id="",
+                        issue_ref=params.issue_ref,
+                        status="blocked",
+                        created_at="",
+                        updated_at="",
+                        run_dir="",
+                    ),
+                    exit_code=3,
+                )
+
+        effective_approved_plan = params.approved_plan
+        if effective_approved_plan is None and previous_run_dir is not None:
+            try:
+                effective_approved_plan = RunStore.load_approved_plan(previous_run_dir)
             except ValueError:
                 return RepairIssueReport(
                     intake=intake,
@@ -221,6 +243,10 @@ class RunCoordinator:
         if attempt > 1:
             record = record.with_attempt(attempt)
             store.write_run_record(record)
+
+        # Persist the approved plan early so later stages can load it.
+        if effective_approved_plan is not None:
+            store.write_approved_plan(run_dir, effective_approved_plan)
 
         if intake.assessment.status == "blocked":
             verdict = apply_governance(intake, execution_result=None, evaluation_result=None)
