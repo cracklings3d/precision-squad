@@ -207,6 +207,24 @@ class RunCoordinator:
                     exit_code=3,
                 )
 
+        effective_approved_plan = params.approved_plan
+        if effective_approved_plan is None and previous_run_dir is not None:
+            try:
+                effective_approved_plan = RunStore.load_approved_plan(previous_run_dir)
+            except ValueError:
+                return RepairIssueReport(
+                    intake=intake,
+                    run_record=RunRecord(
+                        run_id="",
+                        issue_ref=params.issue_ref,
+                        status="blocked",
+                        created_at="",
+                        updated_at="",
+                        run_dir="",
+                    ),
+                    exit_code=3,
+                )
+
         # Check if escalated (max 3 attempts exceeded)
         if attempt > 3:
             return self._handle_escalation(
@@ -227,10 +245,6 @@ class RunCoordinator:
             store.write_run_record(record)
 
         # Persist the approved plan early so later stages can load it.
-        # On retry, carry it forward from the previous run unless overridden.
-        effective_approved_plan = params.approved_plan
-        if effective_approved_plan is None and previous_run_dir is not None:
-            effective_approved_plan = RunStore.load_approved_plan(previous_run_dir)
         if effective_approved_plan is not None:
             store.write_approved_plan(run_dir, effective_approved_plan)
 

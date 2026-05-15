@@ -95,6 +95,17 @@ class RunStore:
             return None
         return _read_approved_plan(plan_path)
 
+    @staticmethod
+    def load_approved_plan_text(
+        run_dir: Path,
+        include_named_references: bool = False,
+    ) -> str | None:
+        """Load the approved plan and render it as markdown text, or None if not present."""
+        plan = RunStore.load_approved_plan(run_dir)
+        if plan is None:
+            return None
+        return render_approved_plan_text(plan, include_named_references=include_named_references)
+
     def write_evaluation_result(self, run_dir: Path, result: EvaluationResult) -> None:
         self._write_json(run_dir / "evaluation-result.json", result)
 
@@ -186,9 +197,20 @@ def _read_approved_plan(path: Path) -> ApprovedPlan:
     """Read an approved plan from a JSON file."""
     with path.open(encoding="utf-8") as f:
         payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected JSON object in {path}")
+    if "issue_ref" not in payload:
+        raise ValueError("Approved plan is missing required field 'issue_ref'")
+    plan_issue_ref = _require_non_empty_str(payload.get("issue_ref"), field_name="issue_ref")
+    plan_summary = _require_non_empty_str(payload.get("plan_summary"), field_name="plan_summary")
+    implementation_steps = _read_implementation_steps(payload)
+    approved = _read_approved_flag(payload)
+    named_references_raw = payload.get("named_references", [])
+    if not isinstance(named_references_raw, list):
+        raise ValueError("Expected 'named_references' to be a list")
     named_refs: list[NamedReference] = []
     allowed_types = {"file", "interface", "symbol", "example"}
-    for ref in payload.get("named_references", []):
+    for ref in named_references_raw:
         if isinstance(ref, dict):
             name = str(ref.get("name", ""))
             if not name:
@@ -208,10 +230,63 @@ def _read_approved_plan(path: Path) -> ApprovedPlan:
         else:
             named_refs.append(NamedReference(name=str(ref)))
     return ApprovedPlan(
-        issue_ref=str(payload["issue_ref"]),
-        plan_summary=str(payload["plan_summary"]),
-        implementation_steps=tuple(str(step) for step in payload.get("implementation_steps", [])),
+        issue_ref=plan_issue_ref,
+        plan_summary=plan_summary,
+        implementation_steps=implementation_steps,
         named_references=tuple(named_refs),
         retrieval_surface_summary=str(payload.get("retrieval_surface_summary", "")),
-        approved=bool(payload.get("approved", True)),
+        approved=approved,
     )
+
+
+def _require_non_empty_str(value: object, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"Approved plan field '{field_name}' must be a string")
+    if not value.strip():
+        raise ValueError(f"Approved plan is missing a non-empty '{field_name}'")
+    return value
+
+
+def _read_implementation_steps(payload: dict[str, object]) -> tuple[str, ...]:
+    implementation_steps_raw = payload.get("implementation_steps", [])
+    if not isinstance(implementation_steps_raw, list):
+        raise ValueError("Expected 'implementation_steps' to be a list")
+    implementation_steps = tuple(str(step) for step in implementation_steps_raw)
+    if not implementation_steps:
+        raise ValueError("Approved plan has no implementation steps")
+    return implementation_steps
+
+
+def _read_approved_flag(payload: dict[str, object]) -> bool:
+    approved_raw = payload.get("approved", True)
+    if not isinstance(approved_raw, bool):
+        raise ValueError("Approved plan field 'approved' must be a boolean")
+    if not approved_raw:
+        raise ValueError("Approved plan must have 'approved': true")
+    return approved_raw
+
+
+def render_approved_plan_text(
+    plan: ApprovedPlan,
+    include_named_references: bool = False,
+) -> str:
+    """Render an ApprovedPlan to markdown text for context packs."""
+    approval_marker = "Approved Plan"
+    lines = [
+        f"# {approval_marker}: {plan.issue_ref}",
+        "",
+        plan.plan_summary,
+        "",
+        "## Implementation Steps",
+    ]
+    for step in plan.implementation_steps:
+        lines.append(f"- {step}")
+    if plan.retrieval_surface_summary:
+        lines.extend(["", f"**Retrieval Surface:** {plan.retrieval_surface_summary}"])
+    if include_named_references and plan.named_references:
+        lines.extend(["", "## Named References"])
+        for ref in plan.named_references:
+            ref_type_suffix = f" ({ref.reference_type})" if ref.reference_type != "file" else ""
+            desc_suffix = f": {ref.description}" if ref.description else ""
+            lines.append(f"- {ref.name}{ref_type_suffix}{desc_suffix}")
+    return "\n".join(lines)

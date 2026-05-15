@@ -44,6 +44,7 @@ from .repair import (
     run_repair_qa_loop,
     synthesis_artifacts_ready,
 )
+from .run_store import _read_approved_plan as _read_persisted_approved_plan
 
 # Keep a local alias so tests can monkeypatch the shared executor class through this module.
 _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
@@ -585,56 +586,13 @@ def _as_bool(value: Any) -> bool:
 
 def _load_approved_plan(path: Path, issue_ref: str) -> ApprovedPlan:
     """Load and validate an ApprovedPlan from a JSON file."""
-    payload = _read_json(path)
-    if "issue_ref" not in payload:
-        raise ValueError("Approved plan is missing required field 'issue_ref'")
-    plan_issue_ref = _as_str(payload.get("issue_ref"))
+    plan = _read_persisted_approved_plan(path)
+    plan_issue_ref = plan.issue_ref
     if plan_issue_ref != issue_ref:
         raise ValueError(
             f"Approved plan issue_ref '{plan_issue_ref}' does not match CLI issue_ref '{issue_ref}'"
         )
-    plan_summary = _as_str(payload.get("plan_summary"))
-    if not plan_summary.strip():
-        raise ValueError("Approved plan is missing a non-empty 'plan_summary'")
-    implementation_steps_raw = payload.get("implementation_steps", [])
-    if not isinstance(implementation_steps_raw, list):
-        raise ValueError("Expected 'implementation_steps' to be a list")
-    implementation_steps = tuple(str(step) for step in implementation_steps_raw)
-    if not implementation_steps:
-        raise ValueError("Approved plan has no implementation steps")
-    named_references_raw = payload.get("named_references", [])
-    if not isinstance(named_references_raw, list):
-        raise ValueError("Expected 'named_references' to be a list")
-    named_refs: list[NamedReference] = []
-    allowed_types = {"file", "interface", "symbol", "example"}
-    for ref in named_references_raw:
-        if isinstance(ref, dict):
-            name = str(ref.get("name", ""))
-            if not name:
-                raise ValueError("Named reference has empty name")
-            ref_type = ref.get("reference_type", "file")
-            if ref_type not in allowed_types:
-                raise ValueError(
-                    "Named reference has invalid reference_type "
-                    f"'{ref_type}'; expected one of {allowed_types}"
-                )
-            named_refs.append(
-                NamedReference(
-                    name=name,
-                    reference_type=ref_type,
-                    description=str(ref.get("description", "")),
-                )
-            )
-        else:
-            named_refs.append(NamedReference(name=str(ref)))
-    return ApprovedPlan(
-        issue_ref=plan_issue_ref,
-        plan_summary=plan_summary,
-        implementation_steps=implementation_steps,
-        named_references=tuple(named_refs),
-        retrieval_surface_summary=str(payload.get("retrieval_surface_summary", "")),
-        approved=bool(payload.get("approved", True)),
-    )
+    return plan
 
 
 def _as_issue_assessment_status(value: Any) -> Literal["runnable", "blocked"]:

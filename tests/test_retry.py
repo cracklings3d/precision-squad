@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
+    ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
     GovernanceVerdict,
@@ -71,6 +72,17 @@ def _create_previous_run(store: RunStore, attempt: int = 1) -> RunRecord:
     return updated
 
 
+def _approved_plan(issue_ref: str = "owner/repo#1") -> ApprovedPlan:
+    return ApprovedPlan(
+        issue_ref=issue_ref,
+        plan_summary="Fix the bug with a minimal change.",
+        implementation_steps=("Update the implementation",),
+        named_references=(),
+        retrieval_surface_summary="src/",
+        approved=True,
+    )
+
+
 def test_retry_increments_attempt(tmp_path: Path) -> None:
     """Test that retry increments the attempt counter."""
     store = RunStore(tmp_path / "runs")
@@ -103,7 +115,7 @@ def test_retry_increments_attempt(tmp_path: Path) -> None:
     import precision_squad.coordinator as coord_module
     original_execute = coord_module.DocsFirstExecutor.execute
 
-    def mock_execute(self, intake, record, run_dir):
+    def mock_execute(self, intake, run_record, run_dir):
         return exec_result
 
     coord_module.DocsFirstExecutor.execute = mock_execute
@@ -228,7 +240,8 @@ def test_retry_attempt_stored_in_run_record(tmp_path: Path) -> None:
     )
 
     original_execute = coord_module.DocsFirstExecutor.execute
-    def mock_execute(self, intake, record, run_dir):
+
+    def mock_execute(self, intake, run_record, run_dir):
         return exec_result
     coord_module.DocsFirstExecutor.execute = mock_execute
 
@@ -244,6 +257,90 @@ def test_retry_attempt_stored_in_run_record(tmp_path: Path) -> None:
     # Verify the attempt was persisted
     loaded = store.load_run(report.run_record.run_id)
     assert loaded.attempt == 3
+
+
+def test_retry_carries_forward_approved_plan_into_new_run_directory(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    previous = _create_previous_run(store, attempt=1)
+    previous_run_dir = Path(previous.run_dir)
+    store.write_approved_plan(previous_run_dir, _approved_plan())
+
+    dependencies = MagicMock()
+    dependencies.synthesis_artifacts_ready.return_value = False
+    dependencies.execute_publish_plan.return_value = PublishResult(
+        status="dry_run",
+        target="issue_comment",
+        summary="Dry run",
+        url=None,
+    )
+    dependencies.run_post_publish_review_if_needed.return_value = None
+
+    coordinator = RunCoordinator()
+    params = _make_params(tmp_path, retry_from=previous.run_id)
+    intake = _make_intake()
+
+    import precision_squad.coordinator as coord_module
+
+    exec_result = ExecutionResult(
+        status="completed",
+        executor_name="test",
+        summary="Test execution",
+        detail_codes=(),
+    )
+    original_execute = coord_module.DocsFirstExecutor.execute
+
+    def mock_execute(self, intake, run_record, run_dir):
+        return exec_result
+
+    coord_module.DocsFirstExecutor.execute = mock_execute
+    try:
+        report = coordinator.repair_issue(
+            params=params,
+            intake=intake,
+            dependencies=dependencies,
+        )
+    finally:
+        coord_module.DocsFirstExecutor.execute = original_execute
+
+    new_run_dir = Path(report.run_record.run_dir)
+    assert (new_run_dir / "approved-plan.json").exists()
+    carried_forward = RunStore.load_approved_plan(new_run_dir)
+    assert carried_forward is not None
+    assert carried_forward.issue_ref == "owner/repo#1"
+    assert carried_forward.plan_summary == "Fix the bug with a minimal change."
+    assert carried_forward.implementation_steps == ("Update the implementation",)
+
+
+def test_retry_with_unapproved_persisted_plan_fails_before_creating_new_run(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    previous = _create_previous_run(store, attempt=1)
+    previous_run_dir = Path(previous.run_dir)
+    (previous_run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Invalid plan",
+                "implementation_steps": ["Step 1"],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+                "approved": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coordinator = RunCoordinator()
+    report = coordinator.repair_issue(
+        params=_make_params(tmp_path, retry_from=previous.run_id),
+        intake=_make_intake(),
+        dependencies=MagicMock(),
+    )
+
+    assert report.exit_code == 3
+    run_ids = [path.name for path in store.root.iterdir() if path.is_dir()]
+    assert run_ids == [previous.run_id]
 
 
 def test_retry_escalated_uses_correct_attempt_count(tmp_path: Path) -> None:

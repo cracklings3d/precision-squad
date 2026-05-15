@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import cast
 
@@ -46,6 +47,22 @@ def _record(tmp_path: Path) -> RunRecord:
         created_at="2026-04-27T00:00:00Z",
         updated_at="2026-04-27T00:00:00Z",
         run_dir=str(tmp_path / "run-123"),
+    )
+
+
+def _write_approved_plan(run_dir: Path) -> None:
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Review the implementation against the approved plan.",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
     )
 
 
@@ -176,6 +193,7 @@ def test_opencode_pr_review_agent_resolves_custom_provider_model(
 ) -> None:
     monkeypatch.setenv("CUSTOM_OPENAI_MODEL_NAME", "MiniMax-M2.7-highspeed")
     commands: list[list[str]] = []
+    _write_approved_plan(tmp_path)
 
     def fake_run(command, cwd, capture_output, text):
         del cwd, capture_output, text
@@ -192,6 +210,10 @@ def test_opencode_pr_review_agent_resolves_custom_provider_model(
         return _Completed()
 
     monkeypatch.setattr("precision_squad.post_publish_review.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
 
     result = OpenCodePrReviewAgent(role="reviewer", model="custom-openai-model").review(
         intake=_intake(),
@@ -209,6 +231,7 @@ def test_opencode_pr_review_agent_uses_full_configured_model_id(
 ) -> None:
     monkeypatch.setenv("CUSTOM_OPENAI_MODEL_NAME", "minimax-cn-coding-plan/MiniMax-M2.7-highspeed")
     commands: list[list[str]] = []
+    _write_approved_plan(tmp_path)
 
     def fake_run(command, cwd, capture_output, text):
         del cwd, capture_output, text
@@ -225,6 +248,10 @@ def test_opencode_pr_review_agent_uses_full_configured_model_id(
         return _Completed()
 
     monkeypatch.setattr("precision_squad.post_publish_review.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
 
     result = OpenCodePrReviewAgent(role="reviewer", model="custom-openai-model").review(
         intake=_intake(),
@@ -240,6 +267,8 @@ def test_opencode_pr_review_agent_uses_full_configured_model_id(
 def test_opencode_pr_review_agent_accepts_structured_verdict_on_nonzero_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _write_approved_plan(tmp_path)
+
     def fake_run(command, cwd, capture_output, text):
         del command, cwd, capture_output, text
 
@@ -254,6 +283,10 @@ def test_opencode_pr_review_agent_accepts_structured_verdict_on_nonzero_exit(
         return _Completed()
 
     monkeypatch.setattr("precision_squad.post_publish_review.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
 
     result = OpenCodePrReviewAgent(role="architect").review(
         intake=_intake(),
@@ -265,6 +298,38 @@ def test_opencode_pr_review_agent_accepts_structured_verdict_on_nonzero_exit(
     assert result.status == "rejected"
     assert result.summary == "needs follow-up"
     assert result.feedback == ("fix review handling",)
+
+
+def test_opencode_pr_review_agent_fails_when_persisted_plan_is_unapproved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Invalid plan",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+
+    result = OpenCodePrReviewAgent(role="reviewer").review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+    )
+
+    assert result.status == "failed_infra"
+    assert "approved" in result.summary.lower()
 
 
 def test_parse_review_output_accepts_prose_before_json() -> None:
