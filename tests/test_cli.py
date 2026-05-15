@@ -1464,6 +1464,26 @@ class TestLoadApprovedPlanValidation:
         with pytest.raises(ValueError, match="implementation steps"):
             _load_approved_plan(plan_path, "owner/repo#1")
 
+    def test_rejects_unapproved_plan(self, tmp_path: Path) -> None:
+        plan_path = tmp_path / "approved-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "issue_ref": "owner/repo#1",
+                    "plan_summary": "A plan",
+                    "implementation_steps": ["Step 1"],
+                    "named_references": [],
+                    "retrieval_surface_summary": "",
+                    "approved": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        from precision_squad.cli import _load_approved_plan
+
+        with pytest.raises(ValueError, match="approved.*true"):
+            _load_approved_plan(plan_path, "owner/repo#1")
+
     def test_returns_approved_plan(self, tmp_path: Path) -> None:
         plan_path = tmp_path / "approved-plan.json"
         plan_path.write_text(

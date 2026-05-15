@@ -13,6 +13,7 @@ from .github_client import GitHubWriteClient
 from .json_events import extract_json_events
 from .models import IssueIntake, PostPublishReviewResult, ReviewAgentResult, RunRecord
 from .opencode_model import resolve_opencode_model
+from .run_store import RunStore
 
 PULL_NUMBER_PATTERN = re.compile(r"/pull/(?P<number>[0-9]+)$")
 
@@ -49,13 +50,23 @@ class OpenCodePrReviewAgent:
         stdout_path = run_dir / f"{prefix}.stdout.log"
         stderr_path = run_dir / f"{prefix}.stderr.log"
         transcript_path = run_dir / f"{prefix}-transcript.json"
-        prompt = _build_review_prompt(
-            role=self.role,
-            intake=intake,
-            run_record=run_record,
-            run_dir=run_dir,
-            pull_request_url=pull_request_url,
-        )
+        try:
+            prompt = _build_review_prompt(
+                role=self.role,
+                intake=intake,
+                run_record=run_record,
+                run_dir=run_dir,
+                pull_request_url=pull_request_url,
+            )
+        except ValueError as exc:
+            return ReviewAgentResult(
+                role=self.role,
+                status="failed_infra",
+                summary=str(exc),
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                transcript_path=str(transcript_path),
+            )
         command = [
             self.binary,
             "run",
@@ -217,18 +228,58 @@ def _build_review_prompt(
     run_dir: Path,
     pull_request_url: str,
 ) -> str:
+    approved_plan = RunStore.load_approved_plan_text(
+        run_dir,
+        include_named_references=True,
+    )
+    if not approved_plan or not approved_plan.strip():
+        raise ValueError("Review context pack is missing required approved plan")
+    pr_diff = _fetch_pr_diff(
+        intake.issue.reference.owner,
+        intake.issue.reference.repo,
+        pull_request_url,
+    )
+    if not pr_diff.strip():
+        raise ValueError("Review context pack is missing required PR diff")
     return "\n".join(
         [
             f"Review role: {role}",
             f"Run ID: {run_record.run_id}",
             f"Issue: {intake.issue.reference}",
             f"PR: {pull_request_url}",
+            "",
+            "## Approved Plan",
+            approved_plan,
+            "",
+            "## PR Diff",
+            pr_diff,
+            "",
             "Review the published PR and respond with exactly one JSON object.",
             'Use the shape: {"status":"approved|rejected","summary":"...","feedback":["..."]}',
             "If you reject, feedback must contain concrete required changes.",
             "Do not include markdown fences.",
         ]
     )
+
+
+def _fetch_pr_diff(owner: str, repo: str, pull_request_url: str) -> str:
+    match = PULL_NUMBER_PATTERN.search(pull_request_url.strip())
+    if match is None:
+        return ""
+    pull_number = int(match.group("number"))
+    payload = GitHubWriteClient.from_env().get_pull_request(owner, repo, pull_number)
+    diff_url = payload.get("diff_url")
+    if not isinstance(diff_url, str) or not diff_url:
+        return ""
+    completed = subprocess.run(
+        ["gh", "api", diff_url, "-H", "Accept: application/vnd.github.v3.diff"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout
 
 
 def _parse_review_output(events: list[dict]) -> dict[str, Any] | None:

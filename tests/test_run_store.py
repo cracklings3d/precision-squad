@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from precision_squad.models import (
+    ApprovedPlan,
     EvaluationResult,
     ExecutionResult,
     GitHubIssue,
@@ -19,6 +22,17 @@ from precision_squad.models import (
     RunRequest,
 )
 from precision_squad.run_store import RunStore
+
+
+def _approved_plan() -> ApprovedPlan:
+    return ApprovedPlan(
+        issue_ref="owner/repo#1",
+        plan_summary="Fix the bug with a minimal change.",
+        implementation_steps=("Update the implementation",),
+        named_references=(),
+        retrieval_surface_summary="src/",
+        approved=True,
+    )
 
 
 def test_create_run_writes_expected_artifacts(tmp_path: Path) -> None:
@@ -144,3 +158,36 @@ def test_write_qa_results_uses_phase_specific_filenames(tmp_path: Path) -> None:
 
     assert (run_dir / "qa-baseline-result.json").exists()
     assert (run_dir / "qa-result.json").exists()
+
+
+def test_load_approved_plan_rejects_unapproved_artifact(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Invalid plan",
+                "implementation_steps": ["Step 1"],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+                "approved": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="approved.*true"):
+        RunStore.load_approved_plan(run_dir)
+
+
+def test_render_approved_plan_text(tmp_path: Path) -> None:
+    del tmp_path
+    from precision_squad.run_store import render_approved_plan_text
+
+    text = render_approved_plan_text(_approved_plan(), include_named_references=False)
+
+    assert "Approved Plan" in text
+    assert "Fix the bug with a minimal change." in text
+    assert "Update the implementation" in text
+    assert "Retrieval Surface" in text
