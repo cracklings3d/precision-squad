@@ -44,7 +44,7 @@ from .repair import (
     run_repair_qa_loop,
     synthesis_artifacts_ready,
 )
-from .run_store import _read_approved_plan as _read_persisted_approved_plan
+from .run_store import ApprovedPlanError, load_approved_plan_artifact
 
 # Keep a local alias so tests can monkeypatch the shared executor class through this module.
 _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
@@ -114,7 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument(
         "--approved-plan-path",
         default=None,
-        help="Path to an approved-plan.json file to pass to the coordinator.",
+        help=(
+            "Path to an approved-plan.json file. Required for fresh runs; retries may omit it "
+            "only to carry forward the prior run's approved-plan.json."
+        ),
     )
     issue_parser.set_defaults(handler=_repair_issue)
 
@@ -160,6 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _repair_issue(args: argparse.Namespace) -> int:
+    if args.retry_from is None and not args.approved_plan_path:
+        raise ValueError(
+            "Fresh repair issue runs require --approved-plan-path; retries may omit it only "
+            "when carrying forward the prior approved-plan.json."
+        )
+
     intake = load_issue_intake(args.issue_ref)
     approved_plan: ApprovedPlan | None = None
     if args.approved_plan_path:
@@ -586,13 +595,10 @@ def _as_bool(value: Any) -> bool:
 
 def _load_approved_plan(path: Path, issue_ref: str) -> ApprovedPlan:
     """Load and validate an ApprovedPlan from a JSON file."""
-    plan = _read_persisted_approved_plan(path)
-    plan_issue_ref = plan.issue_ref
-    if plan_issue_ref != issue_ref:
-        raise ValueError(
-            f"Approved plan issue_ref '{plan_issue_ref}' does not match CLI issue_ref '{issue_ref}'"
-        )
-    return plan
+    try:
+        return load_approved_plan_artifact(path, issue_ref=issue_ref)
+    except ApprovedPlanError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _as_issue_assessment_status(value: Any) -> Literal["runnable", "blocked"]:

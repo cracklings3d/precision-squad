@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
     ApprovedPlan,
@@ -50,10 +52,16 @@ def _make_params(tmp_path: Path, *, retry_from: str | None = None) -> RepairIssu
         repair_model=None,
         review_model=None,
         retry_from=retry_from,
+        approved_plan=_approved_plan() if retry_from is None else None,
     )
 
 
-def _create_previous_run(store: RunStore, attempt: int = 1) -> RunRecord:
+def _create_previous_run(
+    store: RunStore,
+    attempt: int = 1,
+    *,
+    include_approved_plan: bool = True,
+) -> RunRecord:
     """Create a previous run record with the specified attempt number."""
     intake = _make_intake()
     request = RunRequest(issue_ref="owner/repo#1", runs_dir=str(store.root))
@@ -69,6 +77,8 @@ def _create_previous_run(store: RunStore, attempt: int = 1) -> RunRecord:
         attempt=attempt,
     )
     store.write_run_record(updated)
+    if include_approved_plan:
+        store.write_approved_plan(Path(updated.run_dir), _approved_plan(updated.issue_ref))
     return updated
 
 
@@ -305,8 +315,7 @@ def test_retry_carries_forward_approved_plan_into_new_run_directory(tmp_path: Pa
 
     new_run_dir = Path(report.run_record.run_dir)
     assert (new_run_dir / "approved-plan.json").exists()
-    carried_forward = RunStore.load_approved_plan(new_run_dir)
-    assert carried_forward is not None
+    carried_forward = RunStore.load_approved_plan(new_run_dir, issue_ref="owner/repo#1")
     assert carried_forward.issue_ref == "owner/repo#1"
     assert carried_forward.plan_summary == "Fix the bug with a minimal change."
     assert carried_forward.implementation_steps == ("Update the implementation",)
@@ -332,13 +341,61 @@ def test_retry_with_unapproved_persisted_plan_fails_before_creating_new_run(tmp_
     )
 
     coordinator = RunCoordinator()
-    report = coordinator.repair_issue(
-        params=_make_params(tmp_path, retry_from=previous.run_id),
-        intake=_make_intake(),
-        dependencies=MagicMock(),
+    with pytest.raises(ValueError, match="failed structural validation"):
+        coordinator.repair_issue(
+            params=_make_params(tmp_path, retry_from=previous.run_id),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+    run_ids = [path.name for path in store.root.iterdir() if path.is_dir()]
+    assert run_ids == [previous.run_id]
+
+
+def test_retry_without_prior_approved_plan_fails_with_missing_artifact_message(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    previous = _create_previous_run(store, attempt=1, include_approved_plan=False)
+
+    coordinator = RunCoordinator()
+    with pytest.raises(ValueError, match="missing prior approved-plan.json"):
+        coordinator.repair_issue(
+            params=_make_params(tmp_path, retry_from=previous.run_id),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+    run_ids = [path.name for path in store.root.iterdir() if path.is_dir()]
+    assert run_ids == [previous.run_id]
+
+
+def test_retry_with_invalid_prior_approved_plan_fails_with_validation_message(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    previous = _create_previous_run(store, attempt=1)
+    previous_run_dir = Path(previous.run_dir)
+    (previous_run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Plan",
+                "implementation_steps": ["   "],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
     )
 
-    assert report.exit_code == 3
+    coordinator = RunCoordinator()
+    with pytest.raises(ValueError, match="failed structural validation"):
+        coordinator.repair_issue(
+            params=_make_params(tmp_path, retry_from=previous.run_id),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
     run_ids = [path.name for path in store.root.iterdir() if path.is_dir()]
     assert run_ids == [previous.run_id]
 
@@ -370,3 +427,30 @@ def test_retry_escalated_uses_correct_attempt_count(tmp_path: Path) -> None:
     assert report.repair_result is not None
     # Attempt 4 > 3, so should be escalated
     assert "4" in report.repair_result.summary or "3" in report.repair_result.summary
+
+
+def test_retry_escalation_persists_approved_plan_into_new_run_directory(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    previous = _create_previous_run(store, attempt=3)
+
+    dependencies = MagicMock()
+    dependencies.execute_publish_plan.return_value = PublishResult(
+        status="dry_run",
+        target="issue_comment",
+        summary="Dry run",
+        url=None,
+    )
+
+    coordinator = RunCoordinator()
+    report = coordinator.repair_issue(
+        params=_make_params(tmp_path, retry_from=previous.run_id),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    escalated_run_dir = Path(report.run_record.run_dir)
+    assert (escalated_run_dir / "approved-plan.json").exists()
+
+    persisted_plan = RunStore.load_approved_plan(escalated_run_dir, issue_ref="owner/repo#1")
+    assert persisted_plan == _approved_plan()
