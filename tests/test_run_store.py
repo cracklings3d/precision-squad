@@ -21,7 +21,12 @@ from precision_squad.models import (
     QaResult,
     RunRequest,
 )
-from precision_squad.run_store import RunStore
+from precision_squad.run_store import (
+    ApprovedPlanNotFoundError,
+    ApprovedPlanValidationError,
+    RunStore,
+    load_approved_plan_artifact,
+)
 
 
 def _approved_plan() -> ApprovedPlan:
@@ -177,8 +182,89 @@ def test_load_approved_plan_rejects_unapproved_artifact(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="approved.*true"):
-        RunStore.load_approved_plan(run_dir)
+    with pytest.raises(ApprovedPlanValidationError, match="approved.*true"):
+        RunStore.load_approved_plan(run_dir, issue_ref="owner/repo#1")
+
+
+def test_load_approved_plan_requires_named_references_and_retrieval_surface_summary(tmp_path: Path) -> None:
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Step 1"],
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ApprovedPlanValidationError, match="named_references"):
+        load_approved_plan_artifact(plan_path, issue_ref="owner/repo#1")
+
+
+def test_load_approved_plan_rejects_non_object_payload(tmp_path: Path) -> None:
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(ApprovedPlanValidationError, match="Expected JSON object"):
+        load_approved_plan_artifact(plan_path, issue_ref="owner/repo#1")
+
+
+def test_load_approved_plan_accepts_explicit_empty_canonical_fields(tmp_path: Path) -> None:
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Step 1"],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = load_approved_plan_artifact(plan_path, issue_ref="owner/repo#1")
+
+    assert plan.named_references == ()
+    assert plan.retrieval_surface_summary == ""
+
+
+def test_write_approved_plan_normalizes_named_reference_objects(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    plan = load_approved_plan_artifact(
+        _write_plan(
+            tmp_path / "incoming-approved-plan.json",
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Step 1"],
+                "named_references": ["src/main.py"],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+        ),
+        issue_ref="owner/repo#1",
+    )
+
+    store.write_approved_plan(run_dir, plan)
+
+    payload = json.loads((run_dir / "approved-plan.json").read_text(encoding="utf-8"))
+    assert payload["named_references"] == [
+        {"name": "src/main.py", "reference_type": "file", "description": ""}
+    ]
+
+
+def test_load_approved_plan_missing_artifact_raises_not_found(tmp_path: Path) -> None:
+    with pytest.raises(ApprovedPlanNotFoundError, match="Approved plan artifact not found"):
+        RunStore.load_approved_plan(tmp_path / "missing-run", issue_ref="owner/repo#1")
 
 
 def test_render_approved_plan_text(tmp_path: Path) -> None:
@@ -191,3 +277,8 @@ def test_render_approved_plan_text(tmp_path: Path) -> None:
     assert "Fix the bug with a minimal change." in text
     assert "Update the implementation" in text
     assert "Retrieval Surface" in text
+
+
+def _write_plan(path: Path, payload: dict[str, object]) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path

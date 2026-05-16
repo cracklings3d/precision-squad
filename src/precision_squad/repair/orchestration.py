@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import inspect
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from ..docs_remediation import (
 from ..github_client import GitHubClientError, GitHubWriteClient
 from ..models import ExecutionResult, IssueIntake, QaResult, RepairResult, RunRecord
 from ..rerun_context import latest_rejected_pull_request
+from ..run_store import ApprovedPlanError, RunStore
 from .adapter import RepairAdapter
 from .qa import (
     WorkspaceQaVerifier,
@@ -51,6 +53,15 @@ class RepairStage:
     ) -> RepairResult:
         run_dir = run_dir.resolve()
         contract_artifact_dir = contract_artifact_dir.resolve()
+
+        try:
+            approved_plan = RunStore.load_approved_plan(run_dir, issue_ref=run_record.issue_ref)
+        except ApprovedPlanError as exc:
+            return RepairResult(
+                status="failed_infra",
+                summary=f"Repair stage could not load the persisted approved plan: {exc}",
+                detail_codes=("repair_approved_plan_invalid",),
+            )
 
         if self.adapter is None:
             return RepairResult(
@@ -134,13 +145,18 @@ class RepairStage:
                 workspace_path=str(workspace_path),
             )
 
-        return self.adapter.repair(
-            intake=intake,
-            run_record=run_record,
-            run_dir=run_dir,
-            contract_artifact_dir=contract_artifact_dir,
-            repo_workspace=repo_workspace,
-        )
+        repair_kwargs = {
+            "approved_plan": approved_plan,
+            "intake": intake,
+            "run_record": run_record,
+            "run_dir": run_dir,
+            "contract_artifact_dir": contract_artifact_dir,
+            "repo_workspace": repo_workspace,
+        }
+        parameters = inspect.signature(self.adapter.repair).parameters
+        if "approved_plan" not in parameters:
+            repair_kwargs.pop("approved_plan")
+        return self.adapter.repair(**repair_kwargs)
 
 
 def run_repair_qa_loop(

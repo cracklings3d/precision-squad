@@ -19,6 +19,7 @@ from precision_squad.post_publish_review import (
     OpenCodePrReviewAgent,
     ReviewAgentResult,
     ReviewRunner,
+    _build_review_prompt,
     _parse_review_output,
     run_post_publish_review,
 )
@@ -64,6 +65,14 @@ def _write_approved_plan(run_dir: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _write_invalid_approved_plan(run_dir: Path, payload: dict[str, object]) -> None:
+    (run_dir / "approved-plan.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_raw_approved_plan(run_dir: Path, raw_payload: str) -> None:
+    (run_dir / "approved-plan.json").write_text(raw_payload, encoding="utf-8")
 
 
 def test_run_post_publish_review_reopens_issue_on_rejection(
@@ -330,6 +339,198 @@ def test_opencode_pr_review_agent_fails_when_persisted_plan_is_unapproved(
 
     assert result.status == "failed_infra"
     assert "approved" in result.summary.lower()
+
+
+def test_build_review_prompt_fails_when_persisted_plan_is_missing(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Approved plan artifact not found"):
+        _build_review_prompt(
+            role="reviewer",
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+        )
+
+
+def test_build_review_prompt_fails_when_persisted_plan_has_invalid_structure(tmp_path: Path) -> None:
+    _write_invalid_approved_plan(
+        tmp_path,
+        {
+            "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+            "plan_summary": "Valid summary",
+            "implementation_steps": ["Inspect the diff"],
+            "named_references": [],
+            "approved": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="retrieval_surface_summary"):
+        _build_review_prompt(
+            role="reviewer",
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+        )
+
+
+@pytest.mark.parametrize(
+    ("writer", "payload", "match"),
+    [
+        (_write_raw_approved_plan, "[]\n", "Expected JSON object"),
+        (_write_raw_approved_plan, "{", "not valid JSON"),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#999",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "does not match",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "   ",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "plan_summary",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "implementation_steps",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": [],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "implementation steps",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": ["   "],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "implementation_steps\\[1\\]",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": [1],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "implementation_steps\\[1\\]",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Inspect the diff"],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "named_references",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [42],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "named_references\\[1\\]",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [],
+                "approved": True,
+            },
+            "retrieval_surface_summary",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [],
+                "retrieval_surface_summary": None,
+                "approved": True,
+            },
+            "retrieval_surface_summary",
+        ),
+        (
+            _write_invalid_approved_plan,
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Plan",
+                "implementation_steps": ["Inspect the diff"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": False,
+            },
+            "approved.*true",
+        ),
+    ],
+)
+def test_build_review_prompt_rejects_canonical_invalid_approved_plan_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    writer,
+    payload,
+    match: str,
+) -> None:
+    def fail_if_diff_is_fetched(*args, **kwargs):
+        raise AssertionError("PR diff should not be fetched before approved-plan validation")
+
+    monkeypatch.setattr("precision_squad.post_publish_review._fetch_pr_diff", fail_if_diff_is_fetched)
+    writer(tmp_path, payload)
+
+    with pytest.raises(ValueError, match=match):
+        _build_review_prompt(
+            role="reviewer",
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+        )
 
 
 def test_parse_review_output_accepts_prose_before_json() -> None:

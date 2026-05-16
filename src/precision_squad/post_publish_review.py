@@ -230,9 +230,10 @@ def _build_review_prompt(
 ) -> str:
     approved_plan = RunStore.load_approved_plan_text(
         run_dir,
+        issue_ref=run_record.issue_ref,
         include_named_references=True,
     )
-    if not approved_plan or not approved_plan.strip():
+    if not approved_plan.strip():
         raise ValueError("Review context pack is missing required approved plan")
     pr_diff = _fetch_pr_diff(
         intake.issue.reference.owner,

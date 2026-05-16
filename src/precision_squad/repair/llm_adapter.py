@@ -10,6 +10,7 @@ from pathlib import Path
 import openai
 from jsonschema import ValidationError, validate
 
+from ..models import ApprovedPlan
 from ..models import IssueIntake, RepairResult, RunRecord, SideIssue
 from .adapter import (
     REPAIR_RESULT_SCHEMA,
@@ -40,6 +41,7 @@ class VercelAIRepairAdapter:
     def repair(
         self,
         *,
+        approved_plan: ApprovedPlan | None = None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,
@@ -49,6 +51,7 @@ class VercelAIRepairAdapter:
         stdout_path = run_dir / "repair.stdout.log"
 
         prompt = _build_repair_prompt(
+            approved_plan=approved_plan,
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,

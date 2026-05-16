@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from precision_squad.models import (
+    ApprovedPlan,
     GitHubIssue,
     IssueAssessment,
     IssueIntake,
@@ -116,6 +117,17 @@ def _make_run_record() -> RunRecord:
     )
 
 
+def _approved_plan() -> ApprovedPlan:
+    return ApprovedPlan(
+        issue_ref="owner/repo#1",
+        plan_summary="Repair the issue.",
+        implementation_steps=("Apply minimal change",),
+        named_references=(),
+        retrieval_surface_summary="src/",
+        approved=True,
+    )
+
+
 def test_repair_adapter_completed_with_changes(tmp_path: Path) -> None:
     intake = _make_intake()
     run_record = _make_run_record()
@@ -137,6 +149,7 @@ def test_repair_adapter_completed_with_changes(tmp_path: Path) -> None:
 
         adapter = VercelAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
+            approved_plan=_approved_plan(),
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -170,6 +183,7 @@ def test_repair_adapter_completed_no_changes(tmp_path: Path) -> None:
 
         adapter = VercelAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
+            approved_plan=_approved_plan(),
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -202,6 +216,7 @@ def test_repair_adapter_diff_failed(tmp_path: Path) -> None:
 
         adapter = VercelAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
+            approved_plan=_approved_plan(),
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -229,6 +244,7 @@ def test_repair_adapter_api_failure(tmp_path: Path) -> None:
 
         adapter = VercelAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
+            approved_plan=_approved_plan(),
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -261,6 +277,7 @@ def test_repair_adapter_invalid_response(tmp_path: Path) -> None:
 
         adapter = VercelAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
+            approved_plan=_approved_plan(),
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -304,6 +321,7 @@ def test_repair_adapter_with_side_issues(tmp_path: Path) -> None:
 
         adapter = VercelAIRepairAdapter(model="gpt-4o")
         result = adapter.repair(
+            approved_plan=_approved_plan(),
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -339,6 +357,7 @@ def test_repair_adapter_model_from_env(tmp_path: Path, monkeypatch: pytest.Monke
 
         adapter = VercelAIRepairAdapter()
         adapter.repair(
+                approved_plan=_approved_plan(),
                 intake=intake,
                 run_record=run_record,
                 run_dir=run_dir,

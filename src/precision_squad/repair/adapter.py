@@ -13,7 +13,7 @@ from jsonschema import ValidationError, validate
 from ..docs_remediation import extract_docs_target_findings
 from ..intake import is_docs_remediation_issue
 from ..json_events import extract_json_events
-from ..models import IssueIntake, RepairResult, RunRecord, SideIssue
+from ..models import ApprovedPlan, IssueIntake, RepairResult, RunRecord, SideIssue
 from ..opencode_model import resolve_opencode_model
 
 
@@ -24,6 +24,7 @@ class RepairAdapter(Protocol):
     def repair(
         self,
         *,
+        approved_plan: ApprovedPlan | None = None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,
@@ -94,6 +95,7 @@ class OpenCodeRepairAdapter:
     def repair(
         self,
         *,
+        approved_plan: ApprovedPlan | None = None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,
@@ -106,6 +108,7 @@ class OpenCodeRepairAdapter:
         transcript_path = run_dir / "repair-transcript.json"
 
         prompt = _build_repair_prompt(
+            approved_plan=approved_plan,
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -192,7 +195,11 @@ class OpenCodeRepairAdapter:
 
         return RepairResult(
             status="completed",
-            summary=repair_json.get("summary") if repair_json else "Repair agent completed and produced source changes.",
+            summary=(
+                str(repair_json.get("summary"))
+                if repair_json is not None and isinstance(repair_json.get("summary"), str)
+                else "Repair agent completed and produced source changes."
+            ),
             detail_codes=("repair_stage_completed",),
             workspace_path=str(repo_workspace.parent),
             patch_path=str(patch_path),
@@ -247,6 +254,7 @@ def _extract_side_issues(repair_json: dict) -> tuple[SideIssue, ...]:
 
 def _build_repair_prompt(
     *,
+    approved_plan: ApprovedPlan | None = None,
     intake: IssueIntake,
     run_record: RunRecord,
     run_dir: Path,
@@ -270,6 +278,7 @@ def _build_repair_prompt(
 
     if is_docs_remediation_issue(intake):
         lines = _build_docs_remediation_prompt(
+            approved_plan=approved_plan,
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -280,6 +289,7 @@ def _build_repair_prompt(
         )
     else:
         lines = _build_standard_repair_prompt(
+            approved_plan=approved_plan,
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
@@ -295,6 +305,7 @@ def _build_repair_prompt(
 
 def _build_docs_remediation_prompt(
     *,
+    approved_plan: ApprovedPlan | None = None,
     intake: IssueIntake,
     run_record: RunRecord,
     run_dir: Path,
@@ -333,6 +344,7 @@ def _build_docs_remediation_prompt(
         f"Run ID: {run_record.run_id}",
         f"Issue: {intake.issue.reference}",
         f"Title: {intake.issue.title}",
+        *(_render_approved_plan_context(approved_plan)),
         "Requirements:",
         "- Update repository documentation in the current workspace to resolve the issue.",
         "- Treat this as a docs-remediation issue, not a product code change.",
@@ -369,6 +381,7 @@ def _build_docs_remediation_prompt(
 
 def _build_standard_repair_prompt(
     *,
+    approved_plan: ApprovedPlan | None = None,
     intake: IssueIntake,
     run_record: RunRecord,
     run_dir: Path,
@@ -383,6 +396,7 @@ def _build_standard_repair_prompt(
         f"Run ID: {run_record.run_id}",
         f"Issue: {intake.issue.reference}",
         f"Title: {intake.issue.title}",
+        *(_render_approved_plan_context(approved_plan)),
         "Requirements:",
         "- Modify code in the current workspace to resolve the issue.",
         "- Use the documented local setup/test contract as the source of truth.",
@@ -407,4 +421,24 @@ def _build_standard_repair_prompt(
             + f"\n{docs_fix_prompt_content}\n",
         )
     lines.insert(-1, json_instruction)
+    return lines
+
+
+def _render_approved_plan_context(approved_plan: ApprovedPlan | None) -> list[str]:
+    if approved_plan is None:
+        return []
+    lines = [
+        "Approved plan:",
+        f"- Summary: {approved_plan.plan_summary}",
+        "- Implementation steps:",
+        *[f"  - {step}" for step in approved_plan.implementation_steps],
+        f"- Retrieval surface summary: {approved_plan.retrieval_surface_summary or '(empty)'}",
+    ]
+    if approved_plan.named_references:
+        lines.append("- Named references:")
+        for ref in approved_plan.named_references:
+            suffix = f": {ref.description}" if ref.description else ""
+            lines.append(f"  - {ref.name} ({ref.reference_type}){suffix}")
+    else:
+        lines.append("- Named references: (none)")
     return lines

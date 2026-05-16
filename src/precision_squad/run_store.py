@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from json import JSONDecodeError
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,21 @@ PersistedArtifact = (
     | RunRecord
     | RunRequest
 )
+
+APPROVED_PLAN_FILENAME = "approved-plan.json"
+_ALLOWED_NAMED_REFERENCE_TYPES = {"file", "interface", "symbol", "example"}
+
+
+class ApprovedPlanError(ValueError):
+    """Base error for approved-plan artifact loading failures."""
+
+
+class ApprovedPlanNotFoundError(ApprovedPlanError):
+    """Raised when an approved-plan artifact is missing."""
+
+
+class ApprovedPlanValidationError(ApprovedPlanError):
+    """Raised when an approved-plan artifact fails canonical validation."""
 
 
 class RunStore:
@@ -86,24 +102,21 @@ class RunStore:
         self._write_json(run_dir / "execution-result.json", result)
 
     def write_approved_plan(self, run_dir: Path, plan: ApprovedPlan) -> None:
-        self._write_json(run_dir / "approved-plan.json", plan)
+        self._write_json(run_dir / APPROVED_PLAN_FILENAME, plan)
 
     @staticmethod
-    def load_approved_plan(run_dir: Path) -> ApprovedPlan | None:
-        plan_path = run_dir / "approved-plan.json"
-        if not plan_path.exists():
-            return None
-        return _read_approved_plan(plan_path)
+    def load_approved_plan(run_dir: Path, *, issue_ref: str) -> ApprovedPlan:
+        return load_approved_plan_artifact(run_dir, issue_ref=issue_ref)
 
     @staticmethod
     def load_approved_plan_text(
         run_dir: Path,
+        *,
+        issue_ref: str,
         include_named_references: bool = False,
-    ) -> str | None:
-        """Load the approved plan and render it as markdown text, or None if not present."""
-        plan = RunStore.load_approved_plan(run_dir)
-        if plan is None:
-            return None
+    ) -> str:
+        """Load the approved plan and render it as markdown text."""
+        plan = RunStore.load_approved_plan(run_dir, issue_ref=issue_ref)
         return render_approved_plan_text(plan, include_named_references=include_named_references)
 
     def write_evaluation_result(self, run_dir: Path, result: EvaluationResult) -> None:
@@ -193,76 +206,165 @@ def _read_run_record(path: Path) -> RunRecord:
     )
 
 
-def _read_approved_plan(path: Path) -> ApprovedPlan:
-    """Read an approved plan from a JSON file."""
-    with path.open(encoding="utf-8") as f:
-        payload = json.load(f)
+def load_approved_plan_artifact(path: Path, *, issue_ref: str) -> ApprovedPlan:
+    """Load and validate an approved-plan artifact from a file path or run directory."""
+    plan_path = _resolve_approved_plan_path(path)
+    if not plan_path.exists():
+        raise ApprovedPlanNotFoundError(f"Approved plan artifact not found: {plan_path}")
+    try:
+        with plan_path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+    except JSONDecodeError as exc:
+        raise ApprovedPlanValidationError(
+            f"Approved plan artifact at {plan_path} is not valid JSON: {exc.msg}"
+        ) from exc
+    return _parse_approved_plan_payload(payload, path=plan_path, issue_ref=issue_ref)
+
+
+def _resolve_approved_plan_path(path: Path) -> Path:
+    if path.exists() and path.is_dir():
+        return path / APPROVED_PLAN_FILENAME
+    return path
+
+
+def _parse_approved_plan_payload(
+    payload: object,
+    *,
+    path: Path,
+    issue_ref: str,
+) -> ApprovedPlan:
     if not isinstance(payload, dict):
-        raise ValueError(f"Expected JSON object in {path}")
-    if "issue_ref" not in payload:
-        raise ValueError("Approved plan is missing required field 'issue_ref'")
-    plan_issue_ref = _require_non_empty_str(payload.get("issue_ref"), field_name="issue_ref")
-    plan_summary = _require_non_empty_str(payload.get("plan_summary"), field_name="plan_summary")
-    implementation_steps = _read_implementation_steps(payload)
-    approved = _read_approved_flag(payload)
-    named_references_raw = payload.get("named_references", [])
-    if not isinstance(named_references_raw, list):
-        raise ValueError("Expected 'named_references' to be a list")
-    named_refs: list[NamedReference] = []
-    allowed_types = {"file", "interface", "symbol", "example"}
-    for ref in named_references_raw:
-        if isinstance(ref, dict):
-            name = str(ref.get("name", ""))
-            if not name:
-                raise ValueError("Named reference has empty name")
-            ref_type = ref.get("reference_type", "file")
-            if ref_type not in allowed_types:
-                raise ValueError(
-                    f"Named reference has invalid reference_type '{ref_type}'; expected one of {allowed_types}"
-                )
-            named_refs.append(
-                NamedReference(
-                    name=name,
-                    reference_type=ref_type,
-                    description=str(ref.get("description", "")),
-                )
-            )
-        else:
-            named_refs.append(NamedReference(name=str(ref)))
+        raise ApprovedPlanValidationError(f"Expected JSON object in {path}")
+
+    plan_issue_ref = _require_non_empty_str_field(payload, field_name="issue_ref")
+    if plan_issue_ref != issue_ref:
+        raise ApprovedPlanValidationError(
+            f"Approved plan issue_ref '{plan_issue_ref}' does not match expected issue_ref '{issue_ref}'"
+        )
+
     return ApprovedPlan(
         issue_ref=plan_issue_ref,
-        plan_summary=plan_summary,
-        implementation_steps=implementation_steps,
-        named_references=tuple(named_refs),
-        retrieval_surface_summary=str(payload.get("retrieval_surface_summary", "")),
-        approved=approved,
+        plan_summary=_require_non_empty_str_field(payload, field_name="plan_summary"),
+        implementation_steps=_read_implementation_steps(payload),
+        named_references=_read_named_references(payload),
+        retrieval_surface_summary=_require_string_field(
+            payload,
+            field_name="retrieval_surface_summary",
+        ),
+        approved=_read_approved_flag(payload),
     )
 
 
 def _require_non_empty_str(value: object, *, field_name: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"Approved plan field '{field_name}' must be a string")
+        raise ApprovedPlanValidationError(f"Approved plan field '{field_name}' must be a string")
     if not value.strip():
-        raise ValueError(f"Approved plan is missing a non-empty '{field_name}'")
+        raise ApprovedPlanValidationError(f"Approved plan is missing a non-empty '{field_name}'")
+    return value
+
+
+def _require_non_empty_str_field(payload: dict[str, object], *, field_name: str) -> str:
+    if field_name not in payload:
+        raise ApprovedPlanValidationError(
+            f"Approved plan is missing required field '{field_name}'"
+        )
+    return _require_non_empty_str(payload[field_name], field_name=field_name)
+
+
+def _require_string_field(payload: dict[str, object], *, field_name: str) -> str:
+    if field_name not in payload:
+        raise ApprovedPlanValidationError(
+            f"Approved plan is missing required field '{field_name}'"
+        )
+    value = payload[field_name]
+    if not isinstance(value, str):
+        raise ApprovedPlanValidationError(f"Approved plan field '{field_name}' must be a string")
     return value
 
 
 def _read_implementation_steps(payload: dict[str, object]) -> tuple[str, ...]:
-    implementation_steps_raw = payload.get("implementation_steps", [])
+    if "implementation_steps" not in payload:
+        raise ApprovedPlanValidationError(
+            "Approved plan is missing required field 'implementation_steps'"
+        )
+    implementation_steps_raw = payload["implementation_steps"]
     if not isinstance(implementation_steps_raw, list):
-        raise ValueError("Expected 'implementation_steps' to be a list")
-    implementation_steps = tuple(str(step) for step in implementation_steps_raw)
+        raise ApprovedPlanValidationError("Expected 'implementation_steps' to be a list")
+    implementation_steps: list[str] = []
+    for index, step in enumerate(implementation_steps_raw, start=1):
+        if not isinstance(step, str):
+            raise ApprovedPlanValidationError(
+                f"Approved plan implementation_steps[{index}] must be a string"
+            )
+        if not step.strip():
+            raise ApprovedPlanValidationError(
+                f"Approved plan implementation_steps[{index}] must be a non-empty string"
+            )
+        implementation_steps.append(step)
     if not implementation_steps:
-        raise ValueError("Approved plan has no implementation steps")
-    return implementation_steps
+        raise ApprovedPlanValidationError("Approved plan has no implementation steps")
+    return tuple(implementation_steps)
+
+
+def _read_named_references(payload: dict[str, object]) -> tuple[NamedReference, ...]:
+    if "named_references" not in payload:
+        raise ApprovedPlanValidationError(
+            "Approved plan is missing required field 'named_references'"
+        )
+    named_references_raw = payload["named_references"]
+    if not isinstance(named_references_raw, list):
+        raise ApprovedPlanValidationError("Expected 'named_references' to be a list")
+
+    named_refs: list[NamedReference] = []
+    for index, ref in enumerate(named_references_raw, start=1):
+        if isinstance(ref, str):
+            name = _require_non_empty_str(ref, field_name=f"named_references[{index}]")
+            named_refs.append(NamedReference(name=name))
+            continue
+        if not isinstance(ref, dict):
+            raise ApprovedPlanValidationError(
+                f"Approved plan named_references[{index}] must be a string or object"
+            )
+
+        if "name" not in ref:
+            raise ApprovedPlanValidationError(
+                f"Approved plan named_references[{index}] is missing required field 'name'"
+            )
+        name = _require_non_empty_str(ref["name"], field_name=f"named_references[{index}].name")
+
+        reference_type = ref.get("reference_type", "file")
+        if not isinstance(reference_type, str) or reference_type not in _ALLOWED_NAMED_REFERENCE_TYPES:
+            raise ApprovedPlanValidationError(
+                "Approved plan named_references[{}].reference_type must be one of {}".format(
+                    index,
+                    sorted(_ALLOWED_NAMED_REFERENCE_TYPES),
+                )
+            )
+
+        description = ref.get("description", "")
+        if not isinstance(description, str):
+            raise ApprovedPlanValidationError(
+                f"Approved plan named_references[{index}].description must be a string"
+            )
+
+        named_refs.append(
+            NamedReference(
+                name=name,
+                reference_type=cast(Literal["file", "interface", "symbol", "example"], reference_type),
+                description=description,
+            )
+        )
+    return tuple(named_refs)
 
 
 def _read_approved_flag(payload: dict[str, object]) -> bool:
-    approved_raw = payload.get("approved", True)
+    if "approved" not in payload:
+        raise ApprovedPlanValidationError("Approved plan is missing required field 'approved'")
+    approved_raw = payload["approved"]
     if not isinstance(approved_raw, bool):
-        raise ValueError("Approved plan field 'approved' must be a boolean")
+        raise ApprovedPlanValidationError("Approved plan field 'approved' must be a boolean")
     if not approved_raw:
-        raise ValueError("Approved plan must have 'approved': true")
+        raise ApprovedPlanValidationError("Approved plan must have 'approved': true")
     return approved_raw
 
 

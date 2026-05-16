@@ -28,6 +28,7 @@ from precision_squad.repair import (
     merge_docs_remediation_execution_result,
     merge_execution_result,
 )
+from precision_squad.models import ApprovedPlan
 
 
 def _intake() -> IssueIntake:
@@ -352,6 +353,19 @@ def test_repair_stage_reports_not_configured_when_command_missing(tmp_path: Path
     run_dir.mkdir()
     contract_dir = run_dir / "execution-contract"
     contract_dir.mkdir(parents=True)
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = RepairStage(repo_path=repo_path, adapter=None).execute(
         _intake(),
@@ -364,6 +378,17 @@ def test_repair_stage_reports_not_configured_when_command_missing(tmp_path: Path
     assert "repair_stage_not_configured" in result.detail_codes
 
 
+def _approved_plan() -> ApprovedPlan:
+    return ApprovedPlan(
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        plan_summary="Repair the issue.",
+        implementation_steps=("Apply minimal change",),
+        named_references=(),
+        retrieval_surface_summary="src/",
+        approved=True,
+    )
+
+
 def test_repair_stage_clears_existing_workspace_before_clone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -373,6 +398,19 @@ def test_repair_stage_clears_existing_workspace_before_clone(
     run_dir.mkdir()
     contract_dir = run_dir / "execution-contract"
     contract_dir.mkdir(parents=True)
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
     stale_repo_workspace = run_dir / "repair-workspace" / "repo"
     stale_repo_workspace.mkdir(parents=True)
     (stale_repo_workspace / "stale.txt").write_text("stale", encoding="utf-8")
@@ -422,6 +460,130 @@ def test_repair_stage_clears_existing_workspace_before_clone(
     assert result.status == "completed"
 
 
+def test_repair_stage_fails_before_workspace_side_effects_when_approved_plan_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+
+    def fail_if_git_runs(*args, **kwargs):
+        raise AssertionError("git commands should not run before approved-plan validation")
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            raise AssertionError("adapter should not run before approved-plan validation")
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", fail_if_git_runs)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "failed_infra"
+    assert "approved plan" in result.summary.lower()
+    assert "repair_approved_plan_invalid" in result.detail_codes
+
+
+def test_repair_stage_fails_before_workspace_side_effects_when_approved_plan_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": [1],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_if_git_runs(*args, **kwargs):
+        raise AssertionError("git commands should not run before approved-plan validation")
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            raise AssertionError("adapter should not run before approved-plan validation")
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", fail_if_git_runs)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "failed_infra"
+    assert "approved plan" in result.summary.lower()
+    assert "repair_approved_plan_invalid" in result.detail_codes
+
+
+def test_repair_stage_with_no_adapter_still_fails_when_approved_plan_missing(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+
+    result = RepairStage(repo_path=repo_path, adapter=None).execute(
+        _intake(),
+        _record(run_dir),
+        run_dir,
+        contract_dir,
+    )
+
+    assert result.status == "failed_infra"
+    assert "approved plan" in result.summary.lower()
+    assert "repair_approved_plan_invalid" in result.detail_codes
+
+
+def test_repair_stage_with_no_adapter_still_fails_when_approved_plan_invalid(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": None,
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = RepairStage(repo_path=repo_path, adapter=None).execute(
+        _intake(),
+        _record(run_dir),
+        run_dir,
+        contract_dir,
+    )
+
+    assert result.status == "failed_infra"
+    assert "approved plan" in result.summary.lower()
+    assert "repair_approved_plan_invalid" in result.detail_codes
+
+
 def test_opencode_repair_adapter_reports_no_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -453,6 +615,7 @@ def test_opencode_repair_adapter_reports_no_changes(
     monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
 
     result = OpenCodeRepairAdapter().repair(
+        approved_plan=_approved_plan(),
         intake=_intake(),
         run_record=_record(run_dir),
         run_dir=run_dir,
@@ -500,6 +663,7 @@ def test_opencode_repair_adapter_prompt_references_issue_context_artifact(
     monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
 
     OpenCodeRepairAdapter().repair(
+        approved_plan=_approved_plan(),
         intake=_intake(),
         run_record=_record(run_dir),
         run_dir=run_dir,
@@ -541,6 +705,7 @@ def test_opencode_repair_adapter_resolves_custom_provider_model(
     monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
 
     OpenCodeRepairAdapter(model="custom-openai-model").repair(
+        approved_plan=_approved_plan(),
         intake=_intake(),
         run_record=_record(run_dir),
         run_dir=run_dir,
@@ -586,6 +751,7 @@ def test_opencode_repair_adapter_uses_env_default_model_when_unspecified(
     monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
 
     OpenCodeRepairAdapter().repair(
+        approved_plan=_approved_plan(),
         intake=_intake(),
         run_record=_record(run_dir),
         run_dir=run_dir,
@@ -636,6 +802,14 @@ def test_opencode_repair_adapter_uses_docs_remediation_prompt_for_docs_issue(
     monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
 
     OpenCodeRepairAdapter().repair(
+        approved_plan=ApprovedPlan(
+            issue_ref="cracklings3d/markdown-pdf-renderer#16",
+            plan_summary="Fix docs.",
+            implementation_steps=("Update README",),
+            named_references=(),
+            retrieval_surface_summary="docs/",
+            approved=True,
+        ),
         intake=IssueIntake(
             issue=GitHubIssue(
                 reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 16),
@@ -1233,6 +1407,7 @@ def test_opencode_repair_adapter_prompt_includes_json_output_instruction(
     _write_contract(contract_dir, ["python -m pip install -e .[dev]"], "python -m pytest tests/test_cli.py")
 
     prompt = _build_repair_prompt(
+        approved_plan=_approved_plan(),
         intake=_intake(),
         run_record=_record(run_dir),
         run_dir=run_dir,
@@ -1284,6 +1459,14 @@ def test_opencode_repair_adapter_prompt_inlines_docs_fix_prompt_for_docs_remedia
     )
 
     prompt = _build_repair_prompt(
+        approved_plan=ApprovedPlan(
+            issue_ref="cracklings3d/markdown-pdf-renderer#16",
+            plan_summary="Fix docs.",
+            implementation_steps=("Update docs",),
+            named_references=(),
+            retrieval_surface_summary="docs/",
+            approved=True,
+        ),
         intake=docs_intake,
         run_record=_record(run_dir),
         run_dir=run_dir,

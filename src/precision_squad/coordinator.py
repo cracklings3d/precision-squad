@@ -24,7 +24,7 @@ from .models import (
 )
 from .publishing import build_publish_plan
 from .repair import RepairAdapter
-from .run_store import RunStore
+from .run_store import ApprovedPlanNotFoundError, ApprovedPlanValidationError, RunStore
 
 
 class RepairDependencies(Protocol):
@@ -210,7 +210,20 @@ class RunCoordinator:
         effective_approved_plan = params.approved_plan
         if effective_approved_plan is None and previous_run_dir is not None:
             try:
-                effective_approved_plan = RunStore.load_approved_plan(previous_run_dir)
+                effective_approved_plan = RunStore.load_approved_plan(
+                    previous_run_dir,
+                    issue_ref=params.issue_ref,
+                )
+            except ApprovedPlanNotFoundError:
+                raise ValueError(
+                    "Retry requires a prior approved-plan.json when --approved-plan-path is omitted; "
+                    f"missing prior approved-plan.json in {previous_run_dir}."
+                )
+            except ApprovedPlanValidationError as exc:
+                raise ValueError(
+                    "Retry carry-forward failed because the prior approved-plan.json failed "
+                    f"structural validation: {exc}"
+                ) from exc
             except ValueError:
                 return RepairIssueReport(
                     intake=intake,
@@ -232,6 +245,7 @@ class RunCoordinator:
                 request=request,
                 intake=intake,
                 attempt=attempt,
+                effective_approved_plan=effective_approved_plan,
                 dependencies=dependencies,
                 params=params,
             )
@@ -325,6 +339,7 @@ class RunCoordinator:
         request: RunRequest,
         intake: IssueIntake,
         attempt: int,
+        effective_approved_plan: ApprovedPlan | None,
         dependencies: RepairDependencies,
         params: RepairIssueParams,
     ) -> RepairIssueReport:
@@ -333,6 +348,8 @@ class RunCoordinator:
         run_dir = Path(record.run_dir).resolve()
         record = record.with_attempt(attempt)
         store.write_run_record(record)
+        if effective_approved_plan is not None:
+            store.write_approved_plan(run_dir, effective_approved_plan)
 
         escalated_result = RepairResult(
             status="escalated",
