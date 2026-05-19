@@ -6,6 +6,7 @@ import pytest
 
 from precision_squad.intake import (
     build_issue_intake,
+    canonicalize_local_issue_ref,
     is_docs_remediation_issue,
     parse_issue_reference,
 )
@@ -70,6 +71,10 @@ def test_parse_issue_reference_accepts_expected_format() -> None:
 def test_parse_issue_reference_rejects_invalid_format() -> None:
     with pytest.raises(ValueError):
         parse_issue_reference("markdown-pdf-renderer#9")
+
+
+def test_canonicalize_local_issue_ref_normalizes_owner_and_repo_casing() -> None:
+    assert canonicalize_local_issue_ref("Owner/Repo#64") == "owner/repo#64"
 
 
 def test_build_issue_intake_blocks_plan_issue() -> None:

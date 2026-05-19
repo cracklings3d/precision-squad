@@ -9,7 +9,7 @@ import pytest
 
 from precision_squad import __version__
 from precision_squad.bootstrap import main as bootstrap_main
-from precision_squad.cli import main
+from precision_squad.cli import _prompt_for_run_selection, _repair_issue_prompt_is_interactive, main
 from precision_squad.coordinator import RepairIssueReport
 from precision_squad.models import (
     ApprovedPlan,
@@ -24,7 +24,9 @@ from precision_squad.models import (
     PublishPlan,
     PublishResult,
     RunRecord,
+    RunRequest,
 )
+from precision_squad.run_store import RunStore
 
 
 def test_main_without_args_shows_help(capsys) -> None:
@@ -1293,20 +1295,7 @@ def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.Monk
     """Config file values are used when CLI args are not provided."""
     repo_path = tmp_path / "repo-from-config"
     runs_dir = tmp_path / "runs-from-config"
-    plan_path = tmp_path / "approved-plan.json"
-    plan_path.write_text(
-        json.dumps(
-            {
-                "issue_ref": "owner/repo#1",
-                "plan_summary": "Repair the issue.",
-                "implementation_steps": ["Apply minimal change"],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            }
-        ),
-        encoding="utf-8",
-    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
     config_file = tmp_path / ".precision-squad.toml"
     config_file.write_text(
         (
@@ -1405,20 +1394,7 @@ def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_cli_args_override_config_file_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    plan_path = tmp_path / "approved-plan.json"
-    plan_path.write_text(
-        json.dumps(
-            {
-                "issue_ref": "owner/repo#1",
-                "plan_summary": "Repair the issue.",
-                "implementation_steps": ["Apply minimal change"],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            }
-        ),
-        encoding="utf-8",
-    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
     config_file = tmp_path / ".precision-squad.toml"
     config_file.write_text(
         (
@@ -1685,20 +1661,7 @@ def test_repair_issue_no_publish_cli_overrides_true_config(
 ) -> None:
     repo_path = tmp_path / "repo-from-config"
     runs_dir = tmp_path / "runs-from-config"
-    plan_path = tmp_path / "approved-plan.json"
-    plan_path.write_text(
-        json.dumps(
-            {
-                "issue_ref": "owner/repo#1",
-                "plan_summary": "Repair the issue.",
-                "implementation_steps": ["Apply minimal change"],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            }
-        ),
-        encoding="utf-8",
-    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
     (tmp_path / ".precision-squad.toml").write_text(
         (
             "[repair.issue]\n"
@@ -2103,6 +2066,396 @@ def test_run_issue_requires_approved_plan_path_for_fresh_runs(
     assert not (tmp_path / "runs").exists()
 
 
+def test_run_issue_explicit_fresh_without_approved_plan_path_fails_before_intake(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "precision_squad.cli.load_issue_intake",
+        lambda _: (_ for _ in ()).throw(AssertionError("intake should not run")),
+    )
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--fresh",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "require --approved-plan-path" in captured.err
+
+
+def test_run_issue_retry_from_missing_run_fails_before_intake(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "precision_squad.cli.load_issue_intake",
+        lambda _: (_ for _ in ()).throw(AssertionError("intake should not run")),
+    )
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--retry-from",
+            "missing-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Retry run not found" in captured.err
+
+
+def test_run_issue_retry_from_other_issue_fails_before_intake(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 2),
+            title="Other issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/2",
+        ),
+        summary="Other issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    record = store.create_run(RunRequest(issue_ref="Owner/Repo#2", runs_dir=str(runs_dir)), intake)
+    monkeypatch.setattr(
+        "precision_squad.cli.load_issue_intake",
+        lambda _: (_ for _ in ()).throw(AssertionError("intake should not run")),
+    )
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+            "--retry-from",
+            record.run_id,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "belongs to" in captured.err
+
+
+def test_run_issue_non_interactive_ambiguous_prior_runs_requires_explicit_selection(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    intake_payload = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    store.create_run(
+        RunRequest(issue_ref="Owner/Repo#1", runs_dir=str(runs_dir)), intake_payload
+    )
+    monkeypatch.setattr(
+        "precision_squad.cli._repair_issue_prompt_is_interactive",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "precision_squad.cli.load_issue_intake",
+        lambda _: (_ for _ in ()).throw(AssertionError("intake should not run")),
+    )
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "--retry-from <run-id>" in captured.err
+    assert "--fresh" in captured.err
+
+
+def test_run_issue_prompt_selected_fresh_without_plan_fails_before_intake(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    intake_payload = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)), intake_payload
+    )
+    monkeypatch.setattr("precision_squad.cli._repair_issue_prompt_is_interactive", lambda: True)
+    monkeypatch.setattr("precision_squad.cli._prompt_for_run_selection", lambda runs: "fresh")
+    monkeypatch.setattr(
+        "precision_squad.cli.load_issue_intake",
+        lambda _: (_ for _ in ()).throw(AssertionError("intake should not run")),
+    )
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "require --approved-plan-path" in captured.err
+
+
+def test_run_issue_prompt_selected_retry_can_continue_without_new_plan_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    intake_payload = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    record = store.create_run(
+        RunRequest(issue_ref="Owner/Repo#1", runs_dir=str(runs_dir)), intake_payload
+    )
+    store.write_approved_plan(Path(record.run_dir), ApprovedPlan(
+        issue_ref="Owner/Repo#1",
+        plan_summary="Plan",
+        implementation_steps=("Step",),
+        named_references=(),
+        retrieval_surface_summary="src/",
+        approved=True,
+    ))
+    monkeypatch.setattr("precision_squad.cli._repair_issue_prompt_is_interactive", lambda: True)
+    monkeypatch.setattr("precision_squad.cli._prompt_for_run_selection", lambda runs: record.run_id)
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake_payload)
+
+    captured: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, intake, dependencies
+        captured["retry_from"] = params.retry_from
+        return RepairIssueReport(
+            intake=intake_payload,
+            run_record=RunRecord(
+                run_id="run-next",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(runs_dir / "run-next"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="done",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
+            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
+            publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+        ]
+    )
+
+    assert status == 0
+    assert captured["retry_from"] == record.run_id
+
+
+def test_run_issue_explicit_fresh_bypasses_ambiguity_and_calls_coordinator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    prior_intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    store.create_run(RunRequest(issue_ref="Owner/Repo#1", runs_dir=str(runs_dir)), prior_intake)
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: prior_intake)
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+
+    captured: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, intake, dependencies
+        captured["retry_from"] = params.retry_from
+        return RepairIssueReport(
+            intake=prior_intake,
+            run_record=RunRecord(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(runs_dir / "run-1"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="done",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
+            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
+            publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+            "--fresh",
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    assert status == 0
+    assert captured["retry_from"] is None
+
+
+def test_prompt_for_run_selection_reprompts_on_invalid_input(
+    capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = [
+        RunRecord(
+            run_id="run-2",
+            issue_ref="owner/repo#1",
+            status="runnable",
+            created_at="2026-05-02T00:00:00Z",
+            updated_at="2026-05-02T00:00:00Z",
+            run_dir="/tmp/run-2",
+            attempt=2,
+        )
+    ]
+    responses = iter(["bad", "run-2"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+
+    choice = _prompt_for_run_selection(runs)
+
+    captured = capsys.readouterr()
+    assert choice == "run-2"
+    assert "Invalid selection" in captured.out
+
+
+def test_prompt_for_run_selection_aborts_on_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    runs = [
+        RunRecord(
+            run_id="run-2",
+            issue_ref="owner/repo#1",
+            status="runnable",
+            created_at="2026-05-02T00:00:00Z",
+            updated_at="2026-05-02T00:00:00Z",
+            run_dir="/tmp/run-2",
+            attempt=2,
+        )
+    ]
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(ValueError, match="aborted"):
+        _prompt_for_run_selection(runs)
+
+
+def test_repair_issue_prompt_is_interactive_requires_both_ttys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert _repair_issue_prompt_is_interactive() is False
+
+
 def test_repair_issue_help_mentions_fresh_run_approved_plan_requirement(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["repair", "issue", "--help"])
@@ -2111,6 +2464,26 @@ def test_repair_issue_help_mentions_fresh_run_approved_plan_requirement(capsys) 
     assert exc_info.value.code == 0
     assert "Required for fresh" in captured.out
     assert "retries may omit it" in captured.out
+
+
+def test_repair_issue_parser_rejects_fresh_with_retry_from(capsys, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "repair",
+                "issue",
+                "owner/repo#1",
+                "--repo-path",
+                str(tmp_path),
+                "--fresh",
+                "--retry-from",
+                "run-1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "not allowed with argument" in captured.err
 
 
 def test_load_approved_plan_rejects_missing_retrieval_surface_summary(
@@ -2430,7 +2803,7 @@ class TestLoadApprovedPlanValidation:
         )
         from precision_squad.cli import _load_approved_plan
 
-        with pytest.raises(ValueError, match="implementation_steps\[1\]"):
+        with pytest.raises(ValueError, match=r"implementation_steps\[1\]"):
             _load_approved_plan(plan_path, "owner/repo#1")
 
     def test_returns_approved_plan(self, tmp_path: Path) -> None:

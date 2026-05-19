@@ -8,7 +8,7 @@ from typing import Protocol
 
 from .executor import DocsFirstExecutor
 from .governance import apply_governance, evaluate_run
-from .intake import IssueIntake, is_docs_remediation_issue
+from .intake import IssueIntake, canonicalize_local_issue_ref, is_docs_remediation_issue
 from .models import (
     ApprovedPlan,
     EvaluationResult,
@@ -191,21 +191,12 @@ class RunCoordinator:
         if params.retry_from is not None:
             try:
                 previous_record = store.load_run(params.retry_from)
+                if not _same_local_issue_ref(previous_record.issue_ref, params.issue_ref):
+                    return _blocked_retry_report(intake=intake, issue_ref=params.issue_ref)
                 attempt = previous_record.attempt + 1
                 previous_run_dir = Path(previous_record.run_dir).resolve()
             except ValueError:
-                return RepairIssueReport(
-                    intake=intake,
-                    run_record=RunRecord(
-                        run_id="",
-                        issue_ref=params.issue_ref,
-                        status="blocked",
-                        created_at="",
-                        updated_at="",
-                        run_dir="",
-                    ),
-                    exit_code=3,
-                )
+                return _blocked_retry_report(intake=intake, issue_ref=params.issue_ref)
 
         effective_approved_plan = params.approved_plan
         if effective_approved_plan is None and previous_run_dir is not None:
@@ -226,18 +217,7 @@ class RunCoordinator:
                     f"structural validation: {exc}"
                 ) from exc
             except ValueError:
-                return RepairIssueReport(
-                    intake=intake,
-                    run_record=RunRecord(
-                        run_id="",
-                        issue_ref=params.issue_ref,
-                        status="blocked",
-                        created_at="",
-                        updated_at="",
-                        run_dir="",
-                    ),
-                    exit_code=3,
-                )
+                return _blocked_retry_report(intake=intake, issue_ref=params.issue_ref)
 
         # Check if escalated (max 3 attempts exceeded)
         if attempt > 3:
@@ -595,3 +575,22 @@ class RunCoordinator:
             publish_result=result,
             post_publish_review_result=review_result,
         )
+
+
+def _same_local_issue_ref(left: str, right: str) -> bool:
+    return canonicalize_local_issue_ref(left) == canonicalize_local_issue_ref(right)
+
+
+def _blocked_retry_report(*, intake: IssueIntake, issue_ref: str) -> RepairIssueReport:
+    return RepairIssueReport(
+        intake=intake,
+        run_record=RunRecord(
+            run_id="",
+            issue_ref=issue_ref,
+            status="blocked",
+            created_at="",
+            updated_at="",
+            run_dir="",
+        ),
+        exit_code=3,
+    )

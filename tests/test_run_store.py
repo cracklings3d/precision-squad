@@ -279,6 +279,66 @@ def test_render_approved_plan_text(tmp_path: Path) -> None:
     assert "Retrieval Surface" in text
 
 
+def test_list_runs_for_issue_filters_by_canonical_issue_and_orders_newest_first(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True)
+
+    same_issue_old = store.root / "run-old"
+    same_issue_old.mkdir()
+    (same_issue_old / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-old",
+                "issue_ref": "Owner/Repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-02T00:00:00Z",
+                "updated_at": "2026-05-02T00:00:00Z",
+                "run_dir": str(same_issue_old),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    same_issue_new = store.root / "run-new"
+    same_issue_new.mkdir()
+    (same_issue_new / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-new",
+                "issue_ref": "owner/repo#1",
+                "status": "blocked",
+                "created_at": "2026-05-02T00:00:00Z",
+                "updated_at": "2026-05-02T00:00:00Z",
+                "run_dir": str(same_issue_new),
+                "attempt": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    different_issue = store.root / "run-other"
+    different_issue.mkdir()
+    (different_issue / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-other",
+                "issue_ref": "owner/repo#2",
+                "status": "runnable",
+                "created_at": "2026-05-03T00:00:00Z",
+                "updated_at": "2026-05-03T00:00:00Z",
+                "run_dir": str(different_issue),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    records = store.list_runs_for_issue("owner/repo#1")
+
+    assert [record.run_id for record in records] == ["run-new", "run-old"]
+
+
 def _write_plan(path: Path, payload: dict[str, object]) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
