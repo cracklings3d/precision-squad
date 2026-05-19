@@ -12,16 +12,9 @@ It keeps product logic in this repository and treats repository documentation as
 
 ## Status
 
-This repository is in bootstrap.
+This repository is an active docs-first workflow control system for issue-driven repair work.
 
-The current near-term milestones are:
-
-1. bootstrap the Python package, tooling, CI, and issue/PR workflow assets
-2. implement GitHub PAT-backed issue intake
-3. add the local run store
-4. define the executor seam and documented local contract extraction
-5. build the first end-to-end CLI flow
-6. add governance v1 and publishing v1
+Governance produces **Approved** or **Blocked** verdicts. Quality tags are informational and do not gate publishing.
 
 ## Product Boundary
 
@@ -32,7 +25,7 @@ The current near-term milestones are:
 
 ## MVP Shape
 
-The first MVP should prove one control loop:
+The MVP control loop is:
 
 1. accept a GitHub issue
 2. normalize it into a runnable request
@@ -146,7 +139,7 @@ Legacy alias still supported:
 python -m precision_squad.cli run issue owner/repo#number --repo-path <local-repo>
 ```
 
-Publish an approved or provisional stored run without rerunning repair:
+Publish a stored run without rerunning repair:
 
 ```bash
 python -m precision_squad.cli publish run <run-id>
@@ -179,10 +172,12 @@ If you use the `skills` ecosystem directly, this repo also exposes a skill packa
 
 ## Issue Workflow
 
-This repository follows an issue-first GitHub workflow:
+This repository follows an issue-driven GitHub workflow:
 
-1. define work in a GitHub issue
-2. implement it through a linked PR
-3. keep the PR scoped to the issue
+1. define and track work through a GitHub issue
+2. implement it through one scoped PR
+3. keep the branch, commits, and file changes limited to that issue
+
+Unrelated fixes, refactors, or follow-on improvements should move to separate issues and PRs.
 
 PRs should include a closing reference such as `Closes #123`.
