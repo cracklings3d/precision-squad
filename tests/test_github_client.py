@@ -7,6 +7,7 @@ import json
 import pytest
 
 from precision_squad.github_client import GitHubClientError, GitHubIssueClient, GitHubWriteClient
+from precision_squad.github_transport import GitHubTransportSelectionError
 from precision_squad.models import IssueReference
 
 
@@ -31,6 +32,54 @@ def test_from_env_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
         GitHubIssueClient.from_env()
 
     assert "GITHUB_TOKEN" in str(exc_info.value)
+
+
+def test_issue_client_from_env_exposes_transport_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda: object(),
+    )
+
+    client = GitHubIssueClient.from_env()
+
+    assert client.transport_resolution is not None
+
+
+def test_write_client_from_env_exposes_transport_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    resolution = object()
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda: resolution,
+    )
+
+    client = GitHubWriteClient.from_env()
+
+    assert client.transport_resolution is resolution
+
+
+def test_from_env_propagates_transport_selection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    def fail() -> object:
+        raise GitHubTransportSelectionError(
+            code="github_transport_cli_unavailable",
+            requested_mode="cli",
+            summary="gh CLI unavailable",
+            decision_reason="cli_required_unavailable",
+        )
+
+    monkeypatch.setattr("precision_squad.github_client.resolve_github_transport", fail)
+
+    with pytest.raises(GitHubTransportSelectionError, match="gh CLI unavailable"):
+        GitHubWriteClient.from_env()
 
 
 def test_fetch_issue_returns_normalized_issue(monkeypatch: pytest.MonkeyPatch) -> None:

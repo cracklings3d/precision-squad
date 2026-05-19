@@ -14,6 +14,7 @@ from .docs_remediation import (
     extract_docs_blocker_fingerprint,
     normalize_docs_findings,
 )
+from .github_transport import GitHubTransportResolution, resolve_github_transport
 from .models import GitHubIssue, IssueReference
 
 
@@ -24,8 +25,14 @@ class GitHubClientError(RuntimeError):
 class GitHubIssueClient:
     """Fetch issue data from the GitHub REST API."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(
+        self,
+        token: str,
+        *,
+        transport_resolution: GitHubTransportResolution | None = None,
+    ) -> None:
         self._token = token
+        self.transport_resolution = transport_resolution
 
     @classmethod
     def from_env(cls, token_env: str = "GITHUB_TOKEN") -> "GitHubIssueClient":
@@ -34,7 +41,7 @@ class GitHubIssueClient:
             raise GitHubClientError(
                 f"Missing GitHub token. Set the {token_env} environment variable."
             )
-        return cls(token)
+        return cls(token, transport_resolution=resolve_github_transport())
 
     def fetch_issue(self, reference: IssueReference) -> GitHubIssue:
         payload = self._fetch_issue_via_gh(reference)
@@ -181,8 +188,14 @@ class GitHubIssueClient:
 class GitHubWriteClient:
     """Minimal PAT-backed GitHub write client."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(
+        self,
+        token: str,
+        *,
+        transport_resolution: GitHubTransportResolution | None = None,
+    ) -> None:
         self._token = token
+        self.transport_resolution = transport_resolution
 
     @classmethod
     def from_env(cls, token_env: str = "GITHUB_TOKEN") -> "GitHubWriteClient":
@@ -191,7 +204,7 @@ class GitHubWriteClient:
             raise GitHubClientError(
                 f"Missing GitHub token. Set the {token_env} environment variable."
             )
-        return cls(token)
+        return cls(token, transport_resolution=resolve_github_transport())
 
     def create_issue_comment(self, reference: IssueReference, body: str) -> str:
         gh_url = self._create_issue_comment_via_gh(reference, body)

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal, Mapping, cast
 
 ENV_ALIASES: dict[str, tuple[str, ...]] = {
     "GITHUB_TOKEN": ("OpenCode_Github_Token",),
 }
+GitHubTransportMode = Literal["auto", "mcp", "cli"]
 
 
 def load_local_env(start_dir: Path | None = None) -> Path | None:
@@ -49,3 +51,19 @@ def _apply_aliases() -> None:
             if value:
                 os.environ[target] = value
                 break
+
+
+def get_github_transport_mode(env: Mapping[str, str] | None = None) -> GitHubTransportMode:
+    """Return the normalized GitHub transport mode from the environment."""
+
+    source = env if env is not None else os.environ
+    raw_value = source.get("GITHUB_TRANSPORT")
+    if raw_value is None or not raw_value.strip():
+        return "auto"
+
+    normalized = raw_value.strip().lower()
+    if normalized not in {"auto", "mcp", "cli"}:
+        raise ValueError(
+            f"Invalid GITHUB_TRANSPORT value {raw_value!r}. Expected one of: auto, mcp, cli."
+        )
+    return cast(GitHubTransportMode, normalized)

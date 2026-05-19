@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from precision_squad.env import load_local_env
+from precision_squad.env import get_github_transport_mode, load_local_env
 
 
 def test_load_local_env_reads_repo_root_env_file(
@@ -41,3 +41,19 @@ def test_load_local_env_applies_github_alias(
     load_local_env(tmp_path)
 
     assert __import__("os").environ["GITHUB_TOKEN"] == "alias-token"
+
+
+def test_get_github_transport_mode_defaults_to_auto() -> None:
+    assert get_github_transport_mode({}) == "auto"
+
+
+@pytest.mark.parametrize("value", ["auto", "mcp", "cli", " AUTO "])
+def test_get_github_transport_mode_accepts_supported_values(value: str) -> None:
+    expected = value.strip().lower()
+
+    assert get_github_transport_mode({"GITHUB_TRANSPORT": value}) == expected
+
+
+def test_get_github_transport_mode_rejects_invalid_values() -> None:
+    with pytest.raises(ValueError, match="Invalid GITHUB_TRANSPORT value"):
+        get_github_transport_mode({"GITHUB_TRANSPORT": "http"})
