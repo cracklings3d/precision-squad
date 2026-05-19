@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
+from .intake import canonicalize_local_issue_ref
 from .models import (
     ApprovedPlan,
     EvaluationResult,
@@ -97,6 +98,30 @@ class RunStore:
         """Write an updated run record."""
         run_dir = Path(record.run_dir).resolve()
         self._write_json(run_dir / "run-record.json", record)
+
+    def list_runs_for_issue(self, issue_ref: str) -> list[RunRecord]:
+        """Return prior local runs for one canonical issue, newest first."""
+        if not self.root.exists():
+            return []
+
+        canonical_issue_ref = canonicalize_local_issue_ref(issue_ref)
+        matches: list[RunRecord] = []
+        for child in self.root.iterdir():
+            if not child.is_dir():
+                continue
+            record_path = child / "run-record.json"
+            if not record_path.exists():
+                continue
+            try:
+                record = _read_run_record(record_path)
+            except (OSError, ValueError, JSONDecodeError, KeyError, TypeError):
+                continue
+            if canonicalize_local_issue_ref(record.issue_ref) == canonical_issue_ref:
+                matches.append(record)
+
+        matches.sort(key=lambda record: record.run_id)
+        matches.sort(key=lambda record: record.created_at, reverse=True)
+        return matches
 
     def write_execution_result(self, run_dir: Path, result: ExecutionResult) -> None:
         self._write_json(run_dir / "execution-result.json", result)

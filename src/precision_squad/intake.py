@@ -32,6 +32,12 @@ def parse_issue_reference(raw: str) -> IssueReference:
     )
 
 
+def canonicalize_local_issue_ref(issue_ref: str | IssueReference) -> str:
+    """Return the canonical local issue reference for run matching."""
+    reference = parse_issue_reference(issue_ref) if isinstance(issue_ref, str) else issue_ref
+    return f"{reference.owner.lower()}/{reference.repo.lower()}#{reference.number}"
+
+
 def assess_issue(issue: GitHubIssue) -> IssueAssessment:
     """Determine whether the issue is runnable or should be blocked."""
     if is_docs_remediation_issue(issue):

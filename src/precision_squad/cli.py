@@ -21,7 +21,7 @@ from .coordinator import PublishRunParams, RepairIssueParams, RunCoordinator
 from .env import load_local_env
 from .executor import DocsFirstExecutor
 from .github_client import GitHubClientError, GitHubWriteClient
-from .intake import load_issue_intake
+from .intake import canonicalize_local_issue_ref, load_issue_intake
 from .models import (
     ApprovedPlan,
     ExecutionResult,
@@ -49,7 +49,7 @@ from .repair import (
     run_repair_qa_loop,
     synthesis_artifacts_ready,
 )
-from .run_store import ApprovedPlanError, load_approved_plan_artifact
+from .run_store import ApprovedPlanError, RunStore, load_approved_plan_artifact
 
 # Keep a local alias so tests can monkeypatch the shared executor class through this module.
 _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
@@ -114,10 +114,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="Optional model override for post-publish review agents.",
     )
-    issue_parser.add_argument(
+    run_selection_group = issue_parser.add_mutually_exclusive_group()
+    run_selection_group.add_argument(
         "--retry-from",
         default=argparse.SUPPRESS,
         help="Existing run ID to retry from. Increments attempt counter.",
+    )
+    run_selection_group.add_argument(
+        "--fresh",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Start a fresh run explicitly when prior local runs exist.",
     )
     issue_parser.add_argument(
         "--approved-plan-path",
@@ -172,15 +179,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _repair_issue(args: argparse.Namespace) -> int:
-    if args.retry_from is None and not args.approved_plan_path:
+    retry_from = _resolve_repair_retry_from(args)
+    approved_plan: ApprovedPlan | None = None
+    if args.approved_plan_path:
+        approved_plan = _load_approved_plan(Path(args.approved_plan_path), args.issue_ref)
+    if retry_from is None and approved_plan is None:
         raise ValueError(
             "Fresh repair issue runs require --approved-plan-path; retries may omit it only "
             "when carrying forward the prior approved-plan.json."
         )
 
-    approved_plan: ApprovedPlan | None = None
-    if args.approved_plan_path:
-        approved_plan = _load_approved_plan(Path(args.approved_plan_path), args.issue_ref)
     intake = load_issue_intake(args.issue_ref)
     report = RunCoordinator().repair_issue(
         params=RepairIssueParams(
@@ -191,7 +199,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
             repair_agent=args.repair_agent,
             repair_model=args.repair_model,
             review_model=args.review_model,
-            retry_from=args.retry_from,
+            retry_from=retry_from,
             approved_plan=approved_plan,
         ),
         intake=intake,
@@ -610,6 +618,73 @@ def _load_approved_plan(path: Path, issue_ref: str) -> ApprovedPlan:
         raise ValueError(str(exc)) from exc
 
 
+def _resolve_repair_retry_from(args: argparse.Namespace) -> str | None:
+    store = RunStore(Path(args.runs_dir))
+
+    if args.retry_from is not None:
+        _validate_retry_from(store, issue_ref=args.issue_ref, run_id=args.retry_from)
+        return args.retry_from
+
+    if args.fresh:
+        return None
+
+    prior_runs = store.list_runs_for_issue(args.issue_ref)
+    if not prior_runs:
+        return None
+
+    if not _repair_issue_prompt_is_interactive():
+        raise ValueError(
+            "Prior local runs already exist for this issue. Pass either --retry-from <run-id> "
+            "or --fresh."
+        )
+
+    choice = _prompt_for_run_selection(prior_runs)
+    if choice == "fresh":
+        return None
+    return choice
+
+
+def _validate_retry_from(store: RunStore, *, issue_ref: str, run_id: str) -> None:
+    try:
+        record = store.load_run(run_id)
+    except ValueError as exc:
+        raise ValueError(f"Retry run not found: {run_id}") from exc
+
+    if record.run_id != run_id:
+        raise ValueError(f"Retry run not found: {run_id}")
+
+    if canonicalize_local_issue_ref(record.issue_ref) != canonicalize_local_issue_ref(issue_ref):
+        raise ValueError(
+            f"Retry run {run_id} belongs to {record.issue_ref}, not requested issue {issue_ref}."
+        )
+
+
+def _repair_issue_prompt_is_interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _prompt_for_run_selection(prior_runs: Sequence[RunRecord]) -> str:
+    print("Prior local runs exist for this issue. Choose 'fresh' or one of the run IDs:")
+    for record in prior_runs:
+        print(
+            "- "
+            f"{record.run_id} "
+            f"(attempt={record.attempt}, created_at={record.created_at}, status={record.status})"
+        )
+
+    valid_choices = {record.run_id for record in prior_runs}
+    while True:
+        try:
+            choice = input("Run selection [fresh/<run-id>]: ").strip()
+        except (EOFError, KeyboardInterrupt) as exc:
+            raise ValueError("Run selection aborted.") from exc
+
+        if choice == "fresh" or choice in valid_choices:
+            return choice
+
+        print("Invalid selection. Enter 'fresh' or a listed run ID.")
+
+
 def _as_issue_assessment_status(value: Any) -> Literal["runnable", "blocked"]:
     text = _as_str(value)
     if text == "runnable":
@@ -786,6 +861,7 @@ _COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigS
             "repair_model": None,
             "review_model": None,
             "retry_from": None,
+            "fresh": False,
             "approved_plan_path": None,
         },
         validate=_validate_repair_issue_args,

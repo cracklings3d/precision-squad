@@ -219,6 +219,35 @@ def test_retry_from_nonexistent_run(tmp_path: Path) -> None:
     assert report.exit_code == 3
 
 
+def test_retry_from_different_issue_returns_blocked_report(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    other_intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 2),
+            title="Other issue",
+            body="Fix the other bug.",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/2",
+        ),
+        summary="Other issue",
+        problem_statement="Fix the other bug.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    request = RunRequest(issue_ref="Owner/Repo#2", runs_dir=str(store.root))
+    previous = store.create_run(request, other_intake)
+    store.write_approved_plan(Path(previous.run_dir), _approved_plan("Owner/Repo#2"))
+
+    report = RunCoordinator().repair_issue(
+        params=_make_params(tmp_path, retry_from=previous.run_id),
+        intake=_make_intake(),
+        dependencies=MagicMock(),
+    )
+
+    assert report.exit_code == 3
+    assert report.run_record.status == "blocked"
+
+
 def test_retry_attempt_stored_in_run_record(tmp_path: Path) -> None:
     """Test that attempt number is persisted in run record."""
     store = RunStore(tmp_path / "runs")

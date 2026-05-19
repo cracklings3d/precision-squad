@@ -202,6 +202,20 @@ def test_load_command_config_rejects_unknown_keys(tmp_path: Path) -> None:
         )
 
 
+def test_load_command_config_rejects_fresh_key(tmp_path: Path) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        "[repair.issue]\nrepo_path = \"repo\"\nfresh = true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unknown config key 'fresh'"):
+        load_command_config(
+            start_dir=tmp_path,
+            table=("repair", "issue"),
+            supported_tables=SUPPORTED_TABLES,
+        )
+
+
 def test_load_command_config_returns_only_active_command_table(tmp_path: Path) -> None:
     (tmp_path / ".precision-squad.toml").write_text(
         (
