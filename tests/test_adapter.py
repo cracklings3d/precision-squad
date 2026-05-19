@@ -6,10 +6,12 @@ import json
 from pathlib import Path
 
 from precision_squad.models import (
+    ApprovedPlan,
     GitHubIssue,
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    NamedReference,
     RunRecord,
 )
 from precision_squad.repair.adapter import (
@@ -18,6 +20,7 @@ from precision_squad.repair.adapter import (
     _extract_side_issues,
     _parse_repair_json,
 )
+from precision_squad.stage_contracts import load_developer_stage_contract
 
 # ---------------------------------------------------------------------------
 # _extract_json_events
@@ -295,6 +298,23 @@ def _make_run_record() -> RunRecord:
     )
 
 
+def _make_approved_plan() -> ApprovedPlan:
+    return ApprovedPlan(
+        issue_ref="owner/repo#1",
+        plan_summary="Implement the fix.",
+        implementation_steps=("Update the code", "Update the tests"),
+        named_references=(
+            NamedReference(
+                name="src/app.py",
+                reference_type="file",
+                description="Primary implementation",
+            ),
+        ),
+        retrieval_surface_summary="src/app.py, tests/test_app.py",
+        approved=True,
+    )
+
+
 def test_build_repair_prompt_non_docs_no_docs_fix_prompt(tmp_path: Path) -> None:
     intake = _make_intake()
     run_record = _make_run_record()
@@ -408,3 +428,46 @@ def test_build_repair_prompt_appends_qa_feedback(tmp_path: Path) -> None:
 
     assert "QA feedback from the previous attempt:" in prompt
     assert "Tests failed: test_foo" in prompt
+
+
+def test_build_repair_prompt_uses_explicit_developer_contract_inputs(tmp_path: Path) -> None:
+    intake = _make_intake()
+    run_record = _make_run_record()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    contract_dir = tmp_path / "contract"
+    contract_dir.mkdir()
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (contract_dir / "README.snapshot.md").write_text("# Source\n", encoding="utf-8")
+    (contract_dir / "docs-fix-prompt.txt").write_text("Side issue details\n", encoding="utf-8")
+
+    developer_contract = load_developer_stage_contract(
+        approved_plan=_make_approved_plan(),
+        intake=intake,
+        run_record=run_record,
+        run_dir=run_dir,
+        contract_artifact_dir=contract_dir,
+        repo_workspace=tmp_path / "workspace" / "repo",
+    )
+
+    prompt = _build_repair_prompt(
+        approved_plan=None,
+        intake=intake,
+        run_record=run_record,
+        run_dir=run_dir,
+        contract_artifact_dir=contract_dir,
+        repo_workspace=tmp_path,
+        qa_feedback=None,
+        developer_contract=developer_contract,
+    )
+
+    assert "- Summary: Implement the fix." in prompt
+    assert "  - Update the code" in prompt
+    assert "- Retrieval surface summary: src/app.py, tests/test_app.py" in prompt
+    assert "  - src/app.py (file): Primary implementation" in prompt
+    assert f"- Issue statement: {run_dir / 'issue.md'}" in prompt
+    assert f"- Execution contract: {contract_dir / 'contract.json'}" in prompt
+    assert f"- README snapshot: {contract_dir / 'README.snapshot.md'}" in prompt

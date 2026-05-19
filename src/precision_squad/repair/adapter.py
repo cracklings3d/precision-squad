@@ -15,6 +15,7 @@ from ..intake import is_docs_remediation_issue
 from ..json_events import extract_json_events
 from ..models import ApprovedPlan, IssueIntake, RepairResult, RunRecord, SideIssue
 from ..opencode_model import resolve_opencode_model
+from ..stage_contracts import DeveloperStageContract, render_developer_approved_plan_context
 
 
 @runtime_checkable
@@ -30,6 +31,7 @@ class RepairAdapter(Protocol):
         run_dir: Path,
         contract_artifact_dir: Path,
         repo_workspace: Path,
+        developer_contract: DeveloperStageContract | None = None,
     ) -> RepairResult: ...
 
     def with_qa_feedback(self, feedback: str) -> RepairAdapter: ...
@@ -54,7 +56,10 @@ REPAIR_RESULT_SCHEMA = {
                     },
                     "summary": {
                         "type": "string",
-                        "description": "Concise synthesis of the finding — what needs fixing and why. Aim for ~500 chars.",
+                        "description": (
+                            "Concise synthesis of the finding — what needs fixing "
+                            "and why. Aim for ~500 chars."
+                        ),
                     },
                     "body": {
                         "type": "string",
@@ -101,6 +106,7 @@ class OpenCodeRepairAdapter:
         run_dir: Path,
         contract_artifact_dir: Path,
         repo_workspace: Path,
+        developer_contract: DeveloperStageContract | None = None,
     ) -> RepairResult:
         stdout_path = run_dir / "repair.stdout.log"
         stderr_path = run_dir / "repair.stderr.log"
@@ -115,6 +121,7 @@ class OpenCodeRepairAdapter:
             contract_artifact_dir=contract_artifact_dir,
             repo_workspace=repo_workspace,
             qa_feedback=self.qa_feedback,
+            developer_contract=developer_contract,
         )
 
         command = [
@@ -240,7 +247,7 @@ def _extract_side_issues(repair_json: dict) -> tuple[SideIssue, ...]:
             continue
         labels_raw = item.get("labels", [])
         if isinstance(labels_raw, list):
-            labels = tuple(str(l) for l in labels_raw if isinstance(l, str))
+            labels = tuple(str(label) for label in labels_raw if isinstance(label, str))
         else:
             labels = ()
         side_issues.append(SideIssue(
@@ -261,16 +268,34 @@ def _build_repair_prompt(
     contract_artifact_dir: Path,
     repo_workspace: Path,
     qa_feedback: str | None,
+    developer_contract: DeveloperStageContract | None = None,
 ) -> str:
     docs_fix_prompt_path = contract_artifact_dir / "docs-fix-prompt.txt"
     docs_fix_prompt_content = ""
-    if docs_fix_prompt_path.exists():
+    issue_statement_path = run_dir / "issue.md"
+    execution_contract_path = contract_artifact_dir / "contract.json"
+    readme_snapshot_path = contract_artifact_dir / "README.snapshot.md"
+    executor_stdout_path = run_dir / "executor.stdout.log"
+    executor_stderr_path = run_dir / "executor.stderr.log"
+
+    if developer_contract is not None:
+        docs_fix_prompt_content = developer_contract.docs_fix_prompt_content or ""
+        issue_statement_path = developer_contract.issue_statement_path
+        execution_contract_path = developer_contract.execution_contract_path
+        readme_snapshot_path = developer_contract.readme_snapshot_path
+        executor_stdout_path = developer_contract.executor_stdout_path
+        executor_stderr_path = developer_contract.executor_stderr_path
+        repo_workspace = developer_contract.repo_workspace
+        approved_plan = developer_contract.approved_plan
+    elif docs_fix_prompt_path.exists():
         docs_fix_prompt_content = docs_fix_prompt_path.read_text(encoding="utf-8")
 
     json_instruction = (
         "Output a single JSON object with at least a `summary` field describing what you did. "
-        "If you discover secondary issues unrelated to the primary issue, include them in a `side_issues` array. "
-        "Each side issue must have `title` (one-line identifier), `summary` (concise synthesis, aim for ~500 chars), "
+        "If you discover secondary issues unrelated to the primary issue, include them in a "
+        "`side_issues` array. "
+        "Each side issue must have `title` (one-line identifier), `summary` "
+        "(concise synthesis, aim for ~500 chars), "
         "`body` (full verbose output for audit), and `labels` (array of GitHub label strings). "
         "Schema:\n"
         + json.dumps(REPAIR_RESULT_SCHEMA, indent=2)
@@ -281,9 +306,12 @@ def _build_repair_prompt(
             approved_plan=approved_plan,
             intake=intake,
             run_record=run_record,
-            run_dir=run_dir,
-            contract_artifact_dir=contract_artifact_dir,
             repo_workspace=repo_workspace,
+            issue_statement_path=issue_statement_path,
+            execution_contract_path=execution_contract_path,
+            readme_snapshot_path=readme_snapshot_path,
+            executor_stdout_path=executor_stdout_path,
+            executor_stderr_path=executor_stderr_path,
             docs_fix_prompt_content=docs_fix_prompt_content,
             json_instruction=json_instruction,
         )
@@ -292,9 +320,12 @@ def _build_repair_prompt(
             approved_plan=approved_plan,
             intake=intake,
             run_record=run_record,
-            run_dir=run_dir,
-            contract_artifact_dir=contract_artifact_dir,
             repo_workspace=repo_workspace,
+            issue_statement_path=issue_statement_path,
+            execution_contract_path=execution_contract_path,
+            readme_snapshot_path=readme_snapshot_path,
+            executor_stdout_path=executor_stdout_path,
+            executor_stderr_path=executor_stderr_path,
             docs_fix_prompt_content=docs_fix_prompt_content,
             json_instruction=json_instruction,
         )
@@ -308,9 +339,12 @@ def _build_docs_remediation_prompt(
     approved_plan: ApprovedPlan | None = None,
     intake: IssueIntake,
     run_record: RunRecord,
-    run_dir: Path,
-    contract_artifact_dir: Path,
     repo_workspace: Path,
+    issue_statement_path: Path,
+    execution_contract_path: Path,
+    readme_snapshot_path: Path,
+    executor_stdout_path: Path,
+    executor_stderr_path: Path,
     docs_fix_prompt_content: str,
     json_instruction: str,
 ) -> list[str]:
@@ -344,7 +378,7 @@ def _build_docs_remediation_prompt(
         f"Run ID: {run_record.run_id}",
         f"Issue: {intake.issue.reference}",
         f"Title: {intake.issue.title}",
-        *(_render_approved_plan_context(approved_plan)),
+        *(render_developer_approved_plan_context(approved_plan)),
         "Requirements:",
         "- Update repository documentation in the current workspace to resolve the issue.",
         "- Treat this as a docs-remediation issue, not a product code change.",
@@ -367,12 +401,12 @@ def _build_docs_remediation_prompt(
         "- Do not commit.",
         "- After edits, output your JSON result.",
         "Context files:",
-        f"- Issue statement: {run_dir / 'issue.md'}",
+        f"- Issue statement: {issue_statement_path}",
         f"- Docs fix prompt (inlined):\n\n{docs_fix_prompt_content}\n",
-        f"- Execution contract: {contract_artifact_dir / 'contract.json'}",
-        f"- README snapshot: {contract_artifact_dir / 'README.snapshot.md'}",
-        f"- Executor stdout log: {run_dir / 'executor.stdout.log'}",
-        f"- Executor stderr log: {run_dir / 'executor.stderr.log'}",
+        f"- Execution contract: {execution_contract_path}",
+        f"- README snapshot: {readme_snapshot_path}",
+        f"- Executor stdout log: {executor_stdout_path}",
+        f"- Executor stderr log: {executor_stderr_path}",
         f"Workspace repo: {repo_workspace}",
         "",
         json_instruction,
@@ -384,9 +418,12 @@ def _build_standard_repair_prompt(
     approved_plan: ApprovedPlan | None = None,
     intake: IssueIntake,
     run_record: RunRecord,
-    run_dir: Path,
-    contract_artifact_dir: Path,
     repo_workspace: Path,
+    issue_statement_path: Path,
+    execution_contract_path: Path,
+    readme_snapshot_path: Path,
+    executor_stdout_path: Path,
+    executor_stderr_path: Path,
     docs_fix_prompt_content: str,
     json_instruction: str,
 ) -> list[str]:
@@ -396,7 +433,7 @@ def _build_standard_repair_prompt(
         f"Run ID: {run_record.run_id}",
         f"Issue: {intake.issue.reference}",
         f"Title: {intake.issue.title}",
-        *(_render_approved_plan_context(approved_plan)),
+        *(render_developer_approved_plan_context(approved_plan)),
         "Requirements:",
         "- Modify code in the current workspace to resolve the issue.",
         "- Use the documented local setup/test contract as the source of truth.",
@@ -405,11 +442,11 @@ def _build_standard_repair_prompt(
         "- Do not commit.",
         "- After edits, output your JSON result.",
         "Context files:",
-        f"- Issue statement: {run_dir / 'issue.md'}",
-        f"- Execution contract: {contract_artifact_dir / 'contract.json'}",
-        f"- README snapshot: {contract_artifact_dir / 'README.snapshot.md'}",
-        f"- Executor stdout log: {run_dir / 'executor.stdout.log'}",
-        f"- Executor stderr log: {run_dir / 'executor.stderr.log'}",
+        f"- Issue statement: {issue_statement_path}",
+        f"- Execution contract: {execution_contract_path}",
+        f"- README snapshot: {readme_snapshot_path}",
+        f"- Executor stdout log: {executor_stdout_path}",
+        f"- Executor stderr log: {executor_stderr_path}",
         f"Workspace repo: {repo_workspace}",
     ]
     if docs_fix_prompt_content:
@@ -424,21 +461,4 @@ def _build_standard_repair_prompt(
     return lines
 
 
-def _render_approved_plan_context(approved_plan: ApprovedPlan | None) -> list[str]:
-    if approved_plan is None:
-        return []
-    lines = [
-        "Approved plan:",
-        f"- Summary: {approved_plan.plan_summary}",
-        "- Implementation steps:",
-        *[f"  - {step}" for step in approved_plan.implementation_steps],
-        f"- Retrieval surface summary: {approved_plan.retrieval_surface_summary or '(empty)'}",
-    ]
-    if approved_plan.named_references:
-        lines.append("- Named references:")
-        for ref in approved_plan.named_references:
-            suffix = f": {ref.description}" if ref.description else ""
-            lines.append(f"  - {ref.name} ({ref.reference_type}){suffix}")
-    else:
-        lines.append("- Named references: (none)")
-    return lines
+_extract_json_events = extract_json_events

@@ -17,6 +17,17 @@ def _load_checklist() -> dict[str, Any]:
     return payload
 
 
+def load_review_checklist_rules() -> tuple[dict[str, Any], ...]:
+    """Load deterministic review checklist rules from the packaged checklist file."""
+    rules_raw = _load_checklist().get("rules")
+    if not isinstance(rules_raw, list):
+        raise ValueError("docs checklist field 'rules' must be a list")
+    rules = tuple(dict(rule) for rule in rules_raw if isinstance(rule, dict))
+    if not rules:
+        raise ValueError("docs checklist must define at least one rule")
+    return rules
+
+
 CHECKLIST = _load_checklist()
 DOC_SOURCE_CANDIDATES = tuple(str(item) for item in CHECKLIST["doc_source_candidates"])
 SETUP_SECTION_HEADINGS = tuple(str(item) for item in CHECKLIST["setup_section_headings"])
@@ -28,9 +39,7 @@ MANUAL_PREREQUISITE_SIGNALS = tuple(str(item) for item in CHECKLIST["manual_prer
 ENVIRONMENT_ASSUMPTION_SIGNALS = tuple(
     str(item) for item in CHECKLIST["environment_assumption_signals"]
 )
-DOC_POLICY_RULES: tuple[dict[str, Any], ...] = tuple(
-    dict(rule) for rule in CHECKLIST["rules"] if isinstance(rule, dict)
-)
+DOC_POLICY_RULES: tuple[dict[str, Any], ...] = load_review_checklist_rules()
 
 
 def questions_for_violations(violations: tuple[str, ...]) -> tuple[str, ...]:

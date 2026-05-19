@@ -13,7 +13,7 @@ from .github_client import GitHubWriteClient
 from .json_events import extract_json_events
 from .models import IssueIntake, PostPublishReviewResult, ReviewAgentResult, RunRecord
 from .opencode_model import resolve_opencode_model
-from .run_store import RunStore
+from .stage_contracts import ReviewStageContract, load_review_stage_contract, render_review_prompt
 
 PULL_NUMBER_PATTERN = re.compile(r"/pull/(?P<number>[0-9]+)$")
 
@@ -26,6 +26,7 @@ class ReviewRunner(Protocol):
         run_record: RunRecord,
         run_dir: Path,
         pull_request_url: str,
+        review_contract: ReviewStageContract | None = None,
     ) -> ReviewAgentResult: ...
 
 
@@ -45,6 +46,7 @@ class OpenCodePrReviewAgent:
         run_record: RunRecord,
         run_dir: Path,
         pull_request_url: str,
+        review_contract: ReviewStageContract | None = None,
     ) -> ReviewAgentResult:
         prefix = f"post-publish-{self.role}"
         stdout_path = run_dir / f"{prefix}.stdout.log"
@@ -57,6 +59,7 @@ class OpenCodePrReviewAgent:
                 run_record=run_record,
                 run_dir=run_dir,
                 pull_request_url=pull_request_url,
+                review_contract=review_contract,
             )
         except ValueError as exc:
             return ReviewAgentResult(
@@ -151,17 +154,42 @@ def run_post_publish_review(
             architect_summary="Architect did not run.",
         )
 
+    try:
+        review_contract = load_review_stage_contract(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            pull_request_url=pull_request_url,
+            pull_number=pull_number,
+            pull_head_sha=pull_head_sha,
+            diff_loader=_fetch_pr_diff,
+        )
+    except ValueError as exc:
+        return PostPublishReviewResult(
+            status="failed_infra",
+            summary=str(exc),
+            pull_request_url=pull_request_url,
+            pull_number=pull_number,
+            pull_head_sha=pull_head_sha,
+            reviewer_status="failed_infra",
+            reviewer_summary=str(exc),
+            architect_status="failed_infra",
+            architect_summary=str(exc),
+        )
+
     reviewer_result = reviewer.review(
         intake=intake,
         run_record=run_record,
         run_dir=run_dir,
         pull_request_url=pull_request_url,
+        review_contract=review_contract,
     )
     architect_result = architect.review(
         intake=intake,
         run_record=run_record,
         run_dir=run_dir,
         pull_request_url=pull_request_url,
+        review_contract=review_contract,
     )
     if reviewer_result.status == "approved" and architect_result.status == "approved":
         return PostPublishReviewResult(
@@ -227,40 +255,19 @@ def _build_review_prompt(
     run_record: RunRecord,
     run_dir: Path,
     pull_request_url: str,
+    review_contract: ReviewStageContract | None = None,
 ) -> str:
-    approved_plan = RunStore.load_approved_plan_text(
-        run_dir,
-        issue_ref=run_record.issue_ref,
-        include_named_references=True,
-    )
-    if not approved_plan.strip():
-        raise ValueError("Review context pack is missing required approved plan")
-    pr_diff = _fetch_pr_diff(
-        intake.issue.reference.owner,
-        intake.issue.reference.repo,
-        pull_request_url,
-    )
-    if not pr_diff.strip():
-        raise ValueError("Review context pack is missing required PR diff")
-    return "\n".join(
-        [
-            f"Review role: {role}",
-            f"Run ID: {run_record.run_id}",
-            f"Issue: {intake.issue.reference}",
-            f"PR: {pull_request_url}",
-            "",
-            "## Approved Plan",
-            approved_plan,
-            "",
-            "## PR Diff",
-            pr_diff,
-            "",
-            "Review the published PR and respond with exactly one JSON object.",
-            'Use the shape: {"status":"approved|rejected","summary":"...","feedback":["..."]}',
-            "If you reject, feedback must contain concrete required changes.",
-            "Do not include markdown fences.",
-        ]
-    )
+    if review_contract is None:
+        review_contract = load_review_stage_contract(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            pull_request_url=pull_request_url,
+            pull_number=_extract_pull_number(pull_request_url),
+            pull_head_sha=None,
+            diff_loader=_fetch_pr_diff,
+        )
+    return render_review_prompt(role, review_contract)
 
 
 def _fetch_pr_diff(owner: str, repo: str, pull_request_url: str) -> str:

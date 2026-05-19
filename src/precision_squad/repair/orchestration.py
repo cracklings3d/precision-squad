@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import shutil
 import inspect
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,6 +16,7 @@ from ..github_client import GitHubClientError, GitHubWriteClient
 from ..models import ExecutionResult, IssueIntake, QaResult, RepairResult, RunRecord
 from ..rerun_context import latest_rejected_pull_request
 from ..run_store import ApprovedPlanError, RunStore
+from ..stage_contracts import load_developer_stage_contract
 from .adapter import RepairAdapter
 from .qa import (
     WorkspaceQaVerifier,
@@ -81,6 +82,22 @@ class RepairStage:
                     f"{contract_artifact_dir}"
                 ),
                 detail_codes=("repair_artifact_dir_missing",),
+            )
+
+        try:
+            developer_contract = load_developer_stage_contract(
+                approved_plan=approved_plan,
+                intake=intake,
+                run_record=run_record,
+                run_dir=run_dir,
+                contract_artifact_dir=contract_artifact_dir,
+                repo_workspace=(run_dir / "repair-workspace" / "repo").resolve(),
+            )
+        except ValueError as exc:
+            return RepairResult(
+                status="failed_infra",
+                summary=str(exc),
+                detail_codes=("repair_stage_contract_invalid",),
             )
 
         workspace_path = (run_dir / "repair-workspace").resolve()
@@ -152,6 +169,7 @@ class RepairStage:
             "run_dir": run_dir,
             "contract_artifact_dir": contract_artifact_dir,
             "repo_workspace": repo_workspace,
+            "developer_contract": developer_contract,
         }
         parameters = inspect.signature(self.adapter.repair).parameters
         if "approved_plan" not in parameters:

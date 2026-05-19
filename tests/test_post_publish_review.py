@@ -78,6 +78,8 @@ def _write_raw_approved_plan(run_dir: Path, raw_payload: str) -> None:
 def test_run_post_publish_review_reopens_issue_on_rejection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _write_approved_plan(tmp_path)
+
     class StubAgent:
         def __init__(self, result: ReviewAgentResult) -> None:
             self._result = result
@@ -105,6 +107,10 @@ def test_run_post_publish_review_reopens_issue_on_rejection(
     monkeypatch.setattr(
         "precision_squad.post_publish_review.GitHubWriteClient.from_env",
         lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
     )
 
     result = run_post_publish_review(
@@ -144,6 +150,8 @@ def test_run_post_publish_review_reopens_issue_on_rejection(
 
 
 def test_run_post_publish_review_approves_when_both_agents_pass(tmp_path: Path) -> None:
+    _write_approved_plan(tmp_path)
+
     class StubAgent:
         def __init__(self, result: ReviewAgentResult) -> None:
             self._result = result
@@ -161,6 +169,10 @@ def test_run_post_publish_review_approves_when_both_agents_pass(tmp_path: Path) 
     monkeypatch.setattr(
         "precision_squad.post_publish_review.GitHubWriteClient.from_env",
         lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
     )
     try:
         result = run_post_publish_review(
@@ -531,6 +543,79 @@ def test_build_review_prompt_rejects_canonical_invalid_approved_plan_cases(
             run_dir=tmp_path,
             pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
         )
+
+
+def test_build_review_prompt_includes_checklist_source_and_empty_design_decisions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_approved_plan(tmp_path)
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+
+    prompt = _build_review_prompt(
+        role="reviewer",
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+    )
+
+    assert "## Deterministic Review Checklist (src/precision_squad/data/docs_checklist.json)" in prompt
+    assert "docs_entrypoint_present" in prompt
+    assert "## Surfaced Design Decisions" in prompt
+    assert "reserved for issue #55" in prompt
+    assert "PR Number: 13" in prompt
+    assert "PR Head SHA: (unavailable)" in prompt
+
+
+def test_run_post_publish_review_fails_fast_when_checklist_loading_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_approved_plan(tmp_path)
+
+    def fail_if_agent_runs(**kwargs):
+        raise AssertionError("review agents should not run before checklist validation")
+
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.stage_contracts.load_review_checklist_rules",
+        lambda: (_ for _ in ()).throw(ValueError("docs checklist field 'rules' must be a list")),
+    )
+
+    class StubWriter:
+        def get_pull_request_head_sha(self, owner: str, repo: str, pull_number: int):
+            del owner, repo, pull_number
+            return "head-sha"
+
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.GitHubWriteClient.from_env",
+        lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+
+    result = run_post_publish_review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+        reviewer=cast(ReviewRunner, type("StubReviewer", (), {"review": staticmethod(fail_if_agent_runs)})()),
+        architect=cast(ReviewRunner, type("StubArchitect", (), {"review": staticmethod(fail_if_agent_runs)})()),
+    )
+
+    assert result.status == "failed_infra"
+    assert "docs checklist field 'rules' must be a list" in result.summary
+    assert result.reviewer_status == "failed_infra"
+    assert result.architect_status == "failed_infra"
 
 
 def test_parse_review_output_accepts_prose_before_json() -> None:
