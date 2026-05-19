@@ -10,6 +10,7 @@ import pytest
 
 from precision_squad.executor import DocsFirstExecutor
 from precision_squad.models import (
+    ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
     IssueAssessment,
@@ -28,7 +29,6 @@ from precision_squad.repair import (
     merge_docs_remediation_execution_result,
     merge_execution_result,
 )
-from precision_squad.models import ApprovedPlan
 
 
 def _intake() -> IssueIntake:
@@ -353,6 +353,11 @@ def test_repair_stage_reports_not_configured_when_command_missing(tmp_path: Path
     run_dir.mkdir()
     contract_dir = run_dir / "execution-contract"
     contract_dir.mkdir(parents=True)
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (contract_dir / "README.snapshot.md").write_text("# Source: README.md\n", encoding="utf-8")
     (run_dir / "approved-plan.json").write_text(
         json.dumps(
             {
@@ -398,6 +403,11 @@ def test_repair_stage_clears_existing_workspace_before_clone(
     run_dir.mkdir()
     contract_dir = run_dir / "execution-contract"
     contract_dir.mkdir(parents=True)
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (contract_dir / "README.snapshot.md").write_text("# Source: README.md\n", encoding="utf-8")
     (run_dir / "approved-plan.json").write_text(
         json.dumps(
             {
@@ -529,6 +539,56 @@ def test_repair_stage_fails_before_workspace_side_effects_when_approved_plan_inv
     assert result.status == "failed_infra"
     assert "approved plan" in result.summary.lower()
     assert "repair_approved_plan_invalid" in result.detail_codes
+
+
+def test_repair_stage_fails_before_workspace_side_effects_when_required_contract_artifact_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+
+    def fail_if_git_runs(*args, **kwargs):
+        raise AssertionError("git commands should not run before stage-contract validation")
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            raise AssertionError("adapter should not run before stage-contract validation")
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", fail_if_git_runs)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "failed_infra"
+    assert "required readme snapshot artifact" in result.summary.lower()
+    assert result.detail_codes == ("repair_stage_contract_invalid",)
 
 
 def test_repair_stage_with_no_adapter_still_fails_when_approved_plan_missing(tmp_path: Path) -> None:

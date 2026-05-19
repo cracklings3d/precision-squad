@@ -10,8 +10,8 @@ from pathlib import Path
 import openai
 from jsonschema import ValidationError, validate
 
-from ..models import ApprovedPlan
-from ..models import IssueIntake, RepairResult, RunRecord, SideIssue
+from ..models import ApprovedPlan, IssueIntake, RepairResult, RunRecord, SideIssue
+from ..stage_contracts import DeveloperStageContract
 from .adapter import (
     REPAIR_RESULT_SCHEMA,
     _build_repair_prompt,
@@ -47,6 +47,7 @@ class VercelAIRepairAdapter:
         run_dir: Path,
         contract_artifact_dir: Path,
         repo_workspace: Path,
+        developer_contract: DeveloperStageContract | None = None,
     ) -> RepairResult:
         stdout_path = run_dir / "repair.stdout.log"
 
@@ -58,6 +59,7 @@ class VercelAIRepairAdapter:
             contract_artifact_dir=contract_artifact_dir,
             repo_workspace=repo_workspace,
             qa_feedback=self.qa_feedback,
+            developer_contract=developer_contract,
         )
 
         resolved_model = self.model or os.environ.get("OPENAI_MODEL", "gpt-4o")
