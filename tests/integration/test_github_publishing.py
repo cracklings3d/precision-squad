@@ -16,13 +16,20 @@ import pytest
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
+    ApprovedPlan,
     GitHubIssue,
     IssueAssessment,
     IssueIntake,
     IssueReference,
     PublishResult,
+    RepairResult,
+    RunRecord,
 )
-from tests.integration.test_pipeline_approved import _ApprovedTestDependencies
+from tests.integration.support import (
+    _ApprovedTestDependencies,
+    approved_plan_for,
+    configure_git_identity,
+)
 
 
 def _runnable_intake() -> IssueIntake:
@@ -52,12 +59,15 @@ class _StubRepairAdapterForGithub:
     def repair(
         self,
         *,
+        approved_plan: ApprovedPlan | None = None,
         intake: IssueIntake,
-        run_record,
+        run_record: RunRecord,
         run_dir: Path,
         contract_artifact_dir: Path,
         repo_workspace: Path,
-    ):
+        developer_contract: object | None = None,
+    ) -> RepairResult:
+        del approved_plan, contract_artifact_dir, developer_contract, intake, run_record
         import subprocess
 
         init_file = repo_workspace / "src" / "clean_pkg" / "__init__.py"
@@ -65,6 +75,7 @@ class _StubRepairAdapterForGithub:
             original = init_file.read_text(encoding="utf-8")
             init_file.write_text(original + "# precision-squad: repaired\n", encoding="utf-8")
 
+        configure_git_identity(repo_workspace)
         subprocess.run(
             ["git", "add", "-A"],
             cwd=repo_workspace,
@@ -87,8 +98,6 @@ class _StubRepairAdapterForGithub:
         patch_path = run_dir / "repair.patch"
         patch_path.write_text(patch_proc.stdout or "", encoding="utf-8")
 
-        from precision_squad.models import RepairResult
-
         return RepairResult(
             status="completed",
             summary="Trivial repair: appended comment to __init__.py",
@@ -96,6 +105,10 @@ class _StubRepairAdapterForGithub:
             workspace_path=str(repo_workspace.parent),
             patch_path=str(patch_path),
         )
+
+    def with_qa_feedback(self, feedback: str) -> _StubRepairAdapterForGithub:
+        self.qa_feedback = feedback
+        return self
 
 
 class _GithubPublishTestDependencies(_ApprovedTestDependencies):
@@ -131,6 +144,7 @@ def test_publish_dry_run_returns_dry_run_status(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     adapter = _StubRepairAdapterForGithub()
@@ -143,6 +157,7 @@ def test_publish_dry_run_returns_dry_run_status(
     )
 
     assert report.publish_result is not None
+    assert report.publish_plan is not None
     assert report.publish_result.status == "dry_run", (
         f"Expected dry_run, got {report.publish_result.status}: "
         f"{report.publish_result.summary}"
@@ -169,6 +184,7 @@ def test_publish_plan_contains_issue_reference_and_verdict(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     adapter = _StubRepairAdapterForGithub()
@@ -181,6 +197,7 @@ def test_publish_plan_contains_issue_reference_and_verdict(
     )
 
     plan = report.publish_plan
+    assert plan is not None
     assert "cracklings3d/markdown-pdf-renderer#9" in plan.body
     assert report.run_record.run_id in plan.body
     assert "approved" in plan.body.lower()
@@ -208,6 +225,7 @@ def test_publish_true_calls_execute_publish_plan_with_publish_true(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     adapter = _StubRepairAdapterForGithub()
@@ -256,6 +274,7 @@ def test_publish_result_persisted_in_run_store(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     adapter = _StubRepairAdapterForGithub()

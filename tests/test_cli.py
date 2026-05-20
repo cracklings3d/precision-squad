@@ -1293,6 +1293,20 @@ def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.Monk
     """Config file values are used when CLI args are not provided."""
     repo_path = tmp_path / "repo-from-config"
     runs_dir = tmp_path / "runs-from-config"
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
     config_file = tmp_path / ".precision-squad.toml"
     config_file.write_text(
         (
@@ -1300,6 +1314,7 @@ def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.Monk
             f'repo_path = "{repo_path.as_posix()}"\n'
             f'runs_dir = "{runs_dir.as_posix()}"\n'
             'repair_agent = "none"\n'
+            f'approved_plan_path = "{plan_path.as_posix()}"\n'
         ),
         encoding="utf-8",
     )
@@ -1373,7 +1388,15 @@ def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
 
-    status = main(["repair", "issue", "owner/repo#1"])
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
 
     assert status == 0
     assert captured_params["repo_path"] == repo_path
@@ -1382,6 +1405,20 @@ def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_cli_args_override_config_file_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
     config_file = tmp_path / ".precision-squad.toml"
     config_file.write_text(
         (
@@ -1389,6 +1426,7 @@ def test_cli_args_override_config_file_values(tmp_path: Path, monkeypatch: pytes
             'repo_path = "/from/config"\n'
             'runs_dir = "/config/runs"\n'
             'repair_agent = "none"\n'
+            f'approved_plan_path = "{plan_path.as_posix()}"\n'
         ),
         encoding="utf-8",
     )
@@ -1473,6 +1511,8 @@ def test_cli_args_override_config_file_values(tmp_path: Path, monkeypatch: pytes
             str(tmp_path / "runs-from-cli"),
             "--repair-agent",
             "opencode",
+            "--approved-plan-path",
+            str(plan_path),
         ]
     )
 
@@ -1645,6 +1685,20 @@ def test_repair_issue_no_publish_cli_overrides_true_config(
 ) -> None:
     repo_path = tmp_path / "repo-from-config"
     runs_dir = tmp_path / "runs-from-config"
+    plan_path = tmp_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
     (tmp_path / ".precision-squad.toml").write_text(
         (
             "[repair.issue]\n"
@@ -1652,6 +1706,7 @@ def test_repair_issue_no_publish_cli_overrides_true_config(
             f'runs_dir = "{runs_dir.as_posix()}"\n'
             "publish = true\n"
             'repair_agent = "none"\n'
+            f'approved_plan_path = "{plan_path.as_posix()}"\n'
         ),
         encoding="utf-8",
     )
@@ -1723,7 +1778,16 @@ def test_repair_issue_no_publish_cli_overrides_true_config(
 
     monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
 
-    status = main(["repair", "issue", "owner/repo#1", "--no-publish"])
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--no-publish",
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
 
     assert status == 0
     assert captured_params["publish"] is False
@@ -1736,6 +1800,20 @@ def test_repair_issue_uses_explicit_repo_path_as_config_discovery_root(
     workspace.mkdir()
     repo_path = tmp_path / "target-repo"
     repo_path.mkdir()
+    plan_path = repo_path / "approved-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
     (workspace / ".precision-squad.toml").write_text(
         (
             "[repair.issue]\n"
@@ -1749,6 +1827,7 @@ def test_repair_issue_uses_explicit_repo_path_as_config_discovery_root(
             "[repair.issue]\n"
             f'runs_dir = "{(repo_path / "runs-from-repo").as_posix()}"\n'
             'repair_agent = "none"\n'
+            f'approved_plan_path = "{plan_path.as_posix()}"\n'
         ),
         encoding="utf-8",
     )
@@ -1828,6 +1907,8 @@ def test_repair_issue_uses_explicit_repo_path_as_config_discovery_root(
             "owner/repo#1",
             "--repo-path",
             str(repo_path),
+            "--approved-plan-path",
+            str(plan_path),
         ]
     )
 

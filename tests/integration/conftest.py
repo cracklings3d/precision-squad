@@ -17,6 +17,7 @@ from precision_squad.models import (
     RepairResult,
     RunRecord,
 )
+from tests.integration.support import configure_git_identity
 
 # ---------------------------------------------------------------------------
 # GitHub token
@@ -238,12 +239,15 @@ class StubRepairAdapter:
     def repair(
         self,
         *,
+        approved_plan: object | None = None,
         intake: IssueIntake,
         run_record: RunRecord,
         run_dir: Path,
         contract_artifact_dir: Path,
         repo_workspace: Path,
+        developer_contract: object | None = None,
     ) -> RepairResult:
+        del approved_plan, developer_contract
         repo_workspace.resolve()
 
         init_file = self._find_init(repo_workspace)
@@ -253,6 +257,7 @@ class StubRepairAdapter:
                 encoding="utf-8",
             )
 
+        configure_git_identity(repo_workspace)
         subprocess.run(
             ["git", "add", "-A"],
             cwd=repo_workspace,

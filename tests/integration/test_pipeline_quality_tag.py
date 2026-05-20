@@ -13,12 +13,19 @@ import pytest
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
+    ApprovedPlan,
     GitHubIssue,
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    RepairResult,
+    RunRecord,
 )
-from tests.integration.test_pipeline_approved import _ApprovedTestDependencies
+from tests.integration.support import (
+    _ApprovedTestDependencies,
+    approved_plan_for,
+    configure_git_identity,
+)
 
 
 def _runnable_intake() -> IssueIntake:
@@ -59,12 +66,15 @@ class _RepairAdapterThatFixesFailingTest:
     def repair(
         self,
         *,
+        approved_plan: ApprovedPlan | None = None,
         intake: IssueIntake,
-        run_record,
+        run_record: RunRecord,
         run_dir: Path,
         contract_artifact_dir: Path,
         repo_workspace: Path,
-    ):
+        developer_contract: object | None = None,
+    ) -> RepairResult:
+        del approved_plan, contract_artifact_dir, developer_contract, intake, run_record
         import subprocess
 
         test_file = repo_workspace / "tests" / "test_core.py"
@@ -76,6 +86,7 @@ class _RepairAdapterThatFixesFailingTest:
             )
             test_file.write_text(fixed, encoding="utf-8")
 
+        configure_git_identity(repo_workspace)
         subprocess.run(
             ["git", "add", "-A"],
             cwd=repo_workspace,
@@ -97,8 +108,6 @@ class _RepairAdapterThatFixesFailingTest:
         )
         patch_path = run_dir / "repair.patch"
         patch_path.write_text(patch_proc.stdout or "", encoding="utf-8")
-
-        from precision_squad.models import RepairResult
 
         return RepairResult(
             status="completed",
@@ -126,6 +135,7 @@ def test_broken_baseline_improved_to_approved(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     deps = _ProvisionalTestDependencies()
@@ -150,6 +160,8 @@ def test_broken_baseline_improved_to_approved(
     )
     assert report.qa_result.quality == "green"
 
+    assert report.governance_verdict is not None
+    assert report.publish_plan is not None
     assert report.governance_verdict.status == "approved", (
         f"Expected approved, got {report.governance_verdict.status}: "
         f"{report.governance_verdict.summary}"
@@ -175,6 +187,7 @@ def test_approved_publish_plan_contains_governance_verdict(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     deps = _ProvisionalTestDependencies()
@@ -186,6 +199,7 @@ def test_approved_publish_plan_contains_governance_verdict(
     )
 
     plan = report.publish_plan
+    assert plan is not None
     assert plan.status == "draft_pr"
     assert "approved" in plan.body.lower()
 
@@ -199,6 +213,7 @@ class _ProvisionalTestDependencies(_ApprovedTestDependencies):
     def create_repair_adapter(
         self, *, repair_agent: str, repair_model: str | None
     ):
+        del repair_model
         if repair_agent == "none":
             return None
         return self._adapter

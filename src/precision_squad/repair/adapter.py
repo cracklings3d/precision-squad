@@ -18,6 +18,12 @@ from ..opencode_model import resolve_opencode_model
 from ..stage_contracts import DeveloperStageContract, render_developer_approved_plan_context
 
 
+def _extract_json_events(stdout: str) -> list[dict]:
+    """Backward-compatible alias for JSON event extraction."""
+
+    return extract_json_events(stdout)
+
+
 @runtime_checkable
 class RepairAdapter(Protocol):
     """Common interface for repair adapters."""
@@ -250,12 +256,14 @@ def _extract_side_issues(repair_json: dict) -> tuple[SideIssue, ...]:
             labels = tuple(str(label) for label in labels_raw if isinstance(label, str))
         else:
             labels = ()
-        side_issues.append(SideIssue(
-            title=title,
-            summary=summary,
-            body=body,
-            labels=labels,
-        ))
+        side_issues.append(
+            SideIssue(
+                title=title,
+                summary=summary,
+                body=body,
+                labels=labels,
+            )
+        )
     return tuple(side_issues)
 
 

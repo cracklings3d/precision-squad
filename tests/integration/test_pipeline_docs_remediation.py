@@ -15,7 +15,9 @@ from pathlib import Path
 import pytest
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
-from precision_squad.models import IssueIntake
+from precision_squad.models import ApprovedPlan, IssueIntake, RepairResult, RunRecord
+from precision_squad.repair import RepairAdapter
+from tests.integration.support import approved_plan_for, configure_git_identity
 
 # ---------------------------------------------------------------------------
 # Tailored repair adapters for docs-remediation scenarios
@@ -38,12 +40,15 @@ class _DocsFixRepairAdapter:
     def repair(
         self,
         *,
+        approved_plan: ApprovedPlan | None = None,
         intake: IssueIntake,
-        run_record,
+        run_record: RunRecord,
         run_dir: Path,
         contract_artifact_dir: Path,
         repo_workspace: Path,
-    ):
+        developer_contract: object | None = None,
+    ) -> RepairResult:
+        del approved_plan, contract_artifact_dir, developer_contract, intake, run_record
         import subprocess
 
         readme = repo_workspace / "README.md"
@@ -74,6 +79,7 @@ class _DocsFixRepairAdapter:
             )
             readme.write_text(fixed, encoding="utf-8")
 
+        configure_git_identity(repo_workspace)
         subprocess.run(
             ["git", "add", "-A"],
             cwd=repo_workspace,
@@ -96,8 +102,6 @@ class _DocsFixRepairAdapter:
         patch_path = run_dir / "repair.patch"
         patch_path.write_text(patch_proc.stdout or "", encoding="utf-8")
 
-        from precision_squad.models import RepairResult
-
         return RepairResult(
             status="completed",
             summary="Docs-remediation repair: fixed GTK3 section in README.md.",
@@ -105,6 +109,10 @@ class _DocsFixRepairAdapter:
             workspace_path=str(repo_workspace.parent),
             patch_path=str(patch_path),
         )
+
+    def with_qa_feedback(self, feedback: str) -> _DocsFixRepairAdapter:
+        self.qa_feedback = feedback
+        return self
 
 
 class _NoOpRepairAdapter:
@@ -116,24 +124,30 @@ class _NoOpRepairAdapter:
         self.model: str | None = None
         self.qa_feedback: str | None = None
 
-    def repair(self, **kwargs):
+    def repair(self, **kwargs) -> RepairResult:
         import subprocess
 
-        from precision_squad.models import RepairResult
-
-        kwargs = kwargs
-        subprocess.run(["git", "add", "-A"], capture_output=True)
+        approved_plan = kwargs.pop("approved_plan", None)
+        del approved_plan
+        repo_workspace = kwargs["repo_workspace"]
+        configure_git_identity(repo_workspace)
+        subprocess.run(["git", "add", "-A"], cwd=repo_workspace, capture_output=True)
         subprocess.run(
             ["git", "commit", "-m", "noop repair"],
+            cwd=repo_workspace,
             capture_output=True,
         )
         return RepairResult(
             status="completed",
             summary="Repair stage ran but made no changes.",
             detail_codes=("repair_produced_no_changes",),
-            workspace_path=str(kwargs["repo_workspace"].parent),
+            workspace_path=str(repo_workspace.parent),
             patch_path="",
         )
+
+    def with_qa_feedback(self, feedback: str) -> _NoOpRepairAdapter:
+        self.qa_feedback = feedback
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +157,13 @@ class _NoOpRepairAdapter:
 class _DocsRemediationDependencies:
     """Wires the docs-remediation repair path through RunCoordinator."""
 
-    def __init__(self, adapter) -> None:
+    def __init__(self, adapter: RepairAdapter) -> None:
         self._adapter = adapter
 
-    def create_repair_adapter(self, *, repair_agent: str, repair_model: str | None):
+    def create_repair_adapter(
+        self, *, repair_agent: str, repair_model: str | None
+    ) -> RepairAdapter | None:
+        del repair_model
         if repair_agent == "none":
             return None
         return self._adapter
@@ -231,6 +248,7 @@ def test_docs_remediation_succeeds_after_fix(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for("cracklings3d/markdown-pdf-renderer#16"),
     )
 
     deps = _DocsRemediationDependencies(_DocsFixRepairAdapter())
@@ -242,6 +260,8 @@ def test_docs_remediation_succeeds_after_fix(
     )
 
     assert report.execution_result is not None
+    assert report.governance_verdict is not None
+    assert report.publish_plan is not None
     assert report.execution_result.status == "completed", (
         f"Expected completed, got {report.execution_result.status}: "
         f"{report.execution_result.summary}"
@@ -274,6 +294,7 @@ def test_docs_remediation_stays_blocked_without_fix(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for("cracklings3d/markdown-pdf-renderer#16"),
     )
 
     deps = _DocsRemediationDependencies(_NoOpRepairAdapter())
@@ -285,6 +306,8 @@ def test_docs_remediation_stays_blocked_without_fix(
     )
 
     assert report.execution_result is not None
+    assert report.governance_verdict is not None
+    assert report.publish_plan is not None
     assert report.execution_result.status in {"missing_docs", "blocked"}, (
         f"Expected missing_docs or blocked, got {report.execution_result.status}: "
         f"{report.execution_result.summary}"
@@ -315,6 +338,7 @@ def test_docs_remediation_persists_repair_artifacts(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for("cracklings3d/markdown-pdf-renderer#16"),
     )
 
     deps = _DocsRemediationDependencies(_DocsFixRepairAdapter())
