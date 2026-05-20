@@ -9,7 +9,14 @@ import pytest
 
 from precision_squad import __version__
 from precision_squad.bootstrap import main as bootstrap_main
-from precision_squad.cli import _prompt_for_run_selection, _repair_issue_prompt_is_interactive, main
+from precision_squad.cli import (
+    _CliRepairDependencies,
+    _REPAIR_AGENT_CHOICES,
+    _build_repair_adapter,
+    _prompt_for_run_selection,
+    _repair_issue_prompt_is_interactive,
+    main,
+)
 from precision_squad.coordinator import RepairIssueReport
 from precision_squad.models import (
     ApprovedPlan,
@@ -27,6 +34,7 @@ from precision_squad.models import (
     RunRequest,
 )
 from precision_squad.run_store import RunStore
+from precision_squad.repair import OpenCodeRepairAdapter, RepairAdapter, VercelAIRepairAdapter
 
 
 def test_main_without_args_shows_help(capsys) -> None:
@@ -36,6 +44,40 @@ def test_main_without_args_shows_help(capsys) -> None:
     assert status == 0
     assert "precision-squad" in captured.out
     assert "run" in captured.out
+
+
+def test_repair_agent_choices_remain_unchanged() -> None:
+    assert _REPAIR_AGENT_CHOICES == ("none", "opencode", "vercel-ai")
+
+
+def test_build_repair_adapter_returns_none_for_none_agent() -> None:
+    assert _build_repair_adapter(repair_agent="none", repair_model=None) is None
+
+
+def test_build_repair_adapter_returns_opencode_as_primary_concrete_implementation() -> None:
+    adapter = _build_repair_adapter(repair_agent="opencode", repair_model="test-model")
+
+    assert isinstance(adapter, RepairAdapter)
+    assert isinstance(adapter, OpenCodeRepairAdapter)
+    assert adapter.model == "test-model"
+
+
+def test_build_repair_adapter_returns_compatibility_vercel_ai_implementation() -> None:
+    adapter = _build_repair_adapter(repair_agent="vercel-ai", repair_model="test-model")
+
+    assert isinstance(adapter, RepairAdapter)
+    assert isinstance(adapter, VercelAIRepairAdapter)
+    assert adapter.model == "test-model"
+
+
+def test_cli_repair_dependencies_construct_seam_compatible_adapter() -> None:
+    adapter = _CliRepairDependencies().create_repair_adapter(
+        repair_agent="opencode",
+        repair_model=None,
+    )
+
+    assert isinstance(adapter, RepairAdapter)
+    assert isinstance(adapter, OpenCodeRepairAdapter)
 
 
 def test_version_flag_shows_package_version(capsys) -> None:

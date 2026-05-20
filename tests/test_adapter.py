@@ -14,6 +14,7 @@ from precision_squad.models import (
     NamedReference,
     RunRecord,
 )
+from precision_squad.repair import OpenCodeRepairAdapter, RepairAdapter, VercelAIRepairAdapter
 from precision_squad.repair.adapter import (
     _build_repair_prompt,
     _extract_design_decisions,
@@ -50,6 +51,23 @@ def test_extract_json_events_empty_stdout() -> None:
 def test_extract_json_events_no_dicts() -> None:
     stdout = '"just a string"\n123\n[1, 2, 3]\n'
     assert _extract_json_events(stdout) == []
+
+
+def test_repair_package_exports_canonical_seam_first() -> None:
+    import precision_squad.repair as repair
+
+    assert repair.RepairAdapter is RepairAdapter
+    assert repair.__all__[:3] == ["RepairAdapter", "OpenCodeRepairAdapter", "RepairStage"]
+
+
+def test_repair_package_exports_opencode_before_compatibility_adapter() -> None:
+    import precision_squad.repair as repair
+
+    assert repair.OpenCodeRepairAdapter is OpenCodeRepairAdapter
+    assert repair.VercelAIRepairAdapter is VercelAIRepairAdapter
+    assert repair.__all__.index("OpenCodeRepairAdapter") < repair.__all__.index(
+        "VercelAIRepairAdapter"
+    )
 
 
 # ---------------------------------------------------------------------------
