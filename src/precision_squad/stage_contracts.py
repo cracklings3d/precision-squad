@@ -148,9 +148,10 @@ def load_review_stage_contract(
             intake.issue.reference.repo,
             pull_request_url,
         )
-        surfaced_justification_status, surfaced_design_decisions = _extract_surfaced_design_decisions(
-            pr_body
-        )
+        (
+            surfaced_justification_status,
+            surfaced_design_decisions,
+        ) = _extract_surfaced_design_decisions(pr_body)
 
     return ReviewStageContract(
         approved_plan_text=approved_plan_text,
@@ -228,7 +229,10 @@ def render_review_prompt(role: str, contract: ReviewStageContract) -> str:
             "Review the published PR and respond with exactly one JSON object.",
             "Judge implementation alignment against the approved plan.",
             "Use only the surfaced PR-body ## Design Decisions section as justification evidence.",
-            "If surfaced design decisions are absent or unusable, treat them as no valid justification.",
+            (
+                "If surfaced design decisions are absent or unusable, "
+                "treat them as no valid justification."
+            ),
             (
                 'Use the shape: {"status":"approved|rejected","summary":"...",'
                 '"feedback":["..."],"plan_alignment":"aligned|justified_deviation|'
