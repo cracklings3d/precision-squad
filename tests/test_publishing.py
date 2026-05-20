@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from precision_squad.models import (
+    DecisionLogArtifact,
+    DesignDecision,
     GitHubIssue,
     GovernanceVerdict,
     IssueAssessment,
@@ -15,7 +19,11 @@ from precision_squad.models import (
     RunRecord,
     SideIssue,
 )
-from precision_squad.publishing import build_publish_plan
+from precision_squad.publishing import (
+    RequiredDecisionLogArtifactMissingError,
+    build_publish_plan,
+)
+from precision_squad.run_store import RunStore
 
 
 def test_build_publish_plan_creates_draft_pr_for_approved() -> None:
@@ -49,6 +57,140 @@ def test_build_publish_plan_creates_draft_pr_for_approved() -> None:
 
     assert plan.status == "draft_pr"
     assert plan.title == "Add --version flag to CLI"
+
+
+def test_build_publish_plan_includes_design_decisions_from_persisted_artifact(tmp_path: Path) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    run_record = RunRecord(
+        run_id="run-123",
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        status="runnable",
+        created_at="2026-04-28T00:00:00Z",
+        updated_at="2026-04-28T00:00:00Z",
+        run_dir=str(run_dir),
+    )
+    RunStore(tmp_path / "runs").write_decision_log(
+        run_dir,
+        DecisionLogArtifact(
+            attempt=1,
+            entries=(
+                DesignDecision(
+                    sequence=1,
+                    summary="Persist in coordinator",
+                    rationale="Publishing must read canonical persisted evidence.",
+                    plan_steps=("Persist the current attempt's decision log",),
+                    named_references=("src/precision_squad/coordinator.py",),
+                    affected_targets=("src/precision_squad/coordinator.py",),
+                ),
+            ),
+        ),
+    )
+    verdict = GovernanceVerdict(
+        status="approved",
+        summary="QA passed.",
+        reason_codes=(),
+    )
+
+    plan = build_publish_plan(intake, run_record, verdict)
+
+    assert "## Design Decisions" in plan.body
+    assert "```json" in plan.body
+    assert "Persist in coordinator" in plan.body
+    assert "canonical persisted evidence" in plan.body
+
+
+def test_build_publish_plan_omits_design_decisions_when_artifact_empty(tmp_path: Path) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    run_record = RunRecord(
+        run_id="run-123",
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        status="runnable",
+        created_at="2026-04-28T00:00:00Z",
+        updated_at="2026-04-28T00:00:00Z",
+        run_dir=str(run_dir),
+    )
+    RunStore(tmp_path / "runs").write_decision_log(
+        run_dir,
+        DecisionLogArtifact(attempt=1, entries=()),
+    )
+    verdict = GovernanceVerdict(
+        status="approved",
+        summary="QA passed.",
+        reason_codes=(),
+    )
+
+    plan = build_publish_plan(intake, run_record, verdict)
+
+    assert "## Design Decisions" not in plan.body
+
+
+def test_build_publish_plan_fails_when_completed_repair_missing_decision_log_artifact(
+    tmp_path: Path,
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 9),
+            title="[Enhancement] Add --version flag to CLI",
+            body="## Description\nAdd a version flag.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+        ),
+        summary="Add --version flag to CLI",
+        problem_statement="Add a version flag.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    run_record = RunRecord(
+        run_id="run-123",
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        status="runnable",
+        created_at="2026-04-28T00:00:00Z",
+        updated_at="2026-04-28T00:00:00Z",
+        run_dir=str(run_dir),
+    )
+    verdict = GovernanceVerdict(
+        status="approved",
+        summary="QA passed.",
+        reason_codes=(),
+    )
+    repair_result = RepairResult(
+        status="completed",
+        summary="Repair completed.",
+        detail_codes=("repair_stage_completed",),
+    )
+
+    with pytest.raises(
+        RequiredDecisionLogArtifactMissingError,
+        match="Missing required decision-log artifact",
+    ):
+        build_publish_plan(intake, run_record, verdict, repair_result)
 
 
 def test_build_publish_plan_embeds_blocker_fingerprint_for_follow_up_issue() -> None:

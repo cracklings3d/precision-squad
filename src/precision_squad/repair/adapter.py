@@ -13,7 +13,14 @@ from jsonschema import ValidationError, validate
 from ..docs_remediation import extract_docs_target_findings
 from ..intake import is_docs_remediation_issue
 from ..json_events import extract_json_events
-from ..models import ApprovedPlan, IssueIntake, RepairResult, RunRecord, SideIssue
+from ..models import (
+    ApprovedPlan,
+    DesignDecision,
+    IssueIntake,
+    RepairResult,
+    RunRecord,
+    SideIssue,
+)
 from ..opencode_model import resolve_opencode_model
 from ..stage_contracts import DeveloperStageContract, render_developer_approved_plan_context
 
@@ -78,6 +85,45 @@ REPAIR_RESULT_SCHEMA = {
                     },
                 },
                 "required": ["title", "summary", "body"],
+            },
+        },
+        "design_decisions": {
+            "type": "array",
+            "description": "Non-obvious implementation choices made during the repair.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sequence": {
+                        "type": "integer",
+                        "description": "Stable order within the current attempt.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "pattern": ".*\\S.*",
+                        "description": "Concise description of the decision.",
+                    },
+                    "rationale": {
+                        "type": "string",
+                        "pattern": ".*\\S.*",
+                        "description": "Why this path was chosen.",
+                    },
+                    "plan_steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Relevant approved-plan steps.",
+                    },
+                    "named_references": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Relevant approved-plan named references.",
+                    },
+                    "affected_targets": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Affected files, interfaces, or seams.",
+                    },
+                },
+                "required": ["sequence", "summary", "rationale"],
             },
         },
     },
@@ -154,8 +200,9 @@ class OpenCodeRepairAdapter:
         )
         stdout_path.write_text(command_result.stdout, encoding="utf-8", errors="ignore")
         stderr_path.write_text(command_result.stderr, encoding="utf-8", errors="ignore")
+        json_events = extract_json_events(command_result.stdout)
         transcript_path.write_text(
-            json.dumps(extract_json_events(command_result.stdout), indent=2) + "\n",
+            json.dumps(json_events, indent=2) + "\n",
             encoding="utf-8",
         )
 
@@ -202,9 +249,22 @@ class OpenCodeRepairAdapter:
             )
 
         repair_json = _parse_repair_json(command_result.stdout)
+        last_event = json_events[-1] if json_events else None
+        if repair_json is None and isinstance(last_event, dict) and "design_decisions" in last_event:
+            return RepairResult(
+                status="blocked",
+                summary="Repair agent produced malformed structured output for `design_decisions`.",
+                detail_codes=("repair_result_invalid",),
+                workspace_path=str(repo_workspace.parent),
+                patch_path=str(patch_path),
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+            )
         side_issues: tuple[SideIssue, ...] = ()
+        design_decisions: tuple[DesignDecision, ...] = ()
         if repair_json is not None:
             side_issues = _extract_side_issues(repair_json)
+            design_decisions = _extract_design_decisions(repair_json)
 
         return RepairResult(
             status="completed",
@@ -219,6 +279,7 @@ class OpenCodeRepairAdapter:
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             side_issues=side_issues,
+            design_decisions=design_decisions,
         )
 
 
@@ -265,6 +326,46 @@ def _extract_side_issues(repair_json: dict) -> tuple[SideIssue, ...]:
             )
         )
     return tuple(side_issues)
+
+
+def _extract_design_decisions(repair_json: dict) -> tuple[DesignDecision, ...]:
+    """Extract structured design decisions from validated repair output."""
+    decisions_raw = repair_json.get("design_decisions")
+    if not isinstance(decisions_raw, list):
+        return ()
+
+    decisions: list[DesignDecision] = []
+    for item in decisions_raw:
+        if not isinstance(item, dict):
+            continue
+        sequence = item.get("sequence")
+        summary = item.get("summary")
+        rationale = item.get("rationale")
+        if (
+            not isinstance(sequence, int)
+            or not isinstance(summary, str)
+            or not isinstance(rationale, str)
+            or not summary.strip()
+            or not rationale.strip()
+        ):
+            continue
+        decisions.append(
+            DesignDecision(
+                sequence=sequence,
+                summary=summary,
+                rationale=rationale,
+                plan_steps=_extract_string_tuple(item.get("plan_steps")),
+                named_references=_extract_string_tuple(item.get("named_references")),
+                affected_targets=_extract_string_tuple(item.get("affected_targets")),
+            )
+        )
+    return tuple(decisions)
+
+
+def _extract_string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str))
 
 
 def _build_repair_prompt(

@@ -133,6 +133,26 @@ class SideIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class DesignDecision:
+    """One non-obvious implementation choice recorded for a single repair attempt."""
+
+    sequence: int
+    summary: str
+    rationale: str
+    plan_steps: tuple[str, ...] = ()
+    named_references: tuple[str, ...] = ()
+    affected_targets: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionLogArtifact:
+    """Canonical persisted developer decision log for a single repair attempt."""
+
+    attempt: int
+    entries: tuple[DesignDecision, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class RepairResult:
     """Normalized result for the post-synthesis repair stage."""
 
@@ -144,6 +164,7 @@ class RepairResult:
     stdout_path: str | None = None
     stderr_path: str | None = None
     side_issues: tuple[SideIssue, ...] = ()
+    design_decisions: tuple[DesignDecision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,6 +9,8 @@ import pytest
 
 from precision_squad.models import (
     ApprovedPlan,
+    DecisionLogArtifact,
+    DesignDecision,
     EvaluationResult,
     ExecutionResult,
     GitHubIssue,
@@ -163,6 +165,82 @@ def test_write_qa_results_uses_phase_specific_filenames(tmp_path: Path) -> None:
 
     assert (run_dir / "qa-baseline-result.json").exists()
     assert (run_dir / "qa-result.json").exists()
+
+
+def test_write_and_load_decision_log_uses_attempt_scoped_filename(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    artifact = DecisionLogArtifact(
+        attempt=2,
+        entries=(
+            DesignDecision(
+                sequence=1,
+                summary="Keep decision-log persistence in coordinator",
+                rationale="Publishing must load persisted evidence rather than transient state.",
+                plan_steps=("Persist decision-log artifact before publish-plan construction",),
+                named_references=("src/precision_squad/coordinator.py",),
+                affected_targets=("src/precision_squad/coordinator.py",),
+            ),
+        ),
+    )
+
+    store.write_decision_log(run_dir, artifact)
+
+    saved_path = run_dir / "decision-log.attempt-2.json"
+    assert saved_path.exists()
+    loaded = store.load_decision_log(run_dir, attempt=2)
+    assert loaded == artifact
+
+
+def test_write_decision_log_preserves_prior_attempt_files(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    store.write_decision_log(
+        run_dir,
+        DecisionLogArtifact(
+            attempt=1,
+            entries=(
+                DesignDecision(
+                    sequence=1,
+                    summary="Attempt one choice",
+                    rationale="First attempt rationale.",
+                ),
+            ),
+        ),
+    )
+    first_payload = (run_dir / "decision-log.attempt-1.json").read_text(encoding="utf-8")
+
+    store.write_decision_log(
+        run_dir,
+        DecisionLogArtifact(
+            attempt=2,
+            entries=(
+                DesignDecision(
+                    sequence=1,
+                    summary="Attempt two choice",
+                    rationale="Second attempt rationale.",
+                ),
+            ),
+        ),
+    )
+
+    assert (run_dir / "decision-log.attempt-1.json").read_text(encoding="utf-8") == first_payload
+    assert (run_dir / "decision-log.attempt-2.json").exists()
+
+
+def test_write_decision_log_persists_explicit_empty_entries(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    store.write_decision_log(run_dir, DecisionLogArtifact(attempt=1, entries=()))
+
+    payload = json.loads((run_dir / "decision-log.attempt-1.json").read_text(encoding="utf-8"))
+    assert payload == {"attempt": 1, "entries": []}
 
 
 def test_load_approved_plan_rejects_unapproved_artifact(tmp_path: Path) -> None:

@@ -50,6 +50,22 @@ def test_parse_llm_response_valid_with_side_issues() -> None:
     assert len(result["side_issues"]) == 1
 
 
+def test_parse_llm_response_valid_with_design_decisions() -> None:
+    payload = {
+        "summary": "Fixed the bug.",
+        "design_decisions": [
+            {
+                "sequence": 1,
+                "summary": "Persist in coordinator",
+                "rationale": "Publish plan must read persisted evidence.",
+            }
+        ],
+    }
+    result = _parse_llm_response(json.dumps(payload))
+    assert result is not None
+    assert len(result["design_decisions"]) == 1
+
+
 def test_parse_llm_response_empty_string() -> None:
     assert _parse_llm_response("") is None
 
@@ -76,6 +92,33 @@ def test_parse_llm_response_side_issues_wrong_type() -> None:
 
 def test_parse_llm_response_side_issue_missing_required() -> None:
     payload = json.dumps({"summary": "done", "side_issues": [{"title": "Only title"}]})
+    assert _parse_llm_response(payload) is None
+
+
+def test_parse_llm_response_design_decision_missing_required() -> None:
+    payload = json.dumps(
+        {"summary": "done", "design_decisions": [{"sequence": 1, "summary": "Only summary"}]}
+    )
+    assert _parse_llm_response(payload) is None
+
+
+def test_parse_llm_response_design_decision_rejects_whitespace_summary() -> None:
+    payload = json.dumps(
+        {
+            "summary": "done",
+            "design_decisions": [{"sequence": 1, "summary": "   ", "rationale": "Valid rationale"}],
+        }
+    )
+    assert _parse_llm_response(payload) is None
+
+
+def test_parse_llm_response_design_decision_rejects_whitespace_rationale() -> None:
+    payload = json.dumps(
+        {
+            "summary": "done",
+            "design_decisions": [{"sequence": 1, "summary": "Valid summary", "rationale": "\n\t "}],
+        }
+    )
     assert _parse_llm_response(payload) is None
 
 
@@ -332,6 +375,51 @@ def test_repair_adapter_with_side_issues(tmp_path: Path) -> None:
     assert result.status == "completed"
     assert len(result.side_issues) == 1
     assert result.side_issues[0].title == "Other bug"
+
+
+def test_repair_adapter_with_design_decisions(tmp_path: Path) -> None:
+    intake = _make_intake()
+    run_record = _make_run_record()
+    contract_dir = tmp_path / "contract"
+    contract_dir.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    repo_workspace = tmp_path / "repo"
+    repo_workspace.mkdir()
+
+    payload = {
+        "summary": "Fixed the bug.",
+        "design_decisions": [
+            {
+                "sequence": 1,
+                "summary": "Persist in coordinator",
+                "rationale": "Publish plan must load stored evidence.",
+                "plan_steps": ["Persist artifact before publish-plan construction"],
+            }
+        ],
+    }
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = json.dumps(payload)
+
+    with patch("precision_squad.repair.llm_adapter.openai.OpenAI") as mock_openai:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        adapter = VercelAIRepairAdapter(model="gpt-4o")
+        result = adapter.repair(
+            approved_plan=_approved_plan(),
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            contract_artifact_dir=contract_dir,
+            repo_workspace=repo_workspace,
+        )
+
+    assert result.status == "completed"
+    assert len(result.design_decisions) == 1
+    assert result.design_decisions[0].summary == "Persist in coordinator"
 
 
 def test_repair_adapter_model_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
