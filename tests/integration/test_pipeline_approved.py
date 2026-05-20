@@ -22,6 +22,7 @@ from precision_squad.models import (
     IssueIntake,
     IssueReference,
 )
+from tests.integration.support import _ApprovedTestDependencies, approved_plan_for
 
 
 def _runnable_intake() -> IssueIntake:
@@ -61,6 +62,7 @@ def test_approved_happy_path(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
@@ -80,6 +82,9 @@ def test_approved_happy_path(
     assert report.qa_result.status == "passed"
     assert report.qa_result.quality == "green"
     assert report.baseline_qa_result is not None
+    assert report.governance_verdict is not None
+    assert report.publish_plan is not None
+    assert report.publish_result is not None
     assert report.governance_verdict.status == "approved"
     assert report.publish_plan.status == "draft_pr"
     assert report.publish_result.status == "dry_run"
@@ -104,6 +109,7 @@ def test_approved_persists_all_artifacts(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
@@ -158,6 +164,7 @@ def test_approved_qa_result_has_correct_phase(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
@@ -193,6 +200,7 @@ def test_approved_publish_plan_has_required_fields(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
@@ -204,6 +212,7 @@ def test_approved_publish_plan_has_required_fields(
     )
 
     plan = report.publish_plan
+    assert plan is not None
     assert plan.status == "draft_pr"
     assert plan.title
     assert plan.body
@@ -228,6 +237,7 @@ def test_approved_exit_code_is_zero(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
@@ -241,122 +251,3 @@ def test_approved_exit_code_is_zero(
     assert report.exit_code == 0
 
 
-# ---------------------------------------------------------------------------
-# Test dependencies (wires real components except GitHub writes)
-# ---------------------------------------------------------------------------
-
-class _ApprovedTestDependencies:
-    """Dependency wiring for the approved pipeline path.
-
-    Uses real:
-    - DocsFirstExecutor (via RunCoordinator's internal wiring)
-    - run_repair_qa_loop (real implementation)
-    - synthesis_artifacts_ready (real implementation)
-
-    Mocks:
-    - GitHub write operations (returns dry_run PublishResult)
-    - post-publish review (returns None)
-    """
-
-    def __init__(self, adapter) -> None:
-        self._adapter = adapter
-
-    def create_repair_adapter(
-        self, *, repair_agent: str, repair_model: str | None
-    ):
-        if repair_agent == "none":
-            return None
-        return self._adapter
-
-    def run_repair_qa_loop(
-        self,
-        *,
-        repo_path: Path,
-        adapter,
-        intake: IssueIntake,
-        run_record,
-        run_dir: Path,
-        contract_artifact_dir: Path,
-    ):
-        from precision_squad.repair.orchestration import (
-            RepairStage,
-            _failure_signature,
-            _finalize_qa_result,
-            _run_baseline_qa,
-        )
-        from precision_squad.repair.qa import WorkspaceQaVerifier
-
-        verifier = WorkspaceQaVerifier()
-        qa_result = _run_baseline_qa(
-            repo_path=repo_path,
-            run_dir=run_dir,
-            contract_artifact_dir=contract_artifact_dir,
-            verifier=verifier,
-        )
-        baseline_result = qa_result
-        baseline_failure_signature = (
-            _failure_signature(baseline_result)
-            if baseline_result.status in {"failed", "failed_infra"}
-            else frozenset()
-        )
-
-        repair_result = RepairStage(
-            repo_path=repo_path,
-            adapter=adapter,
-        ).execute(
-            intake=intake,
-            run_record=run_record,
-            run_dir=run_dir,
-            contract_artifact_dir=contract_artifact_dir,
-        )
-
-        if repair_result.status != "completed":
-            return repair_result, baseline_result, qa_result
-
-
-        workspace_path = Path(repair_result.workspace_path or "")
-        repo_workspace = workspace_path / "repo"
-        final_qa = verifier.verify(
-            run_dir=run_dir,
-            contract_artifact_dir=contract_artifact_dir,
-            repo_workspace=repo_workspace,
-            iteration=1,
-        )
-        qa_result = _finalize_qa_result(
-            qa_result=final_qa,
-            baseline_result=baseline_result,
-            baseline_failure_signature=baseline_failure_signature,
-        )
-
-        return repair_result, baseline_result, qa_result
-
-    def run_docs_remediation_repair(self, **kwargs):
-        raise AssertionError("docs remediation should not run for non-docs-remediation issue")
-
-    def evaluate_docs_remediation_validation(self, **kwargs):
-        raise AssertionError("validation should not run for non-docs-remediation issue")
-
-    def merge_docs_remediation_execution_result(self, *args, **kwargs):
-        raise AssertionError("docs remediation merge should not run")
-
-    def merge_execution_result(self, synthesis_result, repair_result, qa_result=None):
-        from precision_squad.repair.orchestration import merge_execution_result as _real
-
-        return _real(synthesis_result, repair_result, qa_result)
-
-    def synthesis_artifacts_ready(self, execution_result):
-        from precision_squad.repair.orchestration import synthesis_artifacts_ready as _real
-
-        return _real(execution_result)
-
-    def execute_publish_plan(self, intake, plan, *, publish, run_dir=None):
-        from precision_squad.models import PublishResult
-        return PublishResult(
-            status="dry_run",
-            target=plan.status,
-            summary="dry_run (integration test)",
-            url=None,
-        )
-
-    def run_post_publish_review_if_needed(self, **kwargs):
-        return None

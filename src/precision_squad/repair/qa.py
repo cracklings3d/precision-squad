@@ -259,9 +259,9 @@ def _finalize_qa_result(
     )
     if baseline_result.status not in {"failed", "failed_infra"}:
         if qa_result.status == "passed":
-            quality: Literal["green", "degraded"] = "green"
+            baseline_quality: Literal["green", "degraded"] = "green"
         else:
-            quality = "degraded"
+            baseline_quality = "degraded"
         return QaResult(
             status=final_result.status,
             summary=final_result.summary,
@@ -270,15 +270,15 @@ def _finalize_qa_result(
             stdout_path=final_result.stdout_path,
             stderr_path=final_result.stderr_path,
             phase="final",
-            quality=quality,
+            quality=baseline_quality,
         )
 
     repaired_failure_signature = _failure_signature(qa_result)
     if repaired_failure_signature < baseline_failure_signature:
         if qa_result.status == "passed":
-            quality: Literal["green", "improved", "degraded"] = "green"
+            improved_quality: Literal["green", "improved", "degraded"] = "green"
         else:
-            quality = "improved"
+            improved_quality = "improved"
         return QaResult(
             status=final_result.status,
             summary=final_result.summary,
@@ -287,13 +287,13 @@ def _finalize_qa_result(
             stdout_path=final_result.stdout_path,
             stderr_path=final_result.stderr_path,
             phase="final",
-            quality=quality,
+            quality=improved_quality,
         )
 
     if qa_result.status == "passed":
-        quality = "green"
+        final_quality: Literal["green", "degraded"] = "green"
     else:
-        quality = "degraded"
+        final_quality = "degraded"
     return QaResult(
         status=final_result.status,
         summary=final_result.summary,
@@ -302,7 +302,7 @@ def _finalize_qa_result(
         stdout_path=final_result.stdout_path,
         stderr_path=final_result.stderr_path,
         phase="final",
-        quality=quality,
+        quality=final_quality,
     )
 
 

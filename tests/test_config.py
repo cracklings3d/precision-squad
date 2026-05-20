@@ -15,7 +15,6 @@ from precision_squad.config import (
     merge_config_into_args,
 )
 
-
 SUPPORTED_TABLES = {
     ("repair", "issue"): frozenset(
         {

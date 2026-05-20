@@ -29,7 +29,6 @@ from .models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
-    NamedReference,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -179,10 +178,10 @@ def _repair_issue(args: argparse.Namespace) -> int:
             "when carrying forward the prior approved-plan.json."
         )
 
-    intake = load_issue_intake(args.issue_ref)
     approved_plan: ApprovedPlan | None = None
     if args.approved_plan_path:
         approved_plan = _load_approved_plan(Path(args.approved_plan_path), args.issue_ref)
+    intake = load_issue_intake(args.issue_ref)
     report = RunCoordinator().repair_issue(
         params=RepairIssueParams(
             issue_ref=args.issue_ref,

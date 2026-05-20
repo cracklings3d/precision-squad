@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from json import JSONDecodeError
 from dataclasses import asdict
 from datetime import UTC, datetime
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
@@ -239,7 +239,8 @@ def _parse_approved_plan_payload(
     plan_issue_ref = _require_non_empty_str_field(payload, field_name="issue_ref")
     if plan_issue_ref != issue_ref:
         raise ApprovedPlanValidationError(
-            f"Approved plan issue_ref '{plan_issue_ref}' does not match expected issue_ref '{issue_ref}'"
+            "Approved plan issue_ref "
+            f"'{plan_issue_ref}' does not match expected issue_ref '{issue_ref}'"
         )
 
     return ApprovedPlan(
@@ -333,7 +334,10 @@ def _read_named_references(payload: dict[str, object]) -> tuple[NamedReference, 
         name = _require_non_empty_str(ref["name"], field_name=f"named_references[{index}].name")
 
         reference_type = ref.get("reference_type", "file")
-        if not isinstance(reference_type, str) or reference_type not in _ALLOWED_NAMED_REFERENCE_TYPES:
+        if (
+            not isinstance(reference_type, str)
+            or reference_type not in _ALLOWED_NAMED_REFERENCE_TYPES
+        ):
             raise ApprovedPlanValidationError(
                 "Approved plan named_references[{}].reference_type must be one of {}".format(
                     index,
@@ -350,7 +354,10 @@ def _read_named_references(payload: dict[str, object]) -> tuple[NamedReference, 
         named_refs.append(
             NamedReference(
                 name=name,
-                reference_type=cast(Literal["file", "interface", "symbol", "example"], reference_type),
+                reference_type=cast(
+                    Literal["file", "interface", "symbol", "example"],
+                    reference_type,
+                ),
                 description=description,
             )
         )

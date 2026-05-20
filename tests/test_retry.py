@@ -17,9 +17,7 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
-    PublishPlan,
     PublishResult,
-    RepairResult,
     RunRecord,
     RunRequest,
 )

@@ -216,7 +216,8 @@ class RunCoordinator:
                 )
             except ApprovedPlanNotFoundError:
                 raise ValueError(
-                    "Retry requires a prior approved-plan.json when --approved-plan-path is omitted; "
+                    "Retry requires a prior approved-plan.json when "
+                    "--approved-plan-path is omitted; "
                     f"missing prior approved-plan.json in {previous_run_dir}."
                 )
             except ApprovedPlanValidationError as exc:

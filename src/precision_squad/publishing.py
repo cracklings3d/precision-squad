@@ -97,7 +97,11 @@ def build_publish_plan(
         if side_issues:
             side_issues_lines = []
             for si in side_issues:
-                labels_str = ", ".join(f"`{l}`" for l in si.labels) if si.labels else "no labels"
+                labels_str = (
+                    ", ".join(f"`{label}`" for label in si.labels)
+                    if si.labels
+                    else "no labels"
+                )
                 side_issues_lines.append(
                     f"### {si.title}\n"
                     f"**Labels:** {labels_str}\n\n"

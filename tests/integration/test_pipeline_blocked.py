@@ -13,10 +13,14 @@ import pytest
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
+    ApprovedPlan,
     ExecutionResult,
     IssueIntake,
     PublishResult,
+    RepairResult,
+    RunRecord,
 )
+from precision_squad.repair import RepairAdapter
 
 # ---------------------------------------------------------------------------
 # Blocked intake: plan issue skips the executor entirely
@@ -113,6 +117,9 @@ def test_missing_docs_blocks_pipeline(
 
     assert report.execution_result is not None
     assert report.execution_result.status == "missing_docs"
+    assert report.governance_verdict is not None
+    assert report.publish_plan is not None
+    assert report.publish_result is not None
     assert report.governance_verdict.status == "blocked"
     assert report.publish_plan.status == "follow_up_issue"
     assert report.publish_result.status == "dry_run"
@@ -214,6 +221,8 @@ def test_ambiguous_docs_blocks_pipeline(
 
     assert report.execution_result is not None
     assert report.execution_result.status == "ambiguous_docs"
+    assert report.governance_verdict is not None
+    assert report.publish_plan is not None
     assert report.governance_verdict.status == "blocked"
     assert report.publish_plan.status == "follow_up_issue"
     assert report.exit_code == 4
@@ -320,6 +329,7 @@ def test_qa_failed_blocks_pipeline(
     assert report.repair_result is not None
     assert report.repair_result.status == "completed"
     assert report.qa_result is not None
+    assert report.governance_verdict is not None
     assert report.qa_result.status == "failed"
     assert report.qa_result.quality == "degraded"
     assert report.governance_verdict.status == "blocked"
@@ -335,7 +345,8 @@ class _BlockedTestDependencies:
 
     def create_repair_adapter(
         self, *, repair_agent: str, repair_model: str | None
-    ):
+    ) -> RepairAdapter | None:
+        del repair_agent, repair_model
         return None
 
     def run_repair_qa_loop(self, **kwargs):
@@ -382,13 +393,18 @@ class _QaFailedTestDependencies:
 
     def create_repair_adapter(
         self, *, repair_agent: str, repair_model: str | None
-    ):
+    ) -> RepairAdapter | None:
+        del repair_model
         if repair_agent == "none":
             return None
         return self._adapter
 
-    def run_repair_qa_loop(self, *, repo_path, adapter, intake, run_record, run_dir, contract_artifact_dir):
-        from precision_squad.models import QaResult, RepairResult
+    def run_repair_qa_loop(
+        self, *, repo_path, adapter, intake, run_record, run_dir, contract_artifact_dir
+    ):
+        from precision_squad.models import QaResult
+
+        del adapter, contract_artifact_dir, intake, run_dir, run_record
 
         repair_result = RepairResult(
             status="completed",
@@ -458,8 +474,18 @@ class _StubRepairAdapter:
         self.model: str | None = None
         self.qa_feedback: str | None = None
 
-    def repair(self, *, intake, run_record, run_dir, contract_artifact_dir, repo_workspace):
-        from precision_squad.models import RepairResult
+    def repair(
+        self,
+        *,
+        approved_plan: ApprovedPlan | None = None,
+        intake,
+        run_record: RunRecord,
+        run_dir: Path,
+        contract_artifact_dir: Path,
+        repo_workspace: Path,
+        developer_contract: object | None = None,
+    ) -> RepairResult:
+        del approved_plan, contract_artifact_dir, developer_contract, intake, run_dir, run_record
 
         return RepairResult(
             status="completed",
@@ -468,5 +494,6 @@ class _StubRepairAdapter:
             workspace_path=str(repo_workspace.parent),
         )
 
-    def with_qa_feedback(self, feedback: str):
+    def with_qa_feedback(self, feedback: str) -> _StubRepairAdapter:
+        self.qa_feedback = feedback
         return self
