@@ -57,6 +57,18 @@ _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
 _REPAIR_AGENT_CHOICES = ("none", "opencode", "vercel-ai")
 
 
+def _build_repair_adapter(*, repair_agent: str, repair_model: str | None) -> RepairAdapter | None:
+    """Construct a seam-compatible repair adapter for the configured agent."""
+    if repair_agent == "none":
+        return None
+
+    adapter_factories: dict[str, Callable[[str | None], RepairAdapter]] = {
+        "opencode": lambda model: OpenCodeRepairAdapter(model=model),
+        "vercel-ai": lambda model: VercelAIRepairAdapter(model=model),
+    }
+    return adapter_factories[repair_agent](repair_model)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI parser."""
     parser = argparse.ArgumentParser(
@@ -302,11 +314,7 @@ class _CliRepairDependencies:
     def create_repair_adapter(
         self, *, repair_agent: str, repair_model: str | None
     ) -> RepairAdapter | None:
-        if repair_agent == "opencode":
-            return OpenCodeRepairAdapter(model=repair_model)
-        if repair_agent == "vercel-ai":
-            return VercelAIRepairAdapter(model=repair_model)
-        return None
+        return _build_repair_adapter(repair_agent=repair_agent, repair_model=repair_model)
 
     def run_repair_qa_loop(
         self,

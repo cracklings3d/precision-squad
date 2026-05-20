@@ -1,9 +1,9 @@
-"""Agent-backed repair stage using a documented local execution contract."""
+"""Canonical repair seam exports and repair-stage orchestration."""
 
 import subprocess
 
 from ..github_client import GitHubWriteClient
-from .adapter import OpenCodeRepairAdapter, RepairAdapter
+from .adapter import RepairAdapter, OpenCodeRepairAdapter
 from .llm_adapter import VercelAIRepairAdapter
 from .orchestration import (
     RepairStage,
@@ -19,8 +19,8 @@ from .orchestration import (
 from .qa import WorkspaceQaVerifier, _failure_signature, _finalize_qa_result, build_qa_feedback
 
 __all__ = [
-    "OpenCodeRepairAdapter",
     "RepairAdapter",
+    "OpenCodeRepairAdapter",
     "RepairStage",
     "VercelAIRepairAdapter",
     "WorkspaceQaVerifier",

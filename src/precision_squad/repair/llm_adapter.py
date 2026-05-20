@@ -1,4 +1,4 @@
-"""Direct LLM repair adapter using the OpenAI SDK."""
+"""Compatibility direct-LLM repair adapter behind the shared seam."""
 
 from __future__ import annotations
 
