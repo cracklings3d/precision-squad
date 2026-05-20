@@ -10,9 +10,9 @@ import pytest
 from precision_squad import __version__
 from precision_squad.bootstrap import main as bootstrap_main
 from precision_squad.cli import (
-    _CliRepairDependencies,
     _REPAIR_AGENT_CHOICES,
     _build_repair_adapter,
+    _CliRepairDependencies,
     _prompt_for_run_selection,
     _repair_issue_prompt_is_interactive,
     main,
@@ -33,8 +33,8 @@ from precision_squad.models import (
     RunRecord,
     RunRequest,
 )
-from precision_squad.run_store import RunStore
 from precision_squad.repair import OpenCodeRepairAdapter, RepairAdapter, VercelAIRepairAdapter
+from precision_squad.run_store import RunStore
 
 
 def test_main_without_args_shows_help(capsys) -> None:
