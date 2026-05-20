@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -13,16 +13,17 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    ReviewAgentResult,
     RunRecord,
 )
 from precision_squad.post_publish_review import (
     OpenCodePrReviewAgent,
-    ReviewAgentResult,
     ReviewRunner,
     _build_review_prompt,
     _parse_review_output,
     run_post_publish_review,
 )
+from precision_squad.run_store import RunStore
 
 
 def _intake() -> IssueIntake:
@@ -67,28 +68,166 @@ def _write_approved_plan(run_dir: Path) -> None:
     )
 
 
-def _write_invalid_approved_plan(run_dir: Path, payload: dict[str, object]) -> None:
-    (run_dir / "approved-plan.json").write_text(json.dumps(payload), encoding="utf-8")
+def _review_result(
+    *,
+    role: Literal["reviewer", "architect"],
+    status: Literal["approved", "rejected", "failed_infra", "not_run"],
+    summary: str,
+    feedback: tuple[str, ...] = (),
+    plan_alignment: Literal[
+        "aligned", "justified_deviation", "unjustified_deviation", "non_material_detail"
+    ] | None = "aligned",
+    plan_alignment_findings: tuple[str, ...] = (),
+    justification_findings: tuple[str, ...] = (),
+) -> ReviewAgentResult:
+    return ReviewAgentResult(
+        role=role,
+        status=status,
+        summary=summary,
+        feedback=feedback,
+        plan_alignment=plan_alignment,
+        plan_alignment_findings=plan_alignment_findings,
+        justification_findings=justification_findings,
+    )
 
 
-def _write_raw_approved_plan(run_dir: Path, raw_payload: str) -> None:
-    (run_dir / "approved-plan.json").write_text(raw_payload, encoding="utf-8")
+def _stub_agent(result: ReviewAgentResult) -> ReviewRunner:
+    class StubAgent:
+        def review(self, **kwargs) -> ReviewAgentResult:
+            del kwargs
+            return result
+
+    return cast(ReviewRunner, StubAgent())
 
 
-def test_run_post_publish_review_reopens_issue_on_rejection(
+def _valid_agent_payload(status: str = "approved") -> str:
+    return json.dumps(
+        {
+            "status": status,
+            "summary": "ok",
+            "feedback": [],
+            "plan_alignment": "aligned",
+            "plan_alignment_findings": [],
+            "justification_findings": [],
+        }
+    )
+
+
+def test_parse_review_output_requires_expanded_plan_alignment_fields() -> None:
+    assert (
+        _parse_review_output(
+            [
+                {
+                    "type": "text",
+                    "part": {
+                        "text": json.dumps(
+                            {
+                                "status": "approved",
+                                "summary": "ok",
+                                "feedback": [],
+                            }
+                        )
+                    },
+                }
+            ]
+        )
+        is None
+    )
+
+
+def test_parse_review_output_accepts_expanded_payload_with_prose_prefix() -> None:
+    payload = _parse_review_output(
+        [
+            {
+                "type": "text",
+                "part": {
+                    "text": (
+                        "The implementation is solid.\n\n"
+                        '{"status":"rejected","summary":"needs fixes",'
+                        '"feedback":["adjust review contract"],'
+                        '"plan_alignment":"unjustified_deviation",'
+                        '"plan_alignment_findings":["Changed behavior outside approved plan"],'
+                        '"justification_findings":["No surfaced justification for the change"]}'
+                    )
+                },
+            }
+        ]
+    )
+
+    assert payload is not None
+    assert payload["status"] == "rejected"
+    assert payload["plan_alignment"] == "unjustified_deviation"
+    assert payload["plan_alignment_findings"] == ("Changed behavior outside approved plan",)
+    assert payload["justification_findings"] == ("No surfaced justification for the change",)
+
+
+def test_opencode_pr_review_agent_reads_expanded_json_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_approved_plan(tmp_path)
 
-    class StubAgent:
-        def __init__(self, result: ReviewAgentResult) -> None:
-            self._result = result
+    def fake_run(command, cwd, capture_output, text):
+        del command, cwd, capture_output, text
 
-        def review(self, **kwargs) -> ReviewAgentResult:
-            del kwargs
-            return self._result
+        class _Completed:
+            returncode = 0
+            stdout = '{"type":"text","part":{"text":' + json.dumps(_valid_agent_payload()) + "}}\n"
+            stderr = ""
 
-    actions: list[str] = []
+        return _Completed()
+
+    monkeypatch.setattr("precision_squad.post_publish_review.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "## Design Decisions\n```json\n[]\n```\n",
+    )
+
+    result = OpenCodePrReviewAgent(role="reviewer").review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+    )
+
+    assert result.status == "approved"
+    assert result.plan_alignment == "aligned"
+    assert result.plan_alignment_findings == ()
+    assert result.justification_findings == ()
+
+
+def test_build_review_prompt_describes_expanded_review_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_approved_plan(tmp_path)
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "## Design Decisions\n```json\n[]\n```\n",
+    )
+
+    prompt = _build_review_prompt(
+        role="reviewer",
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+    )
+
+    assert '"plan_alignment"' in prompt
+    assert '"plan_alignment_findings"' in prompt
+    assert '"justification_findings"' in prompt
+    assert "Use only the surfaced PR-body ## Design Decisions section as justification evidence." in prompt
+
+
+def test_run_post_publish_review_preserves_two_agent_approval_rule(tmp_path: Path) -> None:
+    _write_approved_plan(tmp_path)
 
     class StubWriter:
         def get_pull_request_head_sha(self, owner: str, repo: str, pull_number: int):
@@ -96,14 +235,13 @@ def test_run_post_publish_review_reopens_issue_on_rejection(
             return "head-sha"
 
         def create_issue_comment(self, reference, body):
-            del reference
-            actions.append(body)
-            return "https://github.com/cracklings3d/markdown-pdf-renderer/issues/9#issuecomment-2"
+            del reference, body
+            return "comment-url"
 
         def reopen_issue(self, reference):
             del reference
-            actions.append("reopened")
 
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(
         "precision_squad.post_publish_review.GitHubWriteClient.from_env",
         lambda token_env="GITHUB_TOKEN": StubWriter(),
@@ -112,53 +250,167 @@ def test_run_post_publish_review_reopens_issue_on_rejection(
         "precision_squad.post_publish_review._fetch_pr_diff",
         lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
     )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "## Design Decisions\n```json\n[]\n```\n",
+    )
+    try:
+        approved = run_post_publish_review(
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+            reviewer=_stub_agent(
+                _review_result(role="reviewer", status="approved", summary="Reviewer approves.")
+            ),
+            architect=_stub_agent(
+                _review_result(role="architect", status="approved", summary="Architect approves.")
+            ),
+        )
+        rejected = run_post_publish_review(
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+            reviewer=_stub_agent(
+                _review_result(role="reviewer", status="approved", summary="Reviewer approves.")
+            ),
+            architect=_stub_agent(
+                _review_result(
+                    role="architect",
+                    status="rejected",
+                    summary="Architect rejects.",
+                    plan_alignment="unjustified_deviation",
+                    plan_alignment_findings=("Architect found scope drift.",),
+                )
+            ),
+        )
+        failed_infra = run_post_publish_review(
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+            reviewer=_stub_agent(
+                _review_result(role="reviewer", status="approved", summary="Reviewer approves.")
+            ),
+            architect=_stub_agent(
+                _review_result(
+                    role="architect",
+                    status="failed_infra",
+                    summary="Architect crashed.",
+                    plan_alignment=None,
+                )
+            ),
+        )
+    finally:
+        monkeypatch.undo()
 
-    result = run_post_publish_review(
-        intake=_intake(),
-        run_record=_record(tmp_path),
-        run_dir=tmp_path,
-        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-        reviewer=cast(
-            ReviewRunner,
-            StubAgent(
-            ReviewAgentResult(
-                role="reviewer",
-                status="rejected",
-                summary="Reviewer found an issue.",
-                feedback=("Fix the CLI import behavior.",),
-            )
+    assert approved.status == "approved"
+    assert rejected.status == "rejected"
+    assert failed_infra.status == "failed_infra"
+
+
+def test_run_post_publish_review_persists_per_agent_and_aggregated_evidence(tmp_path: Path) -> None:
+    _write_approved_plan(tmp_path)
+    comments: list[str] = []
+
+    class StubWriter:
+        def get_pull_request_head_sha(self, owner: str, repo: str, pull_number: int):
+            del owner, repo, pull_number
+            return "head-sha"
+
+        def create_issue_comment(self, reference, body):
+            del reference
+            comments.append(body)
+            return "comment-url"
+
+        def reopen_issue(self, reference):
+            del reference
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.GitHubWriteClient.from_env",
+        lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "## Design Decisions\n```json\n[]\n```\n",
+    )
+    try:
+        result = run_post_publish_review(
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+            reviewer=_stub_agent(
+                _review_result(
+                    role="reviewer",
+                    status="rejected",
+                    summary="Reviewer found an issue.",
+                    feedback=("Fix review handling.",),
+                    plan_alignment="unjustified_deviation",
+                    plan_alignment_findings=("Changed review output contract.",),
+                    justification_findings=("No surfaced justification for contract change.",),
+                )
             ),
-        ),
-        architect=cast(
-            ReviewRunner,
-            StubAgent(
-            ReviewAgentResult(
-                role="architect",
-                status="approved",
-                summary="Structure looks fine.",
-            )
+            architect=_stub_agent(
+                _review_result(
+                    role="architect",
+                    status="approved",
+                    summary="Structure looks fine.",
+                    plan_alignment="aligned",
+                    plan_alignment_findings=("Matches approved structure.",),
+                    justification_findings=("Surfaced design decisions are consistent.",),
+                )
             ),
-        ),
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert result.per_agent_evidence is not None
+    assert result.per_agent_evidence.reviewer.role == "reviewer"
+    assert result.per_agent_evidence.reviewer.plan_alignment == "unjustified_deviation"
+    assert result.per_agent_evidence.architect.role == "architect"
+    assert result.aggregated_plan_alignment.classification == "unjustified_deviation"
+    assert result.aggregated_plan_alignment.plan_alignment_findings == (
+        "Changed review output contract.",
+        "Matches approved structure.",
+    )
+    assert result.aggregated_plan_alignment.justification_findings == (
+        "No surfaced justification for contract change.",
+        "Surfaced design decisions are consistent.",
     )
 
-    assert result.status == "rejected"
-    assert result.issue_reopened is True
-    assert result.issue_comment_url is not None
-    assert result.pull_head_sha == "head-sha"
-    assert any("Precision Squad Review Feedback" in action for action in actions)
-    assert "reopened" in actions
+    store = RunStore(tmp_path)
+    store.write_post_publish_review_result(tmp_path, result)
+    payload = json.loads((tmp_path / "post-publish-review-result.json").read_text(encoding="utf-8"))
+    assert payload["reviewer_status"] == "rejected"
+    assert payload["architect_status"] == "approved"
+    assert payload["per_agent_evidence"]["reviewer"]["plan_alignment"] == "unjustified_deviation"
+    assert payload["per_agent_evidence"]["architect"]["plan_alignment"] == "aligned"
+    assert payload["aggregated_plan_alignment"]["classification"] == "unjustified_deviation"
 
 
-def test_run_post_publish_review_approves_when_both_agents_pass(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("reviewer_alignment", "architect_alignment", "expected"),
+    [
+        ("aligned", "aligned", "aligned"),
+        ("non_material_detail", "aligned", "non_material_detail"),
+        ("aligned", "justified_deviation", "justified_deviation"),
+        ("justified_deviation", "unjustified_deviation", "unjustified_deviation"),
+    ],
+)
+def test_run_post_publish_review_aggregates_plan_alignment_by_precedence(
+    tmp_path: Path,
+    reviewer_alignment: str,
+    architect_alignment: str,
+    expected: str,
+) -> None:
     _write_approved_plan(tmp_path)
-
-    class StubAgent:
-        def __init__(self, result: ReviewAgentResult) -> None:
-            self._result = result
-
-        def review(self, **kwargs) -> ReviewAgentResult:
-            del kwargs
-            return self._result
 
     class StubWriter:
         def get_pull_request_head_sha(self, owner: str, repo: str, pull_number: int):
@@ -174,425 +426,73 @@ def test_run_post_publish_review_approves_when_both_agents_pass(tmp_path: Path) 
         "precision_squad.post_publish_review._fetch_pr_diff",
         lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
     )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "## Design Decisions\n```json\n[]\n```\n",
+    )
     try:
         result = run_post_publish_review(
-        intake=_intake(),
-        run_record=_record(tmp_path),
-        run_dir=tmp_path,
-        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-        reviewer=cast(
-            ReviewRunner,
-            StubAgent(
-            ReviewAgentResult(
-                role="reviewer",
-                status="approved",
-                summary="Reviewer approves.",
-            )
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+            reviewer=_stub_agent(
+                _review_result(
+                    role="reviewer",
+                    status="approved",
+                    summary="Reviewer approves.",
+                    plan_alignment=cast(
+                        Literal[
+                            "aligned",
+                            "justified_deviation",
+                            "unjustified_deviation",
+                            "non_material_detail",
+                        ],
+                        reviewer_alignment,
+                    ),
+                )
             ),
-        ),
-        architect=cast(
-            ReviewRunner,
-            StubAgent(
-            ReviewAgentResult(
-                role="architect",
-                status="approved",
-                summary="Architect approves.",
-            )
+            architect=_stub_agent(
+                _review_result(
+                    role="architect",
+                    status="approved",
+                    summary="Architect approves.",
+                    plan_alignment=cast(
+                        Literal[
+                            "aligned",
+                            "justified_deviation",
+                            "unjustified_deviation",
+                            "non_material_detail",
+                        ],
+                        architect_alignment,
+                    ),
+                )
             ),
-        ),
         )
     finally:
         monkeypatch.undo()
 
-    assert result.status == "approved"
-    assert result.pull_number == 13
-    assert result.pull_head_sha == "head-sha"
+    assert result.aggregated_plan_alignment.classification == expected
 
 
-def test_opencode_pr_review_agent_resolves_custom_provider_model(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("CUSTOM_OPENAI_MODEL_NAME", "MiniMax-M2.7-highspeed")
-    commands: list[list[str]] = []
-    _write_approved_plan(tmp_path)
-
-    def fake_run(command, cwd, capture_output, text):
-        del cwd, capture_output, text
-        commands.append(command)
-
-        class _Completed:
-            returncode = 0
-            stdout = (
-                '{"type":"text","part":{"text":"{\\"status\\":\\"approved\\",'
-                '\\"summary\\":\\"ok\\",\\"feedback\\":[]}"}}\n'
-            )
-            stderr = ""
-
-        return _Completed()
-
-    monkeypatch.setattr("precision_squad.post_publish_review.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "precision_squad.post_publish_review._fetch_pr_diff",
-        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
-    )
-
-    result = OpenCodePrReviewAgent(role="reviewer", model="custom-openai-model").review(
-        intake=_intake(),
-        run_record=_record(tmp_path),
-        run_dir=tmp_path,
-        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-    )
-
-    assert result.status == "approved"
-    assert commands[0][8:10] == ["--model", "custom-openai-model/MiniMax-M2.7-highspeed"]
-
-
-def test_opencode_pr_review_agent_uses_full_configured_model_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("CUSTOM_OPENAI_MODEL_NAME", "minimax-cn-coding-plan/MiniMax-M2.7-highspeed")
-    commands: list[list[str]] = []
-    _write_approved_plan(tmp_path)
-
-    def fake_run(command, cwd, capture_output, text):
-        del cwd, capture_output, text
-        commands.append(command)
-
-        class _Completed:
-            returncode = 0
-            stdout = (
-                '{"type":"text","part":{"text":"{\\"status\\":\\"approved\\",'
-                '\\"summary\\":\\"ok\\",\\"feedback\\":[]}"}}\n'
-            )
-            stderr = ""
-
-        return _Completed()
-
-    monkeypatch.setattr("precision_squad.post_publish_review.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "precision_squad.post_publish_review._fetch_pr_diff",
-        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
-    )
-
-    result = OpenCodePrReviewAgent(role="reviewer", model="custom-openai-model").review(
-        intake=_intake(),
-        run_record=_record(tmp_path),
-        run_dir=tmp_path,
-        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-    )
-
-    assert result.status == "approved"
-    assert commands[0][8:10] == ["--model", "minimax-cn-coding-plan/MiniMax-M2.7-highspeed"]
-
-
-def test_opencode_pr_review_agent_accepts_structured_verdict_on_nonzero_exit(
+def test_run_post_publish_review_rejection_comment_stays_bounded_but_concrete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_approved_plan(tmp_path)
-
-    def fake_run(command, cwd, capture_output, text):
-        del command, cwd, capture_output, text
-
-        class _Completed:
-            returncode = 1
-            stdout = (
-                '{"type":"text","part":{"text":"{\\"status\\":\\"rejected\\",'
-                '\\"summary\\":\\"needs follow-up\\",\\"feedback\\":[\\"fix review handling\\"]}"}}\n'
-            )
-            stderr = "tool exited non-zero"
-
-        return _Completed()
-
-    monkeypatch.setattr("precision_squad.post_publish_review.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "precision_squad.post_publish_review._fetch_pr_diff",
-        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
-    )
-
-    result = OpenCodePrReviewAgent(role="architect").review(
-        intake=_intake(),
-        run_record=_record(tmp_path),
-        run_dir=tmp_path,
-        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-    )
-
-    assert result.status == "rejected"
-    assert result.summary == "needs follow-up"
-    assert result.feedback == ("fix review handling",)
-
-
-def test_opencode_pr_review_agent_fails_when_persisted_plan_is_unapproved(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (tmp_path / "approved-plan.json").write_text(
-        json.dumps(
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Invalid plan",
-                "implementation_steps": ["Inspect the diff"],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": False,
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "precision_squad.post_publish_review._fetch_pr_diff",
-        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
-    )
-
-    result = OpenCodePrReviewAgent(role="reviewer").review(
-        intake=_intake(),
-        run_record=_record(tmp_path),
-        run_dir=tmp_path,
-        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-    )
-
-    assert result.status == "failed_infra"
-    assert "approved" in result.summary.lower()
-
-
-def test_build_review_prompt_fails_when_persisted_plan_is_missing(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="Approved plan artifact not found"):
-        _build_review_prompt(
-            role="reviewer",
-            intake=_intake(),
-            run_record=_record(tmp_path),
-            run_dir=tmp_path,
-            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-        )
-
-
-def test_build_review_prompt_fails_when_persisted_plan_has_invalid_structure(tmp_path: Path) -> None:
-    _write_invalid_approved_plan(
-        tmp_path,
-        {
-            "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-            "plan_summary": "Valid summary",
-            "implementation_steps": ["Inspect the diff"],
-            "named_references": [],
-            "approved": True,
-        },
-    )
-
-    with pytest.raises(ValueError, match="retrieval_surface_summary"):
-        _build_review_prompt(
-            role="reviewer",
-            intake=_intake(),
-            run_record=_record(tmp_path),
-            run_dir=tmp_path,
-            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-        )
-
-
-@pytest.mark.parametrize(
-    ("writer", "payload", "match"),
-    [
-        (_write_raw_approved_plan, "[]\n", "Expected JSON object"),
-        (_write_raw_approved_plan, "{", "not valid JSON"),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#999",
-                "plan_summary": "Plan",
-                "implementation_steps": ["Inspect the diff"],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "does not match",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "   ",
-                "implementation_steps": ["Inspect the diff"],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "plan_summary",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "implementation_steps",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": [],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "implementation steps",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": ["   "],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "implementation_steps\\[1\\]",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": [1],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "implementation_steps\\[1\\]",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": ["Inspect the diff"],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "named_references",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": ["Inspect the diff"],
-                "named_references": [42],
-                "retrieval_surface_summary": "src/",
-                "approved": True,
-            },
-            "named_references\\[1\\]",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": ["Inspect the diff"],
-                "named_references": [],
-                "approved": True,
-            },
-            "retrieval_surface_summary",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": ["Inspect the diff"],
-                "named_references": [],
-                "retrieval_surface_summary": None,
-                "approved": True,
-            },
-            "retrieval_surface_summary",
-        ),
-        (
-            _write_invalid_approved_plan,
-            {
-                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
-                "plan_summary": "Plan",
-                "implementation_steps": ["Inspect the diff"],
-                "named_references": [],
-                "retrieval_surface_summary": "src/",
-                "approved": False,
-            },
-            "approved.*true",
-        ),
-    ],
-)
-def test_build_review_prompt_rejects_canonical_invalid_approved_plan_cases(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    writer,
-    payload,
-    match: str,
-) -> None:
-    def fail_if_diff_is_fetched(*args, **kwargs):
-        raise AssertionError("PR diff should not be fetched before approved-plan validation")
-
-    monkeypatch.setattr("precision_squad.post_publish_review._fetch_pr_diff", fail_if_diff_is_fetched)
-    writer(tmp_path, payload)
-
-    with pytest.raises(ValueError, match=match):
-        _build_review_prompt(
-            role="reviewer",
-            intake=_intake(),
-            run_record=_record(tmp_path),
-            run_dir=tmp_path,
-            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-        )
-
-
-def test_build_review_prompt_includes_checklist_source_and_empty_design_decisions(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _write_approved_plan(tmp_path)
-    monkeypatch.setattr(
-        "precision_squad.post_publish_review._fetch_pr_diff",
-        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
-    )
-
-    prompt = _build_review_prompt(
-        role="reviewer",
-        intake=_intake(),
-        run_record=_record(tmp_path),
-        run_dir=tmp_path,
-        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-    )
-
-    assert "## Deterministic Review Checklist (src/precision_squad/data/docs_checklist.json)" in prompt
-    assert "docs_entrypoint_present" in prompt
-    assert "## Surfaced Design Decisions" in prompt
-    assert "reserved for issue #55" in prompt
-    assert "PR Number: 13" in prompt
-    assert "PR Head SHA: (unavailable)" in prompt
-
-
-def test_run_post_publish_review_fails_fast_when_checklist_loading_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _write_approved_plan(tmp_path)
-
-    def fail_if_agent_runs(**kwargs):
-        raise AssertionError("review agents should not run before checklist validation")
-
-    monkeypatch.setattr(
-        "precision_squad.post_publish_review._fetch_pr_diff",
-        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
-    )
-    monkeypatch.setattr(
-        "precision_squad.stage_contracts.load_review_checklist_rules",
-        lambda: (_ for _ in ()).throw(ValueError("docs checklist field 'rules' must be a list")),
-    )
+    comments: list[str] = []
 
     class StubWriter:
         def get_pull_request_head_sha(self, owner: str, repo: str, pull_number: int):
             del owner, repo, pull_number
             return "head-sha"
+
+        def create_issue_comment(self, reference, body):
+            del reference
+            comments.append(body)
+            return "https://github.com/cracklings3d/markdown-pdf-renderer/issues/9#issuecomment-2"
+
+        def reopen_issue(self, reference):
+            del reference
 
     monkeypatch.setattr(
         "precision_squad.post_publish_review.GitHubWriteClient.from_env",
@@ -602,38 +502,48 @@ def test_run_post_publish_review_fails_fast_when_checklist_loading_fails(
         "precision_squad.post_publish_review._fetch_pr_diff",
         lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
     )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "## Design Decisions\n```json\n[]\n```\n",
+    )
 
     result = run_post_publish_review(
         intake=_intake(),
         run_record=_record(tmp_path),
         run_dir=tmp_path,
         pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
-        reviewer=cast(ReviewRunner, type("StubReviewer", (), {"review": staticmethod(fail_if_agent_runs)})()),
-        architect=cast(ReviewRunner, type("StubArchitect", (), {"review": staticmethod(fail_if_agent_runs)})()),
+        reviewer=_stub_agent(
+            _review_result(
+                role="reviewer",
+                status="rejected",
+                summary="Reviewer found an issue.",
+                feedback=("Fix review handling.",),
+                plan_alignment="unjustified_deviation",
+                plan_alignment_findings=("Changed review output contract.",),
+                justification_findings=("No surfaced justification for contract change.",),
+            )
+        ),
+        architect=_stub_agent(
+            _review_result(
+                role="architect",
+                status="rejected",
+                summary="Architect found an issue.",
+                feedback=("Restore approved boundary.",),
+                plan_alignment="justified_deviation",
+                plan_alignment_findings=("Minor structural change observed.",),
+                justification_findings=("Surfaced justification conflicts with implementation.",),
+            )
+        ),
     )
 
-    assert result.status == "failed_infra"
-    assert "docs checklist field 'rules' must be a list" in result.summary
-    assert result.reviewer_status == "failed_infra"
-    assert result.architect_status == "failed_infra"
-
-
-def test_parse_review_output_accepts_prose_before_json() -> None:
-    payload = _parse_review_output(
-        [
-            {
-                "type": "text",
-                "part": {
-                    "text": (
-                        "The implementation is solid. One issue remains.\n\n"
-                        '{"status":"rejected","summary":"test is brittle",'
-                        '"feedback":["use __version__ in the assertion"]}'
-                    )
-                },
-            }
-        ]
-    )
-
-    assert payload is not None
-    assert payload["status"] == "rejected"
-    assert payload["summary"] == "test is brittle"
+    assert result.status == "rejected"
+    assert comments
+    comment = comments[0]
+    assert "Reviewer verdict: `rejected`" in comment
+    assert "Architect verdict: `rejected`" in comment
+    assert "Plan alignment: `unjustified_deviation`" in comment
+    assert "Plan alignment: `justified_deviation`" in comment
+    assert "Changed review output contract." in comment
+    assert "Surfaced justification conflicts with implementation." in comment
+    assert "aggregated_plan_alignment" not in comment
+    assert "stdout_path" not in comment

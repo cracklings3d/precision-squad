@@ -100,6 +100,24 @@ def _write_developer_artifacts(run_dir: Path, contract_dir: Path) -> None:
     (contract_dir / "README.snapshot.md").write_text("# Source: README.md\n", encoding="utf-8")
 
 
+def _valid_pr_body() -> str:
+    return (
+        "## Summary\nBody\n\n"
+        "## Design Decisions\n"
+        "```json\n"
+        "[{\n"
+        '  "sequence": 1,\n'
+        '  "summary": "Keep existing path",\n'
+        '  "rationale": "Avoid new review stage",\n'
+        '  "plan_steps": ["Inspect the diff"],\n'
+        '  "named_references": ["src/precision_squad/post_publish_review.py"],\n'
+        '  "affected_targets": ["src/precision_squad/post_publish_review.py"]\n'
+        "}]\n"
+        "```\n\n"
+        "## Notes\nDone\n"
+    )
+
+
 def test_load_developer_stage_contract_requires_allowlisted_artifacts(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     contract_dir = run_dir / "execution-contract"
@@ -153,9 +171,7 @@ def test_render_developer_approved_plan_context_uses_canonical_fields_only() -> 
     ]
 
 
-def test_load_review_stage_contract_uses_deterministic_checklist_and_empty_decision_slot(
-    tmp_path: Path,
-) -> None:
+def test_load_review_stage_contract_loads_all_existing_review_inputs(tmp_path: Path) -> None:
     _write_approved_plan(tmp_path)
 
     contract = load_review_stage_contract(
@@ -166,15 +182,17 @@ def test_load_review_stage_contract_uses_deterministic_checklist_and_empty_decis
         pull_number=13,
         pull_head_sha="head-sha",
         diff_loader=lambda *args: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n",
+        pr_body_loader=lambda *args: _valid_pr_body(),
     )
 
-    assert contract.pull_number == 13
-    assert contract.pull_head_sha == "head-sha"
+    assert "Approved Plan" in contract.approved_plan_text
+    assert contract.pr_diff.startswith("--- a/file.py")
     assert contract.checklist_rules[0]["code"] == "docs_entrypoint_present"
-    assert contract.surfaced_design_decisions.startswith("none")
+    assert contract.surfaced_justification_status == "present"
+    assert '"summary": "Keep existing path"' in contract.surfaced_design_decisions
 
 
-def test_render_review_prompt_includes_only_required_review_inputs(tmp_path: Path) -> None:
+def test_render_review_prompt_uses_pr_body_design_decisions_not_placeholder(tmp_path: Path) -> None:
     _write_approved_plan(tmp_path)
     contract = load_review_stage_contract(
         intake=_intake(),
@@ -184,6 +202,7 @@ def test_render_review_prompt_includes_only_required_review_inputs(tmp_path: Pat
         pull_number=13,
         pull_head_sha="head-sha",
         diff_loader=lambda *args: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n",
+        pr_body_loader=lambda *args: _valid_pr_body(),
     )
 
     prompt = render_review_prompt("reviewer", contract)
@@ -191,9 +210,44 @@ def test_render_review_prompt_includes_only_required_review_inputs(tmp_path: Pat
     assert f"## Deterministic Review Checklist ({DOCS_CHECKLIST_SOURCE})" in prompt
     assert "docs_entrypoint_present" in prompt
     assert "## Surfaced Design Decisions" in prompt
-    assert "reserved for issue #55" in prompt
+    assert '"summary": "Keep existing path"' in prompt
+    assert "reserved for issue #55" not in prompt
     assert "PR Head SHA: head-sha" in prompt
+    assert "Surfaced Justification Status: present" in prompt
     assert "## PR Diff" in prompt
+
+
+def test_load_review_stage_contract_fails_before_diff_when_approved_plan_missing(tmp_path: Path) -> None:
+    def fail_if_diff_is_loaded(*args):
+        raise AssertionError("PR diff should not be fetched before approved-plan validation")
+
+    with pytest.raises(ValueError, match="Approved plan artifact not found"):
+        load_review_stage_contract(
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+            pull_number=13,
+            pull_head_sha="head-sha",
+            diff_loader=fail_if_diff_is_loaded,
+            pr_body_loader=lambda *args: _valid_pr_body(),
+        )
+
+
+def test_load_review_stage_contract_fails_when_pr_diff_missing(tmp_path: Path) -> None:
+    _write_approved_plan(tmp_path)
+
+    with pytest.raises(ValueError, match="missing required PR diff"):
+        load_review_stage_contract(
+            intake=_intake(),
+            run_record=_record(tmp_path),
+            run_dir=tmp_path,
+            pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+            pull_number=13,
+            pull_head_sha="head-sha",
+            diff_loader=lambda *args: "",
+            pr_body_loader=lambda *args: _valid_pr_body(),
+        )
 
 
 def test_load_review_stage_contract_fails_when_checklist_loader_fails(
@@ -215,4 +269,44 @@ def test_load_review_stage_contract_fails_when_checklist_loader_fails(
             pull_number=13,
             pull_head_sha="head-sha",
             diff_loader=lambda *args: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n",
+            pr_body_loader=lambda *args: _valid_pr_body(),
         )
+
+
+@pytest.mark.parametrize(
+    ("pr_body", "expected_status", "expected_text"),
+    [
+        ("## Summary\nNo decisions section\n", "absent", "No surfaced design decisions were present"),
+        (
+            "## Design Decisions\nNot fenced JSON\n",
+            "unusable",
+            "unusable; expected the existing ```json fenced block",
+        ),
+        (
+            "## Design Decisions\n```json\n{\n```\n",
+            "unusable",
+            "unusable; expected the existing ```json fenced block",
+        ),
+    ],
+)
+def test_load_review_stage_contract_treats_absent_or_malformed_design_decisions_as_not_valid_justification(
+    tmp_path: Path,
+    pr_body: str,
+    expected_status: str,
+    expected_text: str,
+) -> None:
+    _write_approved_plan(tmp_path)
+
+    contract = load_review_stage_contract(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+        pull_number=13,
+        pull_head_sha="head-sha",
+        diff_loader=lambda *args: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n",
+        pr_body_loader=lambda *args: pr_body,
+    )
+
+    assert contract.surfaced_justification_status == expected_status
+    assert expected_text in contract.surfaced_design_decisions

@@ -226,6 +226,30 @@ class ReviewAgentResult:
     stdout_path: str | None = None
     stderr_path: str | None = None
     transcript_path: str | None = None
+    plan_alignment: Literal[
+        "aligned", "justified_deviation", "unjustified_deviation", "non_material_detail"
+    ] | None = None
+    plan_alignment_findings: tuple[str, ...] = ()
+    justification_findings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AggregatedPlanAlignment:
+    """Aggregated cross-agent plan-alignment evidence for post-publish review."""
+
+    classification: Literal[
+        "aligned", "justified_deviation", "unjustified_deviation", "non_material_detail"
+    ] | None = None
+    plan_alignment_findings: tuple[str, ...] = ()
+    justification_findings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PerAgentEvidence:
+    """Unambiguous reviewer/architect evidence mirror for persisted review results."""
+
+    reviewer: ReviewAgentResult
+    architect: ReviewAgentResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,5 +288,7 @@ class PostPublishReviewResult:
     architect_status: Literal["approved", "rejected", "failed_infra", "not_run"] = "not_run"
     architect_summary: str = "Architect review did not run."
     architect_feedback: tuple[str, ...] = ()
+    per_agent_evidence: PerAgentEvidence | None = None
+    aggregated_plan_alignment: AggregatedPlanAlignment = AggregatedPlanAlignment()
     issue_comment_url: str | None = None
     issue_reopened: bool = False

@@ -11,11 +11,24 @@ from typing import Any, Literal, Protocol
 
 from .github_client import GitHubWriteClient
 from .json_events import extract_json_events
-from .models import IssueIntake, PostPublishReviewResult, ReviewAgentResult, RunRecord
+from .models import (
+    AggregatedPlanAlignment,
+    IssueIntake,
+    PerAgentEvidence,
+    PostPublishReviewResult,
+    ReviewAgentResult,
+    RunRecord,
+)
 from .opencode_model import resolve_opencode_model
 from .stage_contracts import ReviewStageContract, load_review_stage_contract, render_review_prompt
 
 PULL_NUMBER_PATTERN = re.compile(r"/pull/(?P<number>[0-9]+)$")
+_PLAN_ALIGNMENT_VALUES = {
+    "aligned",
+    "justified_deviation",
+    "unjustified_deviation",
+    "non_material_detail",
+}
 
 
 class ReviewRunner(Protocol):
@@ -116,6 +129,9 @@ class OpenCodePrReviewAgent:
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             transcript_path=str(transcript_path),
+            plan_alignment=parsed["plan_alignment"],
+            plan_alignment_findings=tuple(parsed["plan_alignment_findings"]),
+            justification_findings=tuple(parsed["justification_findings"]),
         )
 
 
@@ -142,16 +158,28 @@ def run_post_publish_review(
             pull_head_sha = None
 
     if reviewer is None or architect is None:
+        reviewer_result = _result_stub(
+            role="reviewer",
+            status="not_run",
+            summary="Reviewer did not run.",
+        )
+        architect_result = _result_stub(
+            role="architect",
+            status="not_run",
+            summary="Architect did not run.",
+        )
         return PostPublishReviewResult(
             status="not_run",
             summary="Post-publish review agents were not configured.",
             pull_request_url=pull_request_url,
             pull_number=pull_number,
             pull_head_sha=pull_head_sha,
-            reviewer_status="not_run",
-            reviewer_summary="Reviewer did not run.",
-            architect_status="not_run",
-            architect_summary="Architect did not run.",
+            reviewer_status=reviewer_result.status,
+            reviewer_summary=reviewer_result.summary,
+            architect_status=architect_result.status,
+            architect_summary=architect_result.summary,
+            per_agent_evidence=_build_per_agent_evidence(reviewer_result, architect_result),
+            aggregated_plan_alignment=_aggregate_plan_alignment(reviewer_result, architect_result),
         )
 
     try:
@@ -163,18 +191,31 @@ def run_post_publish_review(
             pull_number=pull_number,
             pull_head_sha=pull_head_sha,
             diff_loader=_fetch_pr_diff,
+            pr_body_loader=_fetch_pr_body,
         )
     except ValueError as exc:
+        reviewer_result = _result_stub(
+            role="reviewer",
+            status="failed_infra",
+            summary=str(exc),
+        )
+        architect_result = _result_stub(
+            role="architect",
+            status="failed_infra",
+            summary=str(exc),
+        )
         return PostPublishReviewResult(
             status="failed_infra",
             summary=str(exc),
             pull_request_url=pull_request_url,
             pull_number=pull_number,
             pull_head_sha=pull_head_sha,
-            reviewer_status="failed_infra",
-            reviewer_summary=str(exc),
-            architect_status="failed_infra",
-            architect_summary=str(exc),
+            reviewer_status=reviewer_result.status,
+            reviewer_summary=reviewer_result.summary,
+            architect_status=architect_result.status,
+            architect_summary=architect_result.summary,
+            per_agent_evidence=_build_per_agent_evidence(reviewer_result, architect_result),
+            aggregated_plan_alignment=_aggregate_plan_alignment(reviewer_result, architect_result),
         )
 
     reviewer_result = reviewer.review(
@@ -191,6 +232,8 @@ def run_post_publish_review(
         pull_request_url=pull_request_url,
         review_contract=review_contract,
     )
+    per_agent_evidence = _build_per_agent_evidence(reviewer_result, architect_result)
+    aggregated_plan_alignment = _aggregate_plan_alignment(reviewer_result, architect_result)
     if reviewer_result.status == "approved" and architect_result.status == "approved":
         return PostPublishReviewResult(
             status="approved",
@@ -204,6 +247,8 @@ def run_post_publish_review(
             architect_status=architect_result.status,
             architect_summary=architect_result.summary,
             architect_feedback=architect_result.feedback,
+            per_agent_evidence=per_agent_evidence,
+            aggregated_plan_alignment=aggregated_plan_alignment,
         )
 
     if "failed_infra" in {reviewer_result.status, architect_result.status}:
@@ -219,6 +264,8 @@ def run_post_publish_review(
             architect_status=architect_result.status,
             architect_summary=architect_result.summary,
             architect_feedback=architect_result.feedback,
+            per_agent_evidence=per_agent_evidence,
+            aggregated_plan_alignment=aggregated_plan_alignment,
         )
 
     client = GitHubWriteClient.from_env(token_env)
@@ -243,6 +290,8 @@ def run_post_publish_review(
         architect_status=architect_result.status,
         architect_summary=architect_result.summary,
         architect_feedback=architect_result.feedback,
+        per_agent_evidence=per_agent_evidence,
+        aggregated_plan_alignment=aggregated_plan_alignment,
         issue_comment_url=issue_comment_url,
         issue_reopened=True,
     )
@@ -266,6 +315,7 @@ def _build_review_prompt(
             pull_number=_extract_pull_number(pull_request_url),
             pull_head_sha=None,
             diff_loader=_fetch_pr_diff,
+            pr_body_loader=_fetch_pr_body,
         )
     return render_review_prompt(role, review_contract)
 
@@ -290,6 +340,16 @@ def _fetch_pr_diff(owner: str, repo: str, pull_request_url: str) -> str:
     return completed.stdout
 
 
+def _fetch_pr_body(owner: str, repo: str, pull_request_url: str) -> str | None:
+    match = PULL_NUMBER_PATTERN.search(pull_request_url.strip())
+    if match is None:
+        return None
+    pull_number = int(match.group("number"))
+    payload = GitHubWriteClient.from_env().get_pull_request(owner, repo, pull_number)
+    body = payload.get("body")
+    return body if isinstance(body, str) else None
+
+
 def _parse_review_output(events: list[dict]) -> dict[str, Any] | None:
     for event in reversed(events):
         if event.get("type") != "text":
@@ -306,16 +366,32 @@ def _parse_review_output(events: list[dict]) -> dict[str, Any] | None:
         status = payload.get("status")
         summary = payload.get("summary")
         feedback = payload.get("feedback")
+        plan_alignment = payload.get("plan_alignment")
+        plan_alignment_findings = payload.get("plan_alignment_findings")
+        justification_findings = payload.get("justification_findings")
         if status not in {"approved", "rejected"}:
             continue
         if not isinstance(summary, str):
             continue
         if not isinstance(feedback, list) or not all(isinstance(item, str) for item in feedback):
             continue
+        if plan_alignment not in _PLAN_ALIGNMENT_VALUES:
+            continue
+        if not isinstance(plan_alignment_findings, list) or not all(
+            isinstance(item, str) for item in plan_alignment_findings
+        ):
+            continue
+        if not isinstance(justification_findings, list) or not all(
+            isinstance(item, str) for item in justification_findings
+        ):
+            continue
         return {
             "status": _as_review_status(status),
             "summary": summary,
             "feedback": tuple(feedback),
+            "plan_alignment": _as_plan_alignment(plan_alignment),
+            "plan_alignment_findings": tuple(plan_alignment_findings),
+            "justification_findings": tuple(justification_findings),
         }
     return None
 
@@ -348,6 +424,20 @@ def _as_review_status(value: object) -> Literal["approved", "rejected"]:
     raise ValueError("Expected review status")
 
 
+def _as_plan_alignment(
+    value: object,
+) -> Literal["aligned", "justified_deviation", "unjustified_deviation", "non_material_detail"]:
+    if value == "aligned":
+        return "aligned"
+    if value == "justified_deviation":
+        return "justified_deviation"
+    if value == "unjustified_deviation":
+        return "unjustified_deviation"
+    if value == "non_material_detail":
+        return "non_material_detail"
+    raise ValueError("Expected plan alignment")
+
+
 def _build_issue_feedback_comment(
     *,
     intake: IssueIntake,
@@ -356,8 +446,7 @@ def _build_issue_feedback_comment(
     reviewer_result: ReviewAgentResult,
     architect_result: ReviewAgentResult,
 ) -> str:
-    reviewer_feedback = "\n".join(f"- {item}" for item in reviewer_result.feedback) or "- none"
-    architect_feedback = "\n".join(f"- {item}" for item in architect_result.feedback) or "- none"
+    rejection_sections = _build_rejection_sections(reviewer_result, architect_result)
     return (
         "## Precision Squad Review Feedback\n"
         f"- Run ID: `{run_record.run_id}`\n"
@@ -365,10 +454,7 @@ def _build_issue_feedback_comment(
         f"- PR: {pull_request_url}\n"
         f"- Reviewer verdict: `{reviewer_result.status}`\n"
         f"- Architect verdict: `{architect_result.status}`\n\n"
-        "### Reviewer Findings\n"
-        f"{reviewer_feedback}\n\n"
-        "### Architect Findings\n"
-        f"{architect_feedback}\n"
+        f"{rejection_sections}\n"
     )
 
 
@@ -377,3 +463,86 @@ def _extract_pull_number(pull_request_url: str) -> int | None:
     if match is None:
         return None
     return int(match.group("number"))
+
+
+def _result_stub(
+    *,
+    role: Literal["reviewer", "architect"],
+    status: Literal["failed_infra", "not_run"],
+    summary: str,
+) -> ReviewAgentResult:
+    return ReviewAgentResult(role=role, status=status, summary=summary)
+
+
+def _build_per_agent_evidence(
+    reviewer_result: ReviewAgentResult,
+    architect_result: ReviewAgentResult,
+) -> PerAgentEvidence:
+    return PerAgentEvidence(reviewer=reviewer_result, architect=architect_result)
+
+
+def _aggregate_plan_alignment(
+    reviewer_result: ReviewAgentResult,
+    architect_result: ReviewAgentResult,
+) -> AggregatedPlanAlignment:
+    ordered_results = (reviewer_result, architect_result)
+    statuses = {result.status for result in ordered_results}
+    if "failed_infra" in statuses or "not_run" in statuses:
+        classification = None
+    else:
+        classifications = {result.plan_alignment for result in ordered_results}
+        if "unjustified_deviation" in classifications:
+            classification = "unjustified_deviation"
+        elif "justified_deviation" in classifications:
+            classification = "justified_deviation"
+        elif "non_material_detail" in classifications:
+            classification = "non_material_detail"
+        else:
+            classification = "aligned"
+
+    return AggregatedPlanAlignment(
+        classification=classification,
+        plan_alignment_findings=_dedupe_preserving_order(
+            item for result in ordered_results for item in result.plan_alignment_findings
+        ),
+        justification_findings=_dedupe_preserving_order(
+            item for result in ordered_results for item in result.justification_findings
+        ),
+    )
+
+
+def _dedupe_preserving_order(items: Any) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return tuple(ordered)
+
+
+def _build_rejection_sections(
+    reviewer_result: ReviewAgentResult,
+    architect_result: ReviewAgentResult,
+) -> str:
+    sections: list[str] = []
+    for result in (reviewer_result, architect_result):
+        if result.status != "rejected":
+            continue
+        sections.append(f"### {result.role.title()} Rejection")
+        sections.append(f"- Plan alignment: `{result.plan_alignment}`")
+        sections.extend(f"- {bullet}" for bullet in _comment_bullets_for_rejection(result))
+        sections.append("")
+    return "\n".join(sections).strip()
+
+
+def _comment_bullets_for_rejection(result: ReviewAgentResult) -> tuple[str, ...]:
+    concrete: list[str] = []
+    concrete.extend(item for item in result.plan_alignment_findings if item.strip())
+    concrete.extend(item for item in result.justification_findings if item.strip())
+    if not concrete:
+        concrete.extend(item for item in result.feedback if item.strip())
+    if not concrete:
+        concrete.append("Concrete rejection details were not provided by the review agent.")
+    return tuple(dict.fromkeys(concrete[:3]))

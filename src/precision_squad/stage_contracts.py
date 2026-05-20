@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from .docs_policy import load_review_checklist_rules
 from .models import ApprovedPlan, IssueIntake, RunRecord
 from .run_store import RunStore
 
 DOCS_CHECKLIST_SOURCE = "src/precision_squad/data/docs_checklist.json"
-_SURFACED_DESIGN_DECISIONS_EMPTY = (
-    "none (reserved for issue #55; intentionally empty for issue #54)"
+_SURFACED_DESIGN_DECISIONS_EMPTY = "No surfaced design decisions were present in the PR body."
+_SURFACED_DESIGN_DECISIONS_UNUSABLE = (
+    "Surfaced design decisions were present in the PR body but unusable; expected the "
+    "existing ```json fenced block emitted by publishing.py."
 )
+_DESIGN_DECISIONS_SECTION_PATTERN = re.compile(
+    r"(?ims)^## Design Decisions\s*\n(?P<body>.*?)(?=^##\s|\Z)"
+)
+_JSON_FENCE_PATTERN = re.compile(r"(?is)^\s*```json\s*\n(?P<payload>.*?)\n```\s*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +53,7 @@ class ReviewStageContract:
     pull_request_url: str
     pull_number: int | None
     pull_head_sha: str | None
+    surfaced_justification_status: Literal["present", "absent", "unusable"] = "absent"
     surfaced_design_decisions: str = _SURFACED_DESIGN_DECISIONS_EMPTY
 
 
@@ -108,6 +117,7 @@ def load_review_stage_contract(
     pull_number: int | None,
     pull_head_sha: str | None,
     diff_loader: Callable[[str, str, str], str],
+    pr_body_loader: Callable[[str, str, str], str | None] | None = None,
 ) -> ReviewStageContract:
     """Load and validate the explicit review-stage contract inputs."""
     approved_plan_text = RunStore.load_approved_plan_text(
@@ -130,6 +140,18 @@ def load_review_stage_contract(
     if not checklist_rules:
         raise ValueError("Review context pack is missing required checklist material")
 
+    surfaced_justification_status = "absent"
+    surfaced_design_decisions = _SURFACED_DESIGN_DECISIONS_EMPTY
+    if pr_body_loader is not None:
+        pr_body = pr_body_loader(
+            intake.issue.reference.owner,
+            intake.issue.reference.repo,
+            pull_request_url,
+        )
+        surfaced_justification_status, surfaced_design_decisions = _extract_surfaced_design_decisions(
+            pr_body
+        )
+
     return ReviewStageContract(
         approved_plan_text=approved_plan_text,
         pr_diff=pr_diff,
@@ -139,6 +161,10 @@ def load_review_stage_contract(
         pull_request_url=pull_request_url,
         pull_number=pull_number,
         pull_head_sha=pull_head_sha,
+        surfaced_justification_status=cast_review_justification_status(
+            surfaced_justification_status
+        ),
+        surfaced_design_decisions=surfaced_design_decisions,
     )
 
 
@@ -181,6 +207,7 @@ def render_review_prompt(role: str, contract: ReviewStageContract) -> str:
         "PR Number: "
         f"{contract.pull_number if contract.pull_number is not None else '(unavailable)'}",
         f"PR Head SHA: {contract.pull_head_sha or '(unavailable)'}",
+        f"Surfaced Justification Status: {contract.surfaced_justification_status}",
     ]
     return "\n".join(
         [
@@ -193,17 +220,62 @@ def render_review_prompt(role: str, contract: ReviewStageContract) -> str:
             *checklist_lines,
             "",
             "## Surfaced Design Decisions",
-            f"- {contract.surfaced_design_decisions}",
+            contract.surfaced_design_decisions,
             "",
             "## PR Diff",
             contract.pr_diff,
             "",
             "Review the published PR and respond with exactly one JSON object.",
-            'Use the shape: {"status":"approved|rejected","summary":"...","feedback":["..."]}',
+            "Judge implementation alignment against the approved plan.",
+            "Use only the surfaced PR-body ## Design Decisions section as justification evidence.",
+            "If surfaced design decisions are absent or unusable, treat them as no valid justification.",
+            (
+                'Use the shape: {"status":"approved|rejected","summary":"...",'
+                '"feedback":["..."],"plan_alignment":"aligned|justified_deviation|'
+                'unjustified_deviation|non_material_detail",'
+                '"plan_alignment_findings":["..."],"justification_findings":["..."]}'
+            ),
+            "For approved or rejected verdicts, all JSON fields are required.",
             "If you reject, feedback must contain concrete required changes.",
             "Do not include markdown fences.",
         ]
     )
+
+
+def _extract_surfaced_design_decisions(
+    pr_body: str | None,
+) -> tuple[Literal["present", "absent", "unusable"], str]:
+    if not isinstance(pr_body, str) or not pr_body.strip():
+        return "absent", _SURFACED_DESIGN_DECISIONS_EMPTY
+
+    section_match = _DESIGN_DECISIONS_SECTION_PATTERN.search(pr_body)
+    if section_match is None:
+        return "absent", _SURFACED_DESIGN_DECISIONS_EMPTY
+
+    section_body = section_match.group("body").strip()
+    fence_match = _JSON_FENCE_PATTERN.match(section_body)
+    if fence_match is None:
+        return "unusable", _SURFACED_DESIGN_DECISIONS_UNUSABLE
+
+    payload_text = fence_match.group("payload").strip()
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError:
+        return "unusable", _SURFACED_DESIGN_DECISIONS_UNUSABLE
+
+    return "present", "```json\n" + json.dumps(payload, indent=2) + "\n```"
+
+
+def cast_review_justification_status(
+    value: str,
+) -> Literal["present", "absent", "unusable"]:
+    if value == "present":
+        return "present"
+    if value == "absent":
+        return "absent"
+    if value == "unusable":
+        return "unusable"
+    raise ValueError("Expected surfaced justification status")
 
 
 def _require_file(path: Path, label: str) -> Path:
