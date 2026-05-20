@@ -10,11 +10,12 @@ from pathlib import Path
 import openai
 from jsonschema import ValidationError, validate
 
-from ..models import ApprovedPlan, IssueIntake, RepairResult, RunRecord, SideIssue
+from ..models import ApprovedPlan, DesignDecision, IssueIntake, RepairResult, RunRecord, SideIssue
 from ..stage_contracts import DeveloperStageContract
 from .adapter import (
     REPAIR_RESULT_SCHEMA,
     _build_repair_prompt,
+    _extract_design_decisions,
     _extract_side_issues,
 )
 
@@ -87,8 +88,10 @@ class VercelAIRepairAdapter:
 
         repair_json = _parse_llm_response(raw_content)
         side_issues: tuple[SideIssue, ...] = ()
+        design_decisions: tuple[DesignDecision, ...] = ()
         if repair_json is not None:
             side_issues = _extract_side_issues(repair_json)
+            design_decisions = _extract_design_decisions(repair_json)
 
         if repair_json is None:
             return RepairResult(
@@ -104,6 +107,7 @@ class VercelAIRepairAdapter:
             detail_codes=("repair_stage_completed",),
             stdout_path=str(stdout_path),
             side_issues=side_issues,
+            design_decisions=design_decisions,
         )
 
 

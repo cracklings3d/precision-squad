@@ -13,6 +13,8 @@ from uuid import uuid4
 from .intake import canonicalize_local_issue_ref
 from .models import (
     ApprovedPlan,
+    DecisionLogArtifact,
+    DesignDecision,
     EvaluationResult,
     ExecutionResult,
     GovernanceVerdict,
@@ -29,6 +31,7 @@ from .models import (
 
 PersistedArtifact = (
     ApprovedPlan
+    | DecisionLogArtifact
     | EvaluationResult
     | ExecutionResult
     | GovernanceVerdict
@@ -43,6 +46,7 @@ PersistedArtifact = (
 )
 
 APPROVED_PLAN_FILENAME = "approved-plan.json"
+DECISION_LOG_FILENAME_TEMPLATE = "decision-log.attempt-{attempt}.json"
 _ALLOWED_NAMED_REFERENCE_TYPES = {"file", "interface", "symbol", "example"}
 
 
@@ -149,6 +153,16 @@ class RunStore:
 
     def write_repair_result(self, run_dir: Path, result: RepairResult) -> None:
         self._write_json(run_dir / "repair-result.json", result)
+
+    def write_decision_log(self, run_dir: Path, artifact: DecisionLogArtifact) -> None:
+        self._write_json(run_dir / _decision_log_filename(artifact.attempt), artifact)
+
+    @staticmethod
+    def load_decision_log(run_dir: Path, *, attempt: int) -> DecisionLogArtifact:
+        path = run_dir / _decision_log_filename(attempt)
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+        return _parse_decision_log_payload(payload)
 
     def write_qa_result(self, run_dir: Path, result: QaResult) -> None:
         suffix = "" if result.phase in {"repair", "final"} else f"-{result.phase}"
@@ -424,3 +438,66 @@ def render_approved_plan_text(
             desc_suffix = f": {ref.description}" if ref.description else ""
             lines.append(f"- {ref.name}{ref_type_suffix}{desc_suffix}")
     return "\n".join(lines)
+
+
+def _decision_log_filename(attempt: int) -> str:
+    return DECISION_LOG_FILENAME_TEMPLATE.format(attempt=attempt)
+
+
+def _parse_decision_log_payload(payload: object) -> DecisionLogArtifact:
+    if not isinstance(payload, dict):
+        raise ValueError("Decision log payload must be a JSON object")
+
+    attempt = payload.get("attempt")
+    entries_raw = payload.get("entries")
+    if not isinstance(attempt, int):
+        raise ValueError("Decision log field 'attempt' must be an integer")
+    if not isinstance(entries_raw, list):
+        raise ValueError("Decision log field 'entries' must be a list")
+
+    entries: list[DesignDecision] = []
+    for index, item in enumerate(entries_raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Decision log entries[{index}] must be an object")
+        sequence = item.get("sequence")
+        summary = item.get("summary")
+        rationale = item.get("rationale")
+        plan_steps = _read_decision_log_string_list(item, field_name="plan_steps", index=index)
+        named_references = _read_decision_log_string_list(
+            item,
+            field_name="named_references",
+            index=index,
+        )
+        affected_targets = _read_decision_log_string_list(
+            item,
+            field_name="affected_targets",
+            index=index,
+        )
+        if not isinstance(sequence, int):
+            raise ValueError(f"Decision log entries[{index}].sequence must be an integer")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError(f"Decision log entries[{index}].summary must be a non-empty string")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise ValueError(
+                f"Decision log entries[{index}].rationale must be a non-empty string"
+            )
+        entries.append(
+            DesignDecision(
+                sequence=sequence,
+                summary=summary,
+                rationale=rationale,
+                plan_steps=plan_steps,
+                named_references=named_references,
+                affected_targets=affected_targets,
+            )
+        )
+    return DecisionLogArtifact(attempt=attempt, entries=tuple(entries))
+
+
+def _read_decision_log_string_list(
+    payload: dict[str, object], *, field_name: str, index: int
+) -> tuple[str, ...]:
+    raw = payload.get(field_name, [])
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError(f"Decision log entries[{index}].{field_name} must be a list of strings")
+    return tuple(raw)

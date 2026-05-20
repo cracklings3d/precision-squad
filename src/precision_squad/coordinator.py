@@ -11,6 +11,7 @@ from .governance import apply_governance, evaluate_run
 from .intake import IssueIntake, canonicalize_local_issue_ref, is_docs_remediation_issue
 from .models import (
     ApprovedPlan,
+    DecisionLogArtifact,
     EvaluationResult,
     ExecutionResult,
     GovernanceVerdict,
@@ -22,7 +23,7 @@ from .models import (
     RunRecord,
     RunRequest,
 )
-from .publishing import build_publish_plan
+from .publishing import RequiredDecisionLogArtifactMissingError, build_publish_plan
 from .repair import RepairAdapter
 from .run_store import ApprovedPlanNotFoundError, ApprovedPlanValidationError, RunStore
 
@@ -392,6 +393,14 @@ class RunCoordinator:
             ),
         )
         store.write_repair_result(run_dir, repair_result)
+        if repair_result.status == "completed":
+            store.write_decision_log(
+                run_dir,
+                DecisionLogArtifact(
+                    attempt=record.attempt,
+                    entries=repair_result.design_decisions,
+                ),
+            )
         validation_result = None
         validation_scope_summary = None
         if repair_result.status == "completed" and repair_result.workspace_path:
@@ -445,6 +454,14 @@ class RunCoordinator:
             ),
         )
         store.write_repair_result(run_dir, repair_result)
+        if repair_result.status == "completed":
+            store.write_decision_log(
+                run_dir,
+                DecisionLogArtifact(
+                    attempt=record.attempt,
+                    entries=repair_result.design_decisions,
+                ),
+            )
         if baseline_qa_result is not None:
             store.write_qa_result(run_dir, baseline_qa_result)
         if qa_result is not None:
@@ -476,7 +493,27 @@ class RunCoordinator:
         store.write_evaluation_result(run_dir, evaluation_result)
         verdict = apply_governance(intake, execution_result, evaluation_result)
         store.write_governance_verdict(run_dir, verdict)
-        publish_plan = build_publish_plan(intake, record, verdict, repair_result)
+        try:
+            publish_plan = build_publish_plan(intake, record, verdict, repair_result)
+        except RequiredDecisionLogArtifactMissingError as exc:
+            execution_result = ExecutionResult(
+                status="failed_infra",
+                executor_name=execution_result.executor_name,
+                summary=str(exc),
+                detail_codes=tuple(
+                    dict.fromkeys((*execution_result.detail_codes, "missing_decision_log_artifact"))
+                ),
+                artifact_dir=execution_result.artifact_dir,
+                stdout_path=execution_result.stdout_path,
+                stderr_path=execution_result.stderr_path,
+                quality=execution_result.quality,
+            )
+            store.write_execution_result(run_dir, execution_result)
+            evaluation_result = evaluate_run(intake, execution_result)
+            store.write_evaluation_result(run_dir, evaluation_result)
+            verdict = apply_governance(intake, execution_result, evaluation_result)
+            store.write_governance_verdict(run_dir, verdict)
+            publish_plan = build_publish_plan(intake, record, verdict)
         store.write_publish_plan(run_dir, publish_plan)
         publish_result = dependencies.execute_publish_plan(
             intake,

@@ -16,6 +16,7 @@ from precision_squad.models import (
 )
 from precision_squad.repair.adapter import (
     _build_repair_prompt,
+    _extract_design_decisions,
     _extract_json_events,
     _extract_side_issues,
     _parse_repair_json,
@@ -81,6 +82,25 @@ def test_parse_repair_json_valid_with_side_issues() -> None:
     assert len(result["side_issues"]) == 1
 
 
+def test_parse_repair_json_valid_with_design_decisions() -> None:
+    payload = {
+        "summary": "Fixed the bug.",
+        "design_decisions": [
+            {
+                "sequence": 1,
+                "summary": "Persist in coordinator",
+                "rationale": "Publish plan must consume stored evidence.",
+                "plan_steps": ["Persist artifact before publish-plan construction"],
+                "named_references": ["src/precision_squad/coordinator.py"],
+                "affected_targets": ["src/precision_squad/coordinator.py"],
+            }
+        ],
+    }
+    result = _parse_repair_json(json.dumps(payload))
+    assert result is not None
+    assert len(result["design_decisions"]) == 1
+
+
 def test_parse_repair_json_empty_stdout() -> None:
     assert _parse_repair_json("") is None
 
@@ -137,6 +157,92 @@ def test_parse_repair_json_side_issue_wrong_field_types() -> None:
         "side_issues": [{"title": 123, "summary": "ok", "body": "ok"}],
     })
     assert _parse_repair_json(stdout) is None
+
+
+def test_parse_repair_json_design_decisions_wrong_type() -> None:
+    stdout = json.dumps({"summary": "done", "design_decisions": "bad"})
+    assert _parse_repair_json(stdout) is None
+
+
+def test_parse_repair_json_design_decision_missing_required_fields() -> None:
+    stdout = json.dumps(
+        {
+            "summary": "done",
+            "design_decisions": [{"sequence": 1, "summary": "Missing rationale"}],
+        }
+    )
+    assert _parse_repair_json(stdout) is None
+
+
+def test_parse_repair_json_design_decision_wrong_field_types() -> None:
+    stdout = json.dumps(
+        {
+            "summary": "done",
+            "design_decisions": [{"sequence": "1", "summary": "s", "rationale": "r"}],
+        }
+    )
+    assert _parse_repair_json(stdout) is None
+
+
+def test_parse_repair_json_design_decision_rejects_whitespace_summary() -> None:
+    stdout = json.dumps(
+        {
+            "summary": "done",
+            "design_decisions": [{"sequence": 1, "summary": "   ", "rationale": "r"}],
+        }
+    )
+    assert _parse_repair_json(stdout) is None
+
+
+def test_parse_repair_json_design_decision_rejects_whitespace_rationale() -> None:
+    stdout = json.dumps(
+        {
+            "summary": "done",
+            "design_decisions": [{"sequence": 1, "summary": "s", "rationale": "\t  \n"}],
+        }
+    )
+    assert _parse_repair_json(stdout) is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_design_decisions
+# ---------------------------------------------------------------------------
+
+
+def test_extract_design_decisions_valid() -> None:
+    data = {
+        "summary": "done",
+        "design_decisions": [
+            {
+                "sequence": 1,
+                "summary": "Persist in coordinator",
+                "rationale": "Publish must read persisted evidence.",
+                "plan_steps": ["Persist artifact before publish-plan construction"],
+                "named_references": ["src/precision_squad/coordinator.py"],
+                "affected_targets": ["src/precision_squad/coordinator.py"],
+            }
+        ],
+    }
+    decisions = _extract_design_decisions(data)
+    assert len(decisions) == 1
+    assert decisions[0].sequence == 1
+    assert decisions[0].summary == "Persist in coordinator"
+    assert decisions[0].named_references == ("src/precision_squad/coordinator.py",)
+
+
+def test_extract_design_decisions_no_key_returns_empty() -> None:
+    assert _extract_design_decisions({"summary": "done"}) == ()
+
+
+def test_extract_design_decisions_skips_whitespace_only_fields() -> None:
+    data = {
+        "summary": "done",
+        "design_decisions": [
+            {"sequence": 1, "summary": "   ", "rationale": "Valid rationale"},
+            {"sequence": 2, "summary": "Valid summary", "rationale": "\n\t "},
+        ],
+    }
+    assert _extract_design_decisions(data) == ()
 
 
 # ---------------------------------------------------------------------------

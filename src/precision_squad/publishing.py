@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .docs_remediation import (
@@ -19,6 +20,11 @@ from .docs_remediation import (
 from .intake import is_docs_remediation_issue
 from .models import GovernanceVerdict, IssueIntake, PublishPlan, RepairResult, RunRecord
 from .rerun_context import latest_rejected_pull_request
+from .run_store import RunStore
+
+
+class RequiredDecisionLogArtifactMissingError(ValueError):
+    """Raised when a completed repair attempt is missing its required decision-log artifact."""
 
 
 def build_publish_plan(
@@ -41,6 +47,10 @@ def build_publish_plan(
                 + f"- Issue: `{intake.issue.reference}`\n"
                 + f"- Governance verdict: `{verdict.status}`\n"
                 + context_note
+                + _render_design_decisions_section(
+                    run_record,
+                    require_artifact=repair_result is not None and repair_result.status == "completed",
+                )
             ),
             reason_codes=verdict.reason_codes,
             pull_request_url=rejected_pr.url if rejected_pr else None,
@@ -228,3 +238,32 @@ def _finding_matches_reason_codes(
         code in reason_codes and rule_id in mapped_rule_ids
         for code, mapped_rule_ids in umbrella_mapping.items()
     )
+
+
+def _render_design_decisions_section(
+    run_record: RunRecord, *, require_artifact: bool = False
+) -> str:
+    try:
+        artifact = RunStore.load_decision_log(Path(run_record.run_dir), attempt=run_record.attempt)
+    except FileNotFoundError as exc:
+        if not require_artifact:
+            return ""
+        raise RequiredDecisionLogArtifactMissingError(
+            "Missing required decision-log artifact for "
+            f"run {run_record.run_id} attempt {run_record.attempt}: {exc.filename}"
+        ) from exc
+    if not artifact.entries:
+        return ""
+
+    payload = [
+        {
+            "sequence": entry.sequence,
+            "summary": entry.summary,
+            "rationale": entry.rationale,
+            "plan_steps": list(entry.plan_steps),
+            "named_references": list(entry.named_references),
+            "affected_targets": list(entry.affected_targets),
+        }
+        for entry in artifact.entries
+    ]
+    return "\n## Design Decisions\n```json\n" + json.dumps(payload, indent=2) + "\n```\n"
