@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+import precision_squad.repair.llm_adapter as llm_adapter_module
 from precision_squad.models import (
     ApprovedPlan,
     GitHubIssue,
@@ -55,6 +59,41 @@ def _approved_plan() -> ApprovedPlan:
         retrieval_surface_summary="src/",
         approved=True,
     )
+
+
+def test_repair_adapter_never_constructs_openai_compatible_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    intake = _make_intake()
+    run_record = _make_run_record()
+    contract_dir = tmp_path / "contract"
+    contract_dir.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    repo_workspace = tmp_path / "repo"
+    repo_workspace.mkdir()
+
+    def fail_if_openai_client_constructed(*args: object, **kwargs: object) -> object:
+        pytest.fail("repair() must not construct an OpenAI-compatible client")
+
+    monkeypatch.setattr(
+        llm_adapter_module,
+        "openai",
+        SimpleNamespace(OpenAI=fail_if_openai_client_constructed),
+        raising=False,
+    )
+
+    adapter = VercelAIRepairAdapter(model="gpt-4o")
+    result = adapter.repair(
+        approved_plan=_approved_plan(),
+        intake=intake,
+        run_record=run_record,
+        run_dir=run_dir,
+        contract_artifact_dir=contract_dir,
+        repo_workspace=repo_workspace,
+    )
+
+    assert result.status == "blocked"
 
 
 def test_repair_adapter_returns_retired_blocked_result_without_openai_client(tmp_path: Path) -> None:
