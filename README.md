@@ -117,6 +117,12 @@ Supported keys for `repair issue`:
 - `review_model`
 - `approved_plan_path`
 
+Repair agent selection for `repair issue`:
+
+- default when omitted: `opencode`
+- normal supported choices: `opencode`, `none`
+- `vercel-ai` is accepted only as a retired compatibility input and is not an active supported repair mode
+
 Supported keys for `publish run`:
 
 - `runs_dir`
