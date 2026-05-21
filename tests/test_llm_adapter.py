@@ -18,7 +18,6 @@ from precision_squad.models import (
 )
 from precision_squad.repair.llm_adapter import VercelAIRepairAdapter
 
-
 # ---------------------------------------------------------------------------
 # VercelAIRepairAdapter.repair
 # ---------------------------------------------------------------------------
