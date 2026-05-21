@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import openai
-from jsonschema import ValidationError, validate
 
 from ..models import ApprovedPlan, IssueIntake, RepairResult, RunRecord
 from ..stage_contracts import DeveloperStageContract
-from .adapter import REPAIR_RESULT_SCHEMA
 
 _LEGACY_OPENAI_CLIENT_FACTORY = openai.OpenAI
 _RETIRED_COMPATIBILITY_SUMMARY = (
@@ -43,7 +40,14 @@ class VercelAIRepairAdapter:
         repo_workspace: Path,
         developer_contract: DeveloperStageContract | None = None,
     ) -> RepairResult:
-        del approved_plan, intake, run_record, contract_artifact_dir, repo_workspace, developer_contract
+        del (
+            approved_plan,
+            intake,
+            run_record,
+            contract_artifact_dir,
+            repo_workspace,
+            developer_contract,
+        )
         stdout_path = run_dir / "repair.stdout.log"
         stdout_path.write_text(_RETIRED_COMPATIBILITY_SUMMARY, encoding="utf-8")
 
@@ -57,18 +61,3 @@ class VercelAIRepairAdapter:
             ),
             stdout_path=str(stdout_path),
         )
-
-
-def _parse_llm_response(raw_content: str) -> dict | None:
-    """Parse and validate a single JSON response from an LLM."""
-    try:
-        payload = json.loads(raw_content)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    try:
-        validate(instance=payload, schema=REPAIR_RESULT_SCHEMA)
-    except ValidationError:
-        return None
-    return payload
