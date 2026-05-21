@@ -282,7 +282,11 @@ def _validate_completed_repair_result(
             detail_codes=("repair_patch_empty",),
         )
 
-    return repair_result
+    return replace(
+        repair_result,
+        workspace_path=str(expected_workspace_path),
+        patch_path=str(expected_patch_path),
+    )
 
 
 def _resolve_run_artifact_path(path_str: str, *, run_dir: Path) -> Path:
