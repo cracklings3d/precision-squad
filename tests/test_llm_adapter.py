@@ -171,7 +171,7 @@ def _approved_plan() -> ApprovedPlan:
     )
 
 
-def test_repair_adapter_completed_with_changes(tmp_path: Path) -> None:
+def test_repair_adapter_blocks_json_only_output_without_artifacts(tmp_path: Path) -> None:
     intake = _make_intake()
     run_record = _make_run_record()
     contract_dir = tmp_path / "contract"
@@ -200,12 +200,17 @@ def test_repair_adapter_completed_with_changes(tmp_path: Path) -> None:
             repo_workspace=repo_workspace,
         )
 
-    assert result.status == "completed"
-    assert result.summary == "Fixed the bug."
+    assert result.status == "blocked"
+    assert "Fixed the bug." in result.summary
+    assert result.detail_codes == (
+        "repair_workspace_path_missing",
+        "repair_patch_path_missing",
+        "repair_output_not_applied",
+    )
     assert result.stdout_path is not None
 
 
-def test_repair_adapter_completed_no_changes(tmp_path: Path) -> None:
+def test_repair_adapter_blocks_schema_valid_json_even_without_side_effects(tmp_path: Path) -> None:
     intake = _make_intake()
     run_record = _make_run_record()
     contract_dir = tmp_path / "contract"
@@ -234,11 +239,11 @@ def test_repair_adapter_completed_no_changes(tmp_path: Path) -> None:
             repo_workspace=repo_workspace,
         )
 
-    assert result.status == "completed"
-    assert result.summary == "Fixed the bug."
+    assert result.status == "blocked"
+    assert "did not persist a patch artifact" in result.summary
 
 
-def test_repair_adapter_diff_failed(tmp_path: Path) -> None:
+def test_repair_adapter_keeps_valid_json_output_blocked_when_not_applied(tmp_path: Path) -> None:
     intake = _make_intake()
     run_record = _make_run_record()
     contract_dir = tmp_path / "contract"
@@ -267,7 +272,7 @@ def test_repair_adapter_diff_failed(tmp_path: Path) -> None:
             repo_workspace=repo_workspace,
         )
 
-    assert result.status == "completed"
+    assert result.status == "blocked"
 
 
 def test_repair_adapter_api_failure(tmp_path: Path) -> None:
@@ -372,7 +377,7 @@ def test_repair_adapter_with_side_issues(tmp_path: Path) -> None:
             repo_workspace=repo_workspace,
         )
 
-    assert result.status == "completed"
+    assert result.status == "blocked"
     assert len(result.side_issues) == 1
     assert result.side_issues[0].title == "Other bug"
 
@@ -417,7 +422,7 @@ def test_repair_adapter_with_design_decisions(tmp_path: Path) -> None:
             repo_workspace=repo_workspace,
         )
 
-    assert result.status == "completed"
+    assert result.status == "blocked"
     assert len(result.design_decisions) == 1
     assert result.design_decisions[0].summary == "Persist in coordinator"
 

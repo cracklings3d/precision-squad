@@ -184,6 +184,8 @@ def test_build_publish_plan_fails_when_completed_repair_missing_decision_log_art
         status="completed",
         summary="Repair completed.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(run_dir / "repair-workspace"),
+        patch_path=str(run_dir / "repair.patch"),
     )
 
     with pytest.raises(
@@ -358,6 +360,7 @@ def test_build_publish_plan_creates_follow_up_issue_for_side_issues() -> None:
         updated_at="2026-04-28T00:00:00Z",
         run_dir=".precision-squad/runs/run-123",
     )
+    run_dir = Path(run_record.run_dir)
     verdict = GovernanceVerdict(
         status="blocked",
         summary="QA failed.",
@@ -367,6 +370,8 @@ def test_build_publish_plan_creates_follow_up_issue_for_side_issues() -> None:
         status="completed",
         summary="Repair completed with side issues.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(run_dir / "repair-workspace"),
+        patch_path=str(run_dir / "repair.patch"),
         side_issues=(
             SideIssue(
                 title="Missing version pin",
@@ -415,6 +420,7 @@ def test_build_publish_plan_returns_issue_comment_when_no_side_issues() -> None:
         updated_at="2026-04-28T00:00:00Z",
         run_dir=".precision-squad/runs/run-123",
     )
+    run_dir = Path(run_record.run_dir)
     verdict = GovernanceVerdict(
         status="blocked",
         summary="QA failed.",
@@ -424,6 +430,8 @@ def test_build_publish_plan_returns_issue_comment_when_no_side_issues() -> None:
         status="completed",
         summary="Repair completed.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(run_dir / "repair-workspace"),
+        patch_path=str(run_dir / "repair.patch"),
         side_issues=(),
     )
 

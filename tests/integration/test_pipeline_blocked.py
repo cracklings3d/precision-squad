@@ -404,13 +404,14 @@ class _QaFailedTestDependencies:
     ):
         from precision_squad.models import QaResult
 
-        del adapter, contract_artifact_dir, intake, run_dir, run_record
+        del adapter, contract_artifact_dir, intake, run_record
 
         repair_result = RepairResult(
             status="completed",
             summary="Stub repair completed.",
             detail_codes=("repair_stage_completed",),
             workspace_path=str(repo_path.parent),
+            patch_path=str(run_dir / "repair.patch"),
         )
         baseline_result = QaResult(
             status="passed",
@@ -485,13 +486,14 @@ class _StubRepairAdapter:
         repo_workspace: Path,
         developer_contract: object | None = None,
     ) -> RepairResult:
-        del approved_plan, contract_artifact_dir, developer_contract, intake, run_dir, run_record
+        del approved_plan, contract_artifact_dir, developer_contract, intake, run_record
 
         return RepairResult(
             status="completed",
             summary="Stub repair completed.",
             detail_codes=("repair_stage_completed",),
             workspace_path=str(repo_workspace.parent),
+            patch_path=str(run_dir / "repair.patch"),
         )
 
     def with_qa_feedback(self, feedback: str) -> _StubRepairAdapter:

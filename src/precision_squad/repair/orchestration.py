@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from ..docs_remediation import (
@@ -174,7 +175,143 @@ class RepairStage:
         parameters = inspect.signature(self.adapter.repair).parameters
         if "approved_plan" not in parameters:
             repair_kwargs.pop("approved_plan")
-        return self.adapter.repair(**repair_kwargs)
+        repair_result = self.adapter.repair(**repair_kwargs)
+        return _validate_completed_repair_result(repair_result, run_dir=run_dir)
+
+
+def _validate_completed_repair_result(
+    repair_result: RepairResult,
+    *,
+    run_dir: Path,
+) -> RepairResult:
+    """Validate the shared completed-result artifact invariant."""
+    if repair_result.status != "completed":
+        return repair_result
+
+    expected_workspace_path = (run_dir / "repair-workspace").resolve()
+    expected_repo_workspace = (expected_workspace_path / "repo").resolve()
+    expected_patch_path = (run_dir / "repair.patch").resolve()
+
+    if not repair_result.workspace_path:
+        return _reclassify_completed_result(
+            repair_result,
+            status="blocked",
+            summary=(
+                "Repair stage reported completed, but no applied workspace artifact "
+                "was recorded for this run."
+            ),
+            detail_codes=("repair_workspace_path_missing",),
+        )
+
+    resolved_workspace_path = _resolve_run_artifact_path(repair_result.workspace_path, run_dir=run_dir)
+    if resolved_workspace_path != expected_workspace_path:
+        return _reclassify_completed_result(
+            repair_result,
+            status="blocked",
+            summary=(
+                "Repair stage reported completed, but the workspace artifact does "
+                "not resolve to this run's repair workspace."
+            ),
+            detail_codes=("repair_workspace_path_invalid",),
+        )
+
+    if not repair_result.patch_path:
+        return _reclassify_completed_result(
+            repair_result,
+            status="blocked",
+            summary=(
+                "Repair stage reported completed, but no persisted patch artifact "
+                "was recorded for this run."
+            ),
+            detail_codes=("repair_patch_path_missing",),
+        )
+
+    resolved_patch_path = _resolve_run_artifact_path(repair_result.patch_path, run_dir=run_dir)
+    if resolved_patch_path != expected_patch_path:
+        return _reclassify_completed_result(
+            repair_result,
+            status="blocked",
+            summary=(
+                "Repair stage reported completed, but the patch artifact does not "
+                "resolve to this run's persisted patch path."
+            ),
+            detail_codes=("repair_patch_path_invalid",),
+        )
+
+    if not expected_workspace_path.is_dir():
+        return _reclassify_completed_result(
+            repair_result,
+            status="failed_infra",
+            summary=(
+                "Repair stage reported completed, but the recorded repair workspace "
+                "directory is missing."
+            ),
+            detail_codes=("repair_workspace_missing",),
+        )
+
+    if not expected_repo_workspace.is_dir():
+        return _reclassify_completed_result(
+            repair_result,
+            status="failed_infra",
+            summary=(
+                "Repair stage reported completed, but the recorded repo checkout is "
+                "missing from the repair workspace."
+            ),
+            detail_codes=("repair_workspace_repo_missing",),
+        )
+
+    if not expected_patch_path.is_file():
+        return _reclassify_completed_result(
+            repair_result,
+            status="failed_infra",
+            summary=(
+                "Repair stage reported completed, but the recorded patch artifact is "
+                "missing."
+            ),
+            detail_codes=("repair_patch_missing",),
+        )
+
+    if expected_patch_path.stat().st_size <= 0:
+        return _reclassify_completed_result(
+            repair_result,
+            status="failed_infra",
+            summary=(
+                "Repair stage reported completed, but the recorded patch artifact is "
+                "empty."
+            ),
+            detail_codes=("repair_patch_empty",),
+        )
+
+    return repair_result
+
+
+def _resolve_run_artifact_path(path_str: str, *, run_dir: Path) -> Path:
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = run_dir / path
+    return path.resolve()
+
+
+def _reclassify_completed_result(
+    repair_result: RepairResult,
+    *,
+    status: str,
+    summary: str,
+    detail_codes: tuple[str, ...],
+) -> RepairResult:
+    merged_detail_codes = tuple(
+        dict.fromkeys(
+            code
+            for code in (*repair_result.detail_codes, *detail_codes)
+            if code != "repair_stage_completed"
+        )
+    )
+    return replace(
+        repair_result,
+        status=status,
+        summary=summary,
+        detail_codes=merged_detail_codes,
+    )
 
 
 def run_repair_qa_loop(

@@ -74,6 +74,8 @@ def test_repair_issue_persists_empty_decision_log_before_publish(tmp_path: Path,
         status="completed",
         summary="Repair completed.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(tmp_path / "repair-workspace"),
+        patch_path=str(tmp_path / "repair.patch"),
         design_decisions=(),
     )
     baseline = QaResult(status="passed", summary="Baseline passed.", detail_codes=(), phase="baseline")
@@ -133,6 +135,8 @@ def test_repair_issue_marks_missing_decision_log_artifact_as_failed_infra(
         status="completed",
         summary="Repair completed.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(tmp_path / "repair-workspace"),
+        patch_path=str(tmp_path / "repair.patch"),
     )
     baseline = QaResult(status="passed", summary="Baseline passed.", detail_codes=(), phase="baseline")
     final = QaResult(status="passed", summary="Final passed.", detail_codes=(), phase="final")
