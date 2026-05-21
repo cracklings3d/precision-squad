@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from precision_squad.cli import _resolve_cli_args, build_parser
 from precision_squad.config import (
     config_search_locations,
     format_config_search_locations,
@@ -303,3 +304,49 @@ def test_merge_config_ignores_unknown_keys() -> None:
     args = {"repo_path": "/cli"}
     merged = merge_config_into_args(config, args)
     assert merged == {"repo_path": "/cli"}
+
+
+def test_repair_issue_config_omitted_repair_agent_defaults_to_opencode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        '[repair.issue]\nrepo_path = "repo"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = _resolve_cli_args(build_parser(), ["repair", "issue", "owner/repo#1"])
+
+    assert args.repair_agent == "opencode"
+
+
+def test_repair_issue_config_accepts_legacy_vercel_ai_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        '[repair.issue]\nrepo_path = "repo"\nrepair_agent = "vercel-ai"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = _resolve_cli_args(build_parser(), ["repair", "issue", "owner/repo#1"])
+
+    assert args.repair_agent == "vercel-ai"
+
+
+def test_repair_issue_config_invalid_repair_agent_uses_shared_validator_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        '[repair.issue]\nrepo_path = "repo"\nrepair_agent = "openai"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError) as exc_info:
+        _resolve_cli_args(build_parser(), ["repair", "issue", "owner/repo#1"])
+
+    message = str(exc_info.value)
+    assert "Invalid value for 'repair_agent' (--repair-agent):" in message
+    assert "'openai'" in message
+    assert "Expected one of: opencode, none, vercel-ai" in message

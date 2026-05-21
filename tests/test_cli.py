@@ -46,8 +46,8 @@ def test_main_without_args_shows_help(capsys) -> None:
     assert "run" in captured.out
 
 
-def test_repair_agent_choices_remain_unchanged() -> None:
-    assert _REPAIR_AGENT_CHOICES == ("none", "opencode", "vercel-ai")
+def test_repair_agent_choices_include_legacy_compatibility_input() -> None:
+    assert _REPAIR_AGENT_CHOICES == ("opencode", "none", "vercel-ai")
 
 
 def test_build_repair_adapter_returns_none_for_none_agent() -> None:
@@ -70,6 +70,93 @@ def test_build_repair_adapter_returns_compatibility_vercel_ai_implementation() -
     assert adapter.model == "test-model"
 
 
+def test_cli_omitted_repair_agent_defaults_to_opencode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Example issue",
+            body="Example body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Example summary",
+        problem_statement="Example problem",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    captured_params: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured_params["repair_agent"] = params.repair_agent
+        return RepairIssueReport(
+            intake=intake,
+            run_record=RunRecord(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-1"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="Stub execution completed.",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(
+                status="success",
+                summary="Stub evaluation completed.",
+                detail_codes=(),
+            ),
+            governance_verdict=GovernanceVerdict(
+                status="approved",
+                summary="Approved",
+                reason_codes=(),
+            ),
+            publish_plan=PublishPlan(
+                status="draft_pr",
+                title="title",
+                body="body",
+                reason_codes=(),
+            ),
+            publish_result=PublishResult(
+                status="dry_run",
+                target="draft_pr",
+                summary="dry run",
+                url=None,
+            ),
+            repair_result=None,
+            qa_result=None,
+            post_publish_review_result=None,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    assert status == 0
+    assert captured_params["repair_agent"] == "opencode"
+
+
 def test_cli_repair_dependencies_construct_seam_compatible_adapter() -> None:
     adapter = _CliRepairDependencies().create_repair_adapter(
         repair_agent="opencode",
@@ -87,6 +174,29 @@ def test_version_flag_shows_package_version(capsys) -> None:
     captured = capsys.readouterr()
     assert exc_info.value.code == 0
     assert __version__ in captured.out
+
+
+def test_repair_issue_help_shows_current_choices_and_legacy_note(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["repair", "issue", "--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "--repair-agent {opencode,none}" in captured.out
+    assert "Defaults to opencode" in captured.out
+    assert "when omitted. Normal choices: opencode, none." in captured.out
+    assert "Legacy" in captured.out
+    assert "compatibility input: vercel-ai" in captured.out
+    assert "{opencode,none,vercel-ai}" not in captured.out
+
+
+def test_readme_documents_repair_agent_contract() -> None:
+    readme_text = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+
+    assert "default when omitted: `opencode`" in readme_text
+    assert "normal supported choices: `opencode`, `none`" in readme_text
+    assert "`vercel-ai` is accepted only as a retired compatibility input" in readme_text
+    assert "not an active supported repair mode" in readme_text
 
 
 def test_install_skill_writes_skill_md(capsys, tmp_path: Path) -> None:
@@ -1564,41 +1674,26 @@ def test_empty_parent_namespace_config_returns_schema_error(
     assert "Unknown config section [repair]" in captured.err
 
 
-def test_invalid_config_repair_agent_returns_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-) -> None:
-    (tmp_path / ".precision-squad.toml").write_text(
-        '[repair.issue]\nrepo_path = "/tmp/repo"\nrepair_agent = "openai"\n',
-        encoding="utf-8",
+def test_invalid_cli_repair_agent_returns_shared_validator_error(capsys, tmp_path: Path) -> None:
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path),
+            "--repair-agent",
+            "openai",
+        ]
     )
-    monkeypatch.chdir(tmp_path)
-
-    status = main(["repair", "issue", "owner/repo#1"])
 
     captured = capsys.readouterr()
     assert status == 1
-    assert "Invalid value for 'repair_agent' (--repair-agent)" in captured.err
-
-
-def test_invalid_cli_repair_agent_is_rejected_by_parser(capsys, tmp_path: Path) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(
-            [
-                "repair",
-                "issue",
-                "owner/repo#1",
-                "--repo-path",
-                str(tmp_path),
-                "--repair-agent",
-                "openai",
-            ]
-        )
-
-    captured = capsys.readouterr()
-    assert exc_info.value.code == 2
-    assert "invalid choice" in captured.err
-    assert "opencode" in captured.err
-    assert "vercel-ai" in captured.err
+    assert "Invalid value for 'repair_agent' (--repair-agent):" in captured.err
+    assert "'openai'" in captured.err
+    assert "Expected one of: opencode, none, vercel-ai" in captured.err
+    assert "invalid choice" not in captured.err
+    assert "usage:" not in captured.err
 
 
 def test_missing_repo_path_error_lists_supported_config_locations(

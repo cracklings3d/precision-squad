@@ -54,7 +54,8 @@ from .run_store import ApprovedPlanError, RunStore, load_approved_plan_artifact
 # Keep a local alias so tests can monkeypatch the shared executor class through this module.
 _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
 
-_REPAIR_AGENT_CHOICES = ("none", "opencode", "vercel-ai")
+_REPAIR_AGENT_CHOICES = ("opencode", "none", "vercel-ai")
+_DISPLAYED_REPAIR_AGENT_CHOICES = ("opencode", "none")
 
 
 def _build_repair_adapter(*, repair_agent: str, repair_model: str | None) -> RepairAdapter | None:
@@ -112,9 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_parser.add_argument(
         "--repair-agent",
-        choices=_REPAIR_AGENT_CHOICES,
         default=argparse.SUPPRESS,
-        help="Repair agent adapter to run after the documented execution contract is prepared.",
+        metavar="{" + ",".join(_DISPLAYED_REPAIR_AGENT_CHOICES) + "}",
+        help=(
+            "Repair agent adapter to run after the documented execution contract is prepared. "
+            "Defaults to opencode when omitted. Normal choices: opencode, none. "
+            "Legacy compatibility input: vercel-ai (retired compatibility path)."
+        ),
     )
     issue_parser.add_argument(
         "--repair-model",
