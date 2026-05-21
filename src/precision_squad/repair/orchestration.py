@@ -203,7 +203,10 @@ def _validate_completed_repair_result(
             detail_codes=("repair_workspace_path_missing",),
         )
 
-    resolved_workspace_path = _resolve_run_artifact_path(repair_result.workspace_path, run_dir=run_dir)
+    resolved_workspace_path = _resolve_run_artifact_path(
+        repair_result.workspace_path,
+        run_dir=run_dir,
+    )
     if resolved_workspace_path != expected_workspace_path:
         return _reclassify_completed_result(
             repair_result,
