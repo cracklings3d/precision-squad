@@ -650,6 +650,39 @@ def test_repair_stage_reclassifies_completed_result_with_patch_path_outside_run_
     assert result.detail_codes == ("repair_patch_path_invalid",)
 
 
+def test_repair_stage_reclassifies_completed_result_when_repo_workspace_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = _prepare_repair_stage_run(run_dir)
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            repo_workspace = kwargs["repo_workspace"]
+            (run_dir / "repair.patch").write_text("diff --git a/x b/x\n", encoding="utf-8")
+            repo_workspace.rmdir()
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path="repair-workspace",
+                patch_path="repair.patch",
+            )
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", _fake_repair_stage_git_run)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "failed_infra"
+    assert result.detail_codes == ("repair_workspace_repo_missing",)
+
+
 def test_repair_stage_reclassifies_completed_result_when_patch_artifact_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
