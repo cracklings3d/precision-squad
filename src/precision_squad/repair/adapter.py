@@ -250,7 +250,11 @@ class OpenCodeRepairAdapter:
 
         repair_json = _parse_repair_json(command_result.stdout)
         last_event = json_events[-1] if json_events else None
-        if repair_json is None and isinstance(last_event, dict) and "design_decisions" in last_event:
+        if (
+            repair_json is None
+            and isinstance(last_event, dict)
+            and "design_decisions" in last_event
+        ):
             return RepairResult(
                 status="blocked",
                 summary="Repair agent produced malformed structured output for `design_decisions`.",

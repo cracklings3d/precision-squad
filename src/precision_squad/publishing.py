@@ -49,7 +49,9 @@ def build_publish_plan(
                 + context_note
                 + _render_design_decisions_section(
                     run_record,
-                    require_artifact=repair_result is not None and repair_result.status == "completed",
+                    require_artifact=(
+                        repair_result is not None and repair_result.status == "completed"
+                    ),
                 )
             ),
             reason_codes=verdict.reason_codes,
