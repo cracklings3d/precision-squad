@@ -404,13 +404,17 @@ class _QaFailedTestDependencies:
     ):
         from precision_squad.models import QaResult
 
-        del adapter, contract_artifact_dir, intake, run_record
+        del adapter, contract_artifact_dir, intake, repo_path, run_record
+
+        repair_workspace = run_dir / "repair-workspace"
+        (repair_workspace / "repo").mkdir(parents=True, exist_ok=True)
+        (run_dir / "repair.patch").write_text("diff --git a/x b/x\n", encoding="utf-8")
 
         repair_result = RepairResult(
             status="completed",
             summary="Stub repair completed.",
             detail_codes=("repair_stage_completed",),
-            workspace_path=str(repo_path.parent),
+            workspace_path=str(repair_workspace),
             patch_path=str(run_dir / "repair.patch"),
         )
         baseline_result = QaResult(

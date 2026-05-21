@@ -81,6 +81,49 @@ def _write_contract(contract_dir: Path, setup_commands: list[str], qa_command: s
     )
 
 
+def _prepare_repair_stage_run(run_dir: Path) -> Path:
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (contract_dir / "README.snapshot.md").write_text("# Source: README.md\n", encoding="utf-8")
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return contract_dir
+
+
+def _fake_repair_stage_git_run(command, cwd, capture_output, text):
+    del cwd, capture_output, text
+
+    class _Completed:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    if command[:3] == ["git", "rev-parse", "HEAD"]:
+        return _Completed(0, "abc123\n")
+    if command[:2] == ["git", "clone"]:
+        Path(command[-1]).mkdir(parents=True, exist_ok=True)
+        return _Completed(0)
+    if command[:3] == ["git", "reset", "--hard"]:
+        return _Completed(0)
+    raise AssertionError(f"Unexpected command: {command}")
+
+
 def test_executor_requires_existing_repo_path(tmp_path: Path) -> None:
     executor = DocsFirstExecutor(repo_path=tmp_path / "missing-repo")
 
@@ -542,6 +585,132 @@ def test_repair_stage_reclassifies_completed_result_without_patch_artifact(
 
     assert result.status == "blocked"
     assert result.detail_codes == ("repair_patch_path_missing",)
+
+
+def test_repair_stage_reclassifies_completed_result_with_workspace_path_outside_run_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = _prepare_repair_stage_run(run_dir)
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            del kwargs
+            (run_dir / "repair.patch").write_text("diff --git a/x b/x\n", encoding="utf-8")
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path="..",
+                patch_path="repair.patch",
+            )
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", _fake_repair_stage_git_run)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "blocked"
+    assert result.detail_codes == ("repair_workspace_path_invalid",)
+
+
+def test_repair_stage_reclassifies_completed_result_with_patch_path_outside_run_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = _prepare_repair_stage_run(run_dir)
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            del kwargs
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path="repair-workspace",
+                patch_path="..\\repair.patch",
+            )
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", _fake_repair_stage_git_run)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "blocked"
+    assert result.detail_codes == ("repair_patch_path_invalid",)
+
+
+def test_repair_stage_reclassifies_completed_result_when_patch_artifact_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = _prepare_repair_stage_run(run_dir)
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            del kwargs
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path="repair-workspace",
+                patch_path="repair.patch",
+            )
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", _fake_repair_stage_git_run)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "failed_infra"
+    assert result.detail_codes == ("repair_patch_missing",)
+
+
+def test_repair_stage_reclassifies_completed_result_when_patch_artifact_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = _prepare_repair_stage_run(run_dir)
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            del kwargs
+            (run_dir / "repair.patch").write_text("", encoding="utf-8")
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path="repair-workspace",
+                patch_path="repair.patch",
+            )
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", _fake_repair_stage_git_run)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(_intake(), _record(run_dir), run_dir, contract_dir)
+
+    assert result.status == "failed_infra"
+    assert result.detail_codes == ("repair_patch_empty",)
 
 
 def test_repair_stage_fails_before_workspace_side_effects_when_approved_plan_missing(
@@ -1381,8 +1550,8 @@ def test_run_repair_qa_loop_runs_qa_for_valid_completed_artifacts(
                 status="completed",
                 summary="Repair stage completed and produced source changes.",
                 detail_codes=("repair_stage_completed",),
-                workspace_path=str(run_dir / "repair-workspace"),
-                patch_path=str(run_dir / "repair.patch"),
+                workspace_path="repair-workspace",
+                patch_path="repair.patch",
             )
 
         def with_qa_feedback(self, feedback: str):
@@ -1432,6 +1601,8 @@ def test_run_repair_qa_loop_runs_qa_for_valid_completed_artifacts(
     assert repair_result.status == "completed"
     assert baseline_result.status == "passed"
     assert qa_result.status == "passed"
+    assert repair_result.workspace_path == str((run_dir / "repair-workspace").resolve())
+    assert repair_result.patch_path == str((run_dir / "repair.patch").resolve())
     assert seen_repo_workspace["value"] == str(run_dir / "repair-workspace" / "repo")
 
 
