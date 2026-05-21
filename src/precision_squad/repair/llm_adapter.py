@@ -102,9 +102,17 @@ class VercelAIRepairAdapter:
             )
 
         return RepairResult(
-            status="completed",
-            summary=repair_json.get("summary", "Repair agent completed."),
-            detail_codes=("repair_stage_completed",),
+            status="blocked",
+            summary=(
+                f"{repair_json.get('summary', 'Repair agent returned structured output.')} "
+                "Direct LLM output was not applied to the workspace and did not persist "
+                "a patch artifact for this run."
+            ),
+            detail_codes=(
+                "repair_workspace_path_missing",
+                "repair_patch_path_missing",
+                "repair_output_not_applied",
+            ),
             stdout_path=str(stdout_path),
             side_issues=side_issues,
             design_decisions=design_decisions,

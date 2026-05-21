@@ -16,6 +16,7 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    QaResult,
     RepairResult,
     RunRecord,
 )
@@ -447,6 +448,7 @@ def test_repair_stage_clears_existing_workspace_before_clone(
     class DummyAdapter:
         def repair(self, **kwargs):
             del kwargs
+            (run_dir / "repair.patch").write_text("diff --git a/x b/x\n", encoding="utf-8")
             return RepairResult(
                 status="completed",
                 summary="Repair stage completed and produced source changes.",
@@ -468,6 +470,78 @@ def test_repair_stage_clears_existing_workspace_before_clone(
     )
 
     assert result.status == "completed"
+
+
+def test_repair_stage_reclassifies_completed_result_without_patch_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (contract_dir / "README.snapshot.md").write_text("# Source: README.md\n", encoding="utf-8")
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, cwd, capture_output, text):
+        del cwd, capture_output, text
+
+        class _Completed:
+            def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return _Completed(0, "abc123\n")
+        if command[:2] == ["git", "clone"]:
+            Path(command[-1]).mkdir(parents=True, exist_ok=True)
+            return _Completed(0)
+        if command[:3] == ["git", "reset", "--hard"]:
+            return _Completed(0)
+        raise AssertionError(f"Unexpected command: {command}")
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            del kwargs
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path=str(run_dir / "repair-workspace"),
+            )
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
+
+    result = RepairStage(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+    ).execute(
+        _intake(),
+        _record(run_dir),
+        run_dir,
+        contract_dir,
+    )
+
+    assert result.status == "blocked"
+    assert result.detail_codes == ("repair_patch_path_missing",)
 
 
 def test_repair_stage_fails_before_workspace_side_effects_when_approved_plan_missing(
@@ -912,10 +986,9 @@ def test_merge_execution_result_promotes_completed_repair(tmp_path: Path) -> Non
         status="completed",
         summary="Repair stage completed and produced source changes.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(tmp_path / "repair-workspace"),
         patch_path=str(tmp_path / "repair.patch"),
     )
-    from precision_squad.models import QaResult
-
     qa_result = QaResult(
         status="passed",
         summary="Documented QA command passed in the repair workspace.",
@@ -944,6 +1017,7 @@ def test_merge_docs_remediation_execution_result_promotes_completed_repair(
         status="completed",
         summary="Repair stage completed and produced source changes.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(tmp_path / "repair-workspace"),
         patch_path=str(tmp_path / "repair.patch"),
     )
     validation_result = ExecutionResult(
@@ -984,6 +1058,7 @@ def test_merge_docs_remediation_execution_result_blocks_when_revalidation_still_
         status="completed",
         summary="Repair stage completed and produced source changes.",
         detail_codes=("repair_stage_completed",),
+        workspace_path=str(tmp_path / "repair-workspace"),
         patch_path=str(tmp_path / "repair.patch"),
     )
     validation_result = ExecutionResult(
@@ -1156,6 +1231,208 @@ def test_workspace_qa_verifier_runs_documented_setup_and_qa_commands(
     assert result.command == "python -m pytest tests/test_cli.py"
     assert commands[0][4] == "python -m pip install -e .[dev]"
     assert commands[1][4] == "python -m pytest tests/test_cli.py"
+
+
+def test_run_repair_qa_loop_short_circuits_qa_when_completed_contract_is_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (contract_dir / "README.snapshot.md").write_text("# Source: README.md\n", encoding="utf-8")
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, cwd, capture_output, text):
+        del cwd, capture_output, text
+
+        class _Completed:
+            def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return _Completed(0, "abc123\n")
+        if command[:2] == ["git", "clone"]:
+            Path(command[-1]).mkdir(parents=True, exist_ok=True)
+            return _Completed(0)
+        if command[:3] == ["git", "reset", "--hard"]:
+            return _Completed(0)
+        raise AssertionError(f"Unexpected command: {command}")
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            del kwargs
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path=str(run_dir / "repair-workspace"),
+            )
+
+        def with_qa_feedback(self, feedback: str):
+            del feedback
+            return self
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "precision_squad.repair.orchestration._run_baseline_qa",
+        lambda **kwargs: QaResult(
+            status="passed",
+            summary="Baseline passed.",
+            detail_codes=("qa_passed",),
+            phase="baseline",
+            quality="green",
+        ),
+    )
+
+    def fail_verify(*args, **kwargs):
+        raise AssertionError("repair QA should not run when completed artifacts are incomplete")
+
+    monkeypatch.setattr("precision_squad.repair.orchestration.WorkspaceQaVerifier.verify", fail_verify)
+
+    repair_result, baseline_result, qa_result = __import__(
+        "precision_squad.repair.orchestration", fromlist=["run_repair_qa_loop"]
+    ).run_repair_qa_loop(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+        intake=_intake(),
+        run_record=_record(run_dir),
+        run_dir=run_dir,
+        contract_artifact_dir=contract_dir,
+        max_iterations=1,
+    )
+
+    assert repair_result.status == "blocked"
+    assert baseline_result.status == "passed"
+    assert qa_result.status == "not_run"
+
+
+def test_run_repair_qa_loop_runs_qa_for_valid_completed_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    contract_dir = run_dir / "execution-contract"
+    contract_dir.mkdir(parents=True)
+    (run_dir / "issue.md").write_text("# Issue\n", encoding="utf-8")
+    (run_dir / "executor.stdout.log").write_text("stdout\n", encoding="utf-8")
+    (run_dir / "executor.stderr.log").write_text("stderr\n", encoding="utf-8")
+    (contract_dir / "contract.json").write_text("{}\n", encoding="utf-8")
+    (contract_dir / "README.snapshot.md").write_text("# Source: README.md\n", encoding="utf-8")
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/markdown-pdf-renderer#9",
+                "plan_summary": "Repair the issue.",
+                "implementation_steps": ["Apply minimal change"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, cwd, capture_output, text):
+        del cwd, capture_output, text
+
+        class _Completed:
+            def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return _Completed(0, "abc123\n")
+        if command[:2] == ["git", "clone"]:
+            Path(command[-1]).mkdir(parents=True, exist_ok=True)
+            return _Completed(0)
+        if command[:3] == ["git", "reset", "--hard"]:
+            return _Completed(0)
+        raise AssertionError(f"Unexpected command: {command}")
+
+    class DummyAdapter:
+        def repair(self, **kwargs):
+            del kwargs
+            (run_dir / "repair.patch").write_text("diff --git a/x b/x\n", encoding="utf-8")
+            return RepairResult(
+                status="completed",
+                summary="Repair stage completed and produced source changes.",
+                detail_codes=("repair_stage_completed",),
+                workspace_path=str(run_dir / "repair-workspace"),
+                patch_path=str(run_dir / "repair.patch"),
+            )
+
+        def with_qa_feedback(self, feedback: str):
+            del feedback
+            return self
+
+    seen_repo_workspace: dict[str, str] = {}
+
+    monkeypatch.setattr("precision_squad.repair.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "precision_squad.repair.orchestration._run_baseline_qa",
+        lambda **kwargs: QaResult(
+            status="passed",
+            summary="Baseline passed.",
+            detail_codes=("qa_passed",),
+            phase="baseline",
+            quality="green",
+        ),
+    )
+
+    def pass_verify(self, *, run_dir, contract_artifact_dir, repo_workspace, iteration):
+        del self, run_dir, contract_artifact_dir, iteration
+        seen_repo_workspace["value"] = str(repo_workspace)
+        return QaResult(
+            status="passed",
+            summary="Final passed.",
+            detail_codes=("qa_passed",),
+        )
+
+    monkeypatch.setattr(
+        "precision_squad.repair.orchestration.WorkspaceQaVerifier.verify",
+        pass_verify,
+    )
+
+    repair_result, baseline_result, qa_result = __import__(
+        "precision_squad.repair.orchestration", fromlist=["run_repair_qa_loop"]
+    ).run_repair_qa_loop(
+        repo_path=repo_path,
+        adapter=cast(OpenCodeRepairAdapter, DummyAdapter()),
+        intake=_intake(),
+        run_record=_record(run_dir),
+        run_dir=run_dir,
+        contract_artifact_dir=contract_dir,
+        max_iterations=1,
+    )
+
+    assert repair_result.status == "completed"
+    assert baseline_result.status == "passed"
+    assert qa_result.status == "passed"
+    assert seen_repo_workspace["value"] == str(run_dir / "repair-workspace" / "repo")
 
 
 def test_workspace_qa_verifier_bootstraps_whitelisted_uv(
