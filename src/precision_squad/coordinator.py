@@ -20,6 +20,9 @@ from .models import (
     IssueReview,
     IssueReviewFeedback,
     IssueReviewProvenance,
+    PlanReview,
+    PlanReviewFeedback,
+    PlanReviewProvenance,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -33,6 +36,11 @@ from .repair import RepairAdapter
 from .run_store import (
     ApprovedPlanNotFoundError,
     ApprovedPlanValidationError,
+    IssueReviewNotFoundError,
+    IssueReviewValidationError,
+    PlanReviewNotApprovedError,
+    PlanReviewNotFoundError,
+    PlanReviewValidationError,
     RunStore,
 )
 
@@ -208,6 +216,19 @@ class ReviewIssueReport:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewPlanParams:
+    run_id: str
+    runs_dir: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewPlanReport:
+    run_record: RunRecord
+    plan_review: PlanReview
+    exit_code: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class PersistApprovedPlanParams:
     run_id: str
     runs_dir: Path
@@ -235,6 +256,19 @@ class RunCoordinator:
         else:
             exit_code = 3
         return ReviewIssueReport(run_record=record, issue_review=review, exit_code=exit_code)
+
+    def review_plan(self, *, params: ReviewPlanParams) -> ReviewPlanReport:
+        store = RunStore(params.runs_dir)
+        record = store.load_run(params.run_id)
+        review = _derive_plan_review(store=store, record=record)
+        store.write_plan_review(Path(record.run_dir).resolve(), review)
+        if review.review_status == "approved":
+            exit_code = 0
+        elif review.review_status == "changes_requested":
+            exit_code = 2
+        else:
+            exit_code = 3
+        return ReviewPlanReport(run_record=record, plan_review=review, exit_code=exit_code)
 
     def persist_approved_plan_for_planning(self, *, params: PersistApprovedPlanParams) -> Path:
         store = RunStore(params.runs_dir)
@@ -867,6 +901,179 @@ def _issue_review_summary(*, status: str, finding_count: int) -> str:
     return (
         "Planning must stop because review issue is blocked by "
         f"{finding_count} blocking {noun} in issue-draft.json."
+    )
+
+
+def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
+    blocked_findings: list[PlanReviewFeedback] = []
+    change_findings: list[PlanReviewFeedback] = []
+    run_dir = Path(record.run_dir).resolve()
+
+    try:
+        issue_review = store.load_issue_review(
+            run_dir,
+            issue_ref=record.issue_ref,
+            expected_run_id=record.run_id,
+        )
+    except IssueReviewNotFoundError:
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="issue_review_missing",
+                message=(
+                    "review issue must persist an approved issue-review.json before review plan "
+                    "can run."
+                ),
+                artifact="issue-review.json",
+                field="",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+    except IssueReviewValidationError as exc:
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="issue_review_invalid",
+                message=f"issue-review.json could not be validated for plan review: {exc}",
+                artifact="issue-review.json",
+                field="",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+
+    if issue_review.review_status != "approved":
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="issue_review_not_approved",
+                message=(
+                    "review plan requires issue-review.json.review_status to be 'approved' "
+                    "for the same run."
+                ),
+                artifact="issue-review.json",
+                field="review_status",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+
+    try:
+        approved_plan = store.load_approved_plan(run_dir, issue_ref=record.issue_ref)
+    except ApprovedPlanNotFoundError:
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="approved_plan_missing",
+                message=(
+                    "plan must persist approved-plan.json for the same run before review plan "
+                    "can run."
+                ),
+                artifact="approved-plan.json",
+                field="",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+    except ApprovedPlanValidationError as exc:
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="approved_plan_invalid",
+                message=f"approved-plan.json could not be validated for plan review: {exc}",
+                artifact="approved-plan.json",
+                field="",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+
+    _collect_plan_review_findings(
+        approved_plan=approved_plan,
+        record=record,
+        blocked_findings=blocked_findings,
+        change_findings=change_findings,
+    )
+    if blocked_findings:
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+    if change_findings:
+        return _plan_review_artifact(
+            record=record,
+            status="changes_requested",
+            feedback=tuple(change_findings),
+        )
+    return _plan_review_artifact(record=record, status="approved", feedback=())
+
+
+def _collect_plan_review_findings(
+    *,
+    approved_plan: ApprovedPlan,
+    record: RunRecord,
+    blocked_findings: list[PlanReviewFeedback],
+    change_findings: list[PlanReviewFeedback],
+) -> None:
+    if not _same_local_issue_ref(approved_plan.issue_ref, record.issue_ref):
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="approved_plan_issue_mismatch",
+                message="approved-plan.json issue_ref does not match the stored run issue_ref.",
+                artifact="approved-plan.json",
+                field="issue_ref",
+            )
+        )
+        return
+
+    if not approved_plan.retrieval_surface_summary.strip():
+        change_findings.append(
+            _plan_review_feedback(
+                code="missing_retrieval_surface_summary",
+                message=(
+                    "approved-plan.json must include a non-empty retrieval_surface_summary so "
+                    "implement ingress does not have to guess the reviewed plan surface."
+                ),
+                artifact="approved-plan.json",
+                field="retrieval_surface_summary",
+            )
+        )
+
+
+def _plan_review_feedback(
+    *,
+    code: str,
+    message: str,
+    artifact: str,
+    field: str,
+) -> PlanReviewFeedback:
+    return PlanReviewFeedback(code=code, message=message, artifact=artifact, field=field)
+
+
+def _plan_review_artifact(
+    *,
+    record: RunRecord,
+    status: str,
+    feedback: tuple[PlanReviewFeedback, ...],
+) -> PlanReview:
+    return PlanReview(
+        run_id=record.run_id,
+        issue_ref=record.issue_ref,
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
+        summary=_plan_review_summary(status=status, finding_count=len(feedback)),
+        feedback=feedback,
+        provenance=PlanReviewProvenance(
+            source_artifact="approved-plan.json",
+            run_id=record.run_id,
+            issue_ref=record.issue_ref,
+        ),
+    )
+
+
+def _plan_review_summary(*, status: str, finding_count: int) -> str:
+    if status == "approved":
+        return (
+            "Implementation may proceed because approved-plan.json passed the same-run "
+            "plan review gate."
+        )
+    if status == "changes_requested":
+        noun = "finding" if finding_count == 1 else "findings"
+        return (
+            "Implementation must stop because approved-plan.json has "
+            f"{finding_count} implementation-ingress {noun} that require changes."
+        )
+    noun = "finding" if finding_count == 1 else "findings"
+    return (
+        "Implementation must stop because review plan is blocked by "
+        f"{finding_count} prerequisite {noun}."
     )
 
 

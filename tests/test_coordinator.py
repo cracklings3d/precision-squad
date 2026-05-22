@@ -10,6 +10,7 @@ import pytest
 from precision_squad.coordinator import (
     PersistApprovedPlanParams,
     RepairIssueParams,
+    ReviewPlanParams,
     RunCoordinator,
 )
 from precision_squad.models import (
@@ -21,6 +22,7 @@ from precision_squad.models import (
     IssueReference,
     IssueReview,
     IssueReviewProvenance,
+    PlanReview,
     PublishPlan,
     PublishResult,
     QaResult,
@@ -249,3 +251,101 @@ def test_persist_approved_plan_for_planning_rejects_issue_mismatch(tmp_path: Pat
                 approved_plan=_approved_plan(),
             )
         )
+
+
+def test_review_plan_persists_same_run_plan_review_artifact(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_issue_review(
+        run_dir,
+        IssueReview(
+            run_id=record.run_id,
+            issue_ref="owner/repo#1",
+            review_status="approved",
+            summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
+            feedback=(),
+            provenance=IssueReviewProvenance(
+                source_artifact="issue-draft.json",
+                run_id=record.run_id,
+                issue_ref="owner/repo#1",
+            ),
+        ),
+    )
+    store.write_approved_plan(run_dir, _approved_plan())
+
+    report = RunCoordinator().review_plan(
+        params=ReviewPlanParams(run_id=record.run_id, runs_dir=runs_dir)
+    )
+
+    assert report.exit_code == 0
+    assert isinstance(report.plan_review, PlanReview)
+    assert report.plan_review.review_status == "approved"
+    assert (run_dir / "plan-review.json").exists()
+
+
+def test_review_plan_returns_changes_requested_for_correctable_plan_findings(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_issue_review(
+        run_dir,
+        IssueReview(
+            run_id=record.run_id,
+            issue_ref="owner/repo#1",
+            review_status="approved",
+            summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
+            feedback=(),
+            provenance=IssueReviewProvenance(
+                source_artifact="issue-draft.json",
+                run_id=record.run_id,
+                issue_ref="owner/repo#1",
+            ),
+        ),
+    )
+    store.write_approved_plan(
+        run_dir,
+        ApprovedPlan(
+            issue_ref="owner/repo#1",
+            plan_summary="Fix the bug with a minimal change.",
+            implementation_steps=("Update the implementation",),
+            named_references=(),
+            retrieval_surface_summary="",
+            approved=True,
+        ),
+    )
+
+    report = RunCoordinator().review_plan(
+        params=ReviewPlanParams(run_id=record.run_id, runs_dir=runs_dir)
+    )
+
+    assert report.exit_code == 2
+    assert report.plan_review.review_status == "changes_requested"
+    assert report.plan_review.feedback[0].code == "missing_retrieval_surface_summary"
+
+
+def test_review_plan_returns_blocked_when_prerequisite_issue_review_missing(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+
+    report = RunCoordinator().review_plan(
+        params=ReviewPlanParams(run_id=record.run_id, runs_dir=runs_dir)
+    )
+
+    assert report.exit_code == 3
+    assert report.plan_review.review_status == "blocked"
+    assert report.plan_review.feedback[0].code == "issue_review_missing"

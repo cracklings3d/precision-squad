@@ -106,6 +106,37 @@ class IssueReview:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanReviewFeedback:
+    """One deterministic implementation-ingress finding for plan review."""
+
+    code: str
+    message: str
+    artifact: str
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlanReviewProvenance:
+    """Explicit provenance for a plan review artifact."""
+
+    source_artifact: str
+    run_id: str
+    issue_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlanReview:
+    """Deterministic same-run implementation-ingress review artifact."""
+
+    run_id: str
+    issue_ref: str
+    review_status: Literal["approved", "changes_requested", "blocked"]
+    summary: str
+    feedback: tuple[PlanReviewFeedback, ...]
+    provenance: PlanReviewProvenance
+
+
+@dataclass(frozen=True, slots=True)
 class RunRequest:
     """Operator request to run one issue through the control plane."""
 

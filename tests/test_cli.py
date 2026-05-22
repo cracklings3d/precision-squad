@@ -30,6 +30,9 @@ from precision_squad.models import (
     IssueReview,
     IssueReviewFeedback,
     IssueReviewProvenance,
+    PlanReview,
+    PlanReviewFeedback,
+    PlanReviewProvenance,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -267,6 +270,149 @@ def test_review_issue_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.M
     )
 
     status = main(["review", "issue", "run-123"])
+
+    captured = capsys.readouterr()
+    assert status == 3
+    assert Path(captured_runs_dir["runs_dir"]) == (tmp_path / ".precision-squad" / "runs")
+    assert "Review Status: blocked" in captured.out
+
+
+def test_review_plan_prints_approved_review_output(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plan_review = PlanReview(
+        run_id="run-123",
+        issue_ref="cracklings3d/precision-squad#70",
+        review_status="approved",
+        summary="Implementation may proceed because approved-plan.json passed the same-run plan review gate.",
+        feedback=(),
+        provenance=PlanReviewProvenance(
+            source_artifact="approved-plan.json",
+            run_id="run-123",
+            issue_ref="cracklings3d/precision-squad#70",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_plan",
+        lambda self, *, params: __import__(
+            "precision_squad.coordinator", fromlist=["ReviewPlanReport"]
+        ).ReviewPlanReport(
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="cracklings3d/precision-squad#70",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-123"),
+            ),
+            plan_review=plan_review,
+            exit_code=0,
+        ),
+    )
+
+    status = main(["review", "plan", "run-123", "--runs-dir", str(tmp_path / "runs")])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Review Status: approved" in captured.out
+    assert "Artifacts: plan-review.json" in captured.out
+
+
+def test_review_plan_prints_feedback_for_changes_requested(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plan_review = PlanReview(
+        run_id="run-123",
+        issue_ref="cracklings3d/precision-squad#70",
+        review_status="changes_requested",
+        summary="Implementation must stop because approved-plan.json has 1 implementation-ingress finding that require changes.",
+        feedback=(
+            PlanReviewFeedback(
+                code="missing_retrieval_surface_summary",
+                message="approved-plan.json must include a non-empty retrieval_surface_summary so implement ingress does not have to guess the reviewed plan surface.",
+                artifact="approved-plan.json",
+                field="retrieval_surface_summary",
+            ),
+        ),
+        provenance=PlanReviewProvenance(
+            source_artifact="approved-plan.json",
+            run_id="run-123",
+            issue_ref="cracklings3d/precision-squad#70",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_plan",
+        lambda self, *, params: __import__(
+            "precision_squad.coordinator", fromlist=["ReviewPlanReport"]
+        ).ReviewPlanReport(
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="cracklings3d/precision-squad#70",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-123"),
+            ),
+            plan_review=plan_review,
+            exit_code=2,
+        ),
+    )
+
+    status = main(["review", "plan", "run-123", "--runs-dir", str(tmp_path / "runs")])
+
+    captured = capsys.readouterr()
+    assert status == 2
+    assert "Review Status: changes_requested" in captured.out
+    assert "missing_retrieval_surface_summary" in captured.out
+
+
+def test_review_plan_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        "[review.plan]\nruns_dir = \".precision-squad/runs\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    captured_runs_dir: dict[str, str] = {}
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_plan",
+        lambda self, *, params: (
+            captured_runs_dir.__setitem__("runs_dir", str(params.runs_dir)),
+            __import__("precision_squad.coordinator", fromlist=["ReviewPlanReport"]).ReviewPlanReport(
+                run_record=RunRecord(
+                    run_id="run-123",
+                    issue_ref="owner/repo#1",
+                    status="runnable",
+                    created_at="2026-05-01T00:00:00Z",
+                    updated_at="2026-05-01T00:00:00Z",
+                    run_dir=str(tmp_path / ".precision-squad" / "runs" / "run-123"),
+                ),
+                plan_review=PlanReview(
+                    run_id="run-123",
+                    issue_ref="owner/repo#1",
+                    review_status="blocked",
+                    summary="Implementation must stop because review plan is blocked by 1 prerequisite finding.",
+                    feedback=(
+                        PlanReviewFeedback(
+                            code="approved_plan_missing",
+                            message="plan must persist approved-plan.json for the same run before review plan can run.",
+                            artifact="approved-plan.json",
+                            field="",
+                        ),
+                    ),
+                    provenance=PlanReviewProvenance(
+                        source_artifact="approved-plan.json",
+                        run_id="run-123",
+                        issue_ref="owner/repo#1",
+                    ),
+                ),
+                exit_code=3,
+            ),
+        )[1],
+    )
+
+    status = main(["review", "plan", "run-123"])
 
     captured = capsys.readouterr()
     assert status == 3
@@ -2350,6 +2496,177 @@ def test_plan_run_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Monke
     captured = capsys.readouterr()
     assert status == 0
     assert "Run ID: run-123" in captured.out
+
+
+def test_review_plan_end_to_end_persists_approved_plan_review(capsys, tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    request = RunRequest(
+        issue_ref="cracklings3d/precision-squad#70",
+        runs_dir=str(runs_dir),
+    )
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "precision-squad", 70),
+            title="Add the review plan stage gate",
+            body="Persist a plan review artifact.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/precision-squad/issues/70",
+        ),
+        summary="Add the review plan stage gate",
+        problem_statement="Persist a plan review artifact.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    record = store.create_run(request, intake)
+    run_dir = Path(record.run_dir)
+    (run_dir / "issue-review.json").write_text(
+        json.dumps(
+            {
+                "run_id": record.run_id,
+                "issue_ref": "cracklings3d/precision-squad#70",
+                "review_status": "approved",
+                "summary": "Planning may proceed because issue-draft.json passed the local planner-safety review.",
+                "feedback": [],
+                "provenance": {
+                    "source_artifact": "issue-draft.json",
+                    "run_id": record.run_id,
+                    "issue_ref": "cracklings3d/precision-squad#70",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/precision-squad#70",
+                "plan_summary": "Keep the implement ingress narrowly gated.",
+                "implementation_steps": ["Add review plan command"],
+                "named_references": [],
+                "retrieval_surface_summary": "src/precision_squad/",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(["review", "plan", record.run_id, "--runs-dir", str(runs_dir)])
+
+    captured = capsys.readouterr()
+    payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
+    assert status == 0
+    assert payload["review_status"] == "approved"
+    assert payload["provenance"]["source_artifact"] == "approved-plan.json"
+    assert "Review Status: approved" in captured.out
+
+
+def test_review_plan_end_to_end_persists_changes_requested_when_plan_summary_surface_missing(
+    capsys, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "cracklings3d/precision-squad#70",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "issue-review.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "cracklings3d/precision-squad#70",
+                "review_status": "approved",
+                "summary": "Planning may proceed because issue-draft.json passed the local planner-safety review.",
+                "feedback": [],
+                "provenance": {
+                    "source_artifact": "issue-draft.json",
+                    "run_id": "run-123",
+                    "issue_ref": "cracklings3d/precision-squad#70",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "approved-plan.json").write_text(
+        json.dumps(
+            {
+                "issue_ref": "cracklings3d/precision-squad#70",
+                "plan_summary": "Keep the implement ingress narrowly gated.",
+                "implementation_steps": ["Add review plan command"],
+                "named_references": [],
+                "retrieval_surface_summary": "",
+                "approved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(["review", "plan", "run-123", "--runs-dir", str(runs_dir)])
+
+    captured = capsys.readouterr()
+    payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
+    assert status == 2
+    assert payload["review_status"] == "changes_requested"
+    assert payload["feedback"][0]["code"] == "missing_retrieval_surface_summary"
+    assert "Review Status: changes_requested" in captured.out
+
+
+def test_review_plan_end_to_end_persists_blocked_when_approved_plan_missing(
+    capsys, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "cracklings3d/precision-squad#70",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "issue-review.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "cracklings3d/precision-squad#70",
+                "review_status": "approved",
+                "summary": "Planning may proceed because issue-draft.json passed the local planner-safety review.",
+                "feedback": [],
+                "provenance": {
+                    "source_artifact": "issue-draft.json",
+                    "run_id": "run-123",
+                    "issue_ref": "cracklings3d/precision-squad#70",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(["review", "plan", "run-123", "--runs-dir", str(runs_dir)])
+
+    captured = capsys.readouterr()
+    payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
+    assert status == 3
+    assert payload["review_status"] == "blocked"
+    assert payload["feedback"][0]["code"] == "approved_plan_missing"
+    assert "Review Status: blocked" in captured.out
 
 
 def test_install_skill_uses_config_defaults(

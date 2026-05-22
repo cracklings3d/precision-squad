@@ -24,6 +24,9 @@ from precision_squad.models import (
     IssueReview,
     IssueReviewFeedback,
     IssueReviewProvenance,
+    PlanReview,
+    PlanReviewFeedback,
+    PlanReviewProvenance,
     PublishPlan,
     PublishResult,
     QaResult,
@@ -35,6 +38,9 @@ from precision_squad.run_store import (
     ApprovedPlanValidationError,
     IssueReviewNotFoundError,
     IssueReviewValidationError,
+    PlanReviewNotApprovedError,
+    PlanReviewNotFoundError,
+    PlanReviewValidationError,
     RunStore,
     load_approved_plan_artifact,
 )
@@ -74,6 +80,35 @@ def _issue_review(
         feedback=feedback,
         provenance=IssueReviewProvenance(
             source_artifact="issue-draft.json",
+            run_id="run-123",
+            issue_ref="owner/repo#1",
+        ),
+    )
+
+
+def _plan_review(
+    *, status: Literal["approved", "changes_requested", "blocked"] = "approved"
+) -> PlanReview:
+    feedback = ()
+    if status != "approved":
+        feedback = (
+            PlanReviewFeedback(
+                code="missing_retrieval_surface_summary",
+                message="Retrieval surface summary is required.",
+                artifact="approved-plan.json",
+                field="retrieval_surface_summary",
+            ),
+        )
+    return PlanReview(
+        run_id="run-123",
+        issue_ref="owner/repo#1",
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
+        summary="Implementation may proceed because approved-plan.json passed the same-run plan review gate."
+        if status == "approved"
+        else "Implementation must stop because approved-plan.json has 1 implementation-ingress finding that require changes.",
+        feedback=feedback,
+        provenance=PlanReviewProvenance(
+            source_artifact="approved-plan.json",
             run_id="run-123",
             issue_ref="owner/repo#1",
         ),
@@ -177,6 +212,76 @@ def test_write_and_load_issue_review_persists_same_run_artifact(tmp_path: Path) 
     assert loaded == _issue_review()
     assert payload["review_status"] == "approved"
     assert payload["provenance"]["source_artifact"] == "issue-draft.json"
+
+
+def test_write_and_load_plan_review_persists_same_run_artifact(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    store.write_plan_review(run_dir, _plan_review())
+
+    loaded = store.load_plan_review(run_dir, issue_ref="owner/repo#1")
+    payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
+    assert loaded == _plan_review()
+    assert payload["review_status"] == "approved"
+    assert payload["provenance"]["source_artifact"] == "approved-plan.json"
+
+
+def test_load_plan_review_missing_artifact_raises_not_found(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    with pytest.raises(PlanReviewNotFoundError, match="Plan review artifact not found"):
+        RunStore.load_plan_review(run_dir, issue_ref="owner/repo#1")
+
+
+def test_require_plan_review_for_implement_requires_run_record_and_approved_review(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    _write_run_record(run_dir)
+    store.write_plan_review(run_dir, _plan_review())
+
+    review = RunStore.require_plan_review_for_implement(run_dir, issue_ref="owner/repo#1")
+
+    assert review.review_status == "approved"
+
+
+@pytest.mark.parametrize("status", ["changes_requested", "blocked"])
+def test_require_plan_review_for_implement_rejects_non_approved_status(
+    tmp_path: Path, status: Literal["changes_requested", "blocked"]
+) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    _write_run_record(run_dir)
+    store.write_plan_review(run_dir, _plan_review(status=status))
+
+    with pytest.raises(PlanReviewNotApprovedError, match="review_status"):
+        RunStore.require_plan_review_for_implement(run_dir, issue_ref="owner/repo#1")
+
+
+def test_require_plan_review_for_implement_rejects_invalid_provenance(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    _write_run_record(run_dir)
+    payload = {
+        "run_id": "run-123",
+        "issue_ref": "owner/repo#1",
+        "review_status": "approved",
+        "summary": "Implementation may proceed because approved-plan.json passed the same-run plan review gate.",
+        "feedback": [],
+        "provenance": {
+            "source_artifact": "issue-review.json",
+            "run_id": "run-123",
+            "issue_ref": "owner/repo#1",
+        },
+    }
+    (run_dir / "plan-review.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(PlanReviewValidationError, match="source_artifact"):
+        RunStore.require_plan_review_for_implement(run_dir, issue_ref="owner/repo#1")
 
 
 def test_load_issue_review_missing_artifact_raises_not_found(tmp_path: Path) -> None:
