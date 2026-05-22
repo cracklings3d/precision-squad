@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -908,6 +909,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
     blocked_findings: list[PlanReviewFeedback] = []
     change_findings: list[PlanReviewFeedback] = []
     run_dir = Path(record.run_dir).resolve()
+    approved_plan_path = run_dir / "approved-plan.json"
 
     try:
         issue_review = store.load_issue_review(
@@ -953,8 +955,57 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
 
+    if not approved_plan_path.exists():
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="approved_plan_missing",
+                message=(
+                    "plan must persist approved-plan.json for the same run before review plan "
+                    "can run."
+                ),
+                artifact="approved-plan.json",
+                field="",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
     try:
-        approved_plan = store.load_approved_plan(run_dir, issue_ref=record.issue_ref)
+        with approved_plan_path.open(encoding="utf-8") as f:
+            approved_plan_payload = json.load(f)
+    except JSONDecodeError as exc:
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="approved_plan_invalid",
+                message=(
+                    "approved-plan.json could not be validated for plan review: "
+                    f"invalid JSON ({exc.msg})"
+                ),
+                artifact="approved-plan.json",
+                field="",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+    if not isinstance(approved_plan_payload, dict):
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="approved_plan_invalid",
+                message="approved-plan.json could not be validated for plan review: expected a JSON object.",
+                artifact="approved-plan.json",
+                field="",
+            )
+        )
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+
+    _collect_plan_review_findings(
+        approved_plan_payload=approved_plan_payload,
+        record=record,
+        blocked_findings=blocked_findings,
+        change_findings=change_findings,
+    )
+    if blocked_findings:
+        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+
+    try:
+        store.load_approved_plan(run_dir, issue_ref=record.issue_ref)
     except ApprovedPlanNotFoundError:
         blocked_findings.append(
             _plan_review_feedback(
@@ -969,22 +1020,17 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
     except ApprovedPlanValidationError as exc:
-        blocked_findings.append(
-            _plan_review_feedback(
-                code="approved_plan_invalid",
-                message=f"approved-plan.json could not be validated for plan review: {exc}",
-                artifact="approved-plan.json",
-                field="",
+        if not change_findings:
+            blocked_findings.append(
+                _plan_review_feedback(
+                    code="approved_plan_invalid",
+                    message=f"approved-plan.json could not be validated for plan review: {exc}",
+                    artifact="approved-plan.json",
+                    field="",
+                )
             )
-        )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+            return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
 
-    _collect_plan_review_findings(
-        approved_plan=approved_plan,
-        record=record,
-        blocked_findings=blocked_findings,
-        change_findings=change_findings,
-    )
     if blocked_findings:
         return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
     if change_findings:
@@ -998,12 +1044,24 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
 
 def _collect_plan_review_findings(
     *,
-    approved_plan: ApprovedPlan,
+    approved_plan_payload: dict[str, object],
     record: RunRecord,
     blocked_findings: list[PlanReviewFeedback],
     change_findings: list[PlanReviewFeedback],
 ) -> None:
-    if not _same_local_issue_ref(approved_plan.issue_ref, record.issue_ref):
+    approved_plan_issue_ref = approved_plan_payload.get("issue_ref")
+    if not isinstance(approved_plan_issue_ref, str) or not approved_plan_issue_ref.strip():
+        blocked_findings.append(
+            _plan_review_feedback(
+                code="approved_plan_issue_missing",
+                message="approved-plan.json must include a non-empty issue_ref for the reviewed run.",
+                artifact="approved-plan.json",
+                field="issue_ref",
+            )
+        )
+        return
+
+    if not _same_local_issue_ref(approved_plan_issue_ref, record.issue_ref):
         blocked_findings.append(
             _plan_review_feedback(
                 code="approved_plan_issue_mismatch",
@@ -1014,7 +1072,36 @@ def _collect_plan_review_findings(
         )
         return
 
-    if not approved_plan.retrieval_surface_summary.strip():
+    plan_summary = approved_plan_payload.get("plan_summary")
+    if not isinstance(plan_summary, str) or not plan_summary.strip():
+        change_findings.append(
+            _plan_review_feedback(
+                code="missing_plan_summary",
+                message=(
+                    "approved-plan.json must include a non-empty plan_summary so implement "
+                    "ingress receives the reviewed implementation summary explicitly."
+                ),
+                artifact="approved-plan.json",
+                field="plan_summary",
+            )
+        )
+
+    implementation_steps = approved_plan_payload.get("implementation_steps")
+    if not _has_usable_implementation_steps(implementation_steps):
+        change_findings.append(
+            _plan_review_feedback(
+                code="missing_implementation_steps",
+                message=(
+                    "approved-plan.json must include at least one usable implementation step so "
+                    "implement ingress does not have to reconstruct the reviewed plan."
+                ),
+                artifact="approved-plan.json",
+                field="implementation_steps",
+            )
+        )
+
+    retrieval_surface_summary = approved_plan_payload.get("retrieval_surface_summary")
+    if not isinstance(retrieval_surface_summary, str) or not retrieval_surface_summary.strip():
         change_findings.append(
             _plan_review_feedback(
                 code="missing_retrieval_surface_summary",
@@ -1026,6 +1113,10 @@ def _collect_plan_review_findings(
                 field="retrieval_surface_summary",
             )
         )
+
+
+def _has_usable_implementation_steps(value: object) -> bool:
+    return isinstance(value, list) and any(isinstance(step, str) and step.strip() for step in value)
 
 
 def _plan_review_feedback(

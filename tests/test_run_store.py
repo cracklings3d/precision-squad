@@ -248,6 +248,27 @@ def test_require_plan_review_for_implement_requires_run_record_and_approved_revi
     assert review.review_status == "approved"
 
 
+@pytest.mark.parametrize(
+    ("writer", "match"),
+    [
+        (None, r"run-record\.json"),
+        ("{not-json", r"valid JSON"),
+    ],
+)
+def test_require_plan_review_for_implement_normalizes_missing_or_malformed_run_record(
+    tmp_path: Path, writer: str | None, match: str
+) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    if writer is not None:
+        (run_dir / "run-record.json").write_text(writer, encoding="utf-8")
+    store.write_plan_review(run_dir, _plan_review())
+
+    with pytest.raises(PlanReviewValidationError, match=match):
+        RunStore.require_plan_review_for_implement(run_dir, issue_ref="owner/repo#1")
+
+
 @pytest.mark.parametrize("status", ["changes_requested", "blocked"])
 def test_require_plan_review_for_implement_rejects_non_approved_status(
     tmp_path: Path, status: Literal["changes_requested", "blocked"]
