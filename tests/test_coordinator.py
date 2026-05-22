@@ -351,6 +351,17 @@ def test_review_plan_returns_changes_requested_for_correctable_plan_findings(tmp
             {
                 "issue_ref": "owner/repo#1",
                 "plan_summary": "Fix the bug with a minimal change.",
+                "implementation_steps": ["   "],
+                "named_references": [],
+                "retrieval_surface_summary": "src/",
+                "approved": True,
+            },
+            "missing_implementation_steps",
+        ),
+        (
+            {
+                "issue_ref": "owner/repo#1",
+                "plan_summary": "Fix the bug with a minimal change.",
                 "implementation_steps": [],
                 "named_references": [],
                 "retrieval_surface_summary": "src/",
