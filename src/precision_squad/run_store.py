@@ -456,7 +456,8 @@ def _parse_issue_review_payload(
     review_status = payload.get("review_status")
     if review_status not in {"approved", "changes_requested", "blocked"}:
         raise IssueReviewValidationError(
-            "Issue review field 'review_status' must be 'approved', 'changes_requested', or 'blocked'"
+            "Issue review field 'review_status' must be 'approved', "
+            "'changes_requested', or 'blocked'"
         )
 
     summary = payload.get("summary")

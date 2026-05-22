@@ -26,17 +26,21 @@ from precision_squad.models import (
     GovernanceVerdict,
     IssueAssessment,
     IssueIntake,
+    IssueReference,
     IssueReview,
     IssueReviewFeedback,
     IssueReviewProvenance,
-    IssueReference,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
     RunRecord,
     RunRequest,
 )
-from precision_squad.repair import OpenCodeRepairAdapter, RepairAdapter, VercelAIRepairAdapter
+from precision_squad.repair import (
+    OpenCodeRepairAdapter,
+    RepairAdapter,
+    VercelAIRepairAdapter,
+)
 from precision_squad.run_store import RunStore
 
 
@@ -266,7 +270,7 @@ def test_review_issue_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.M
 
     captured = capsys.readouterr()
     assert status == 3
-    assert captured_runs_dir["runs_dir"].endswith(".precision-squad\\runs")
+    assert Path(captured_runs_dir["runs_dir"]) == (tmp_path / ".precision-squad" / "runs")
     assert "Review Status: blocked" in captured.out
 
 

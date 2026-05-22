@@ -228,7 +228,12 @@ class RunCoordinator:
         record = store.load_run(params.run_id)
         review = _derive_issue_review(store=store, record=record)
         store.write_issue_review(Path(record.run_dir).resolve(), review)
-        exit_code = 0 if review.review_status == "approved" else 2 if review.review_status == "changes_requested" else 3
+        if review.review_status == "approved":
+            exit_code = 0
+        elif review.review_status == "changes_requested":
+            exit_code = 2
+        else:
+            exit_code = 3
         return ReviewIssueReport(run_record=record, issue_review=review, exit_code=exit_code)
 
     def persist_approved_plan_for_planning(self, *, params: PersistApprovedPlanParams) -> Path:
@@ -236,7 +241,8 @@ class RunCoordinator:
         record = store.load_run(params.run_id)
         if not _same_local_issue_ref(record.issue_ref, params.approved_plan.issue_ref):
             raise ValueError(
-                "Approved plan issue_ref does not match the stored run issue_ref for planning ingress."
+                "Approved plan issue_ref does not match the stored run issue_ref "
+                "for planning ingress."
             )
         run_dir = Path(record.run_dir).resolve()
         store.write_gated_approved_plan(
@@ -689,7 +695,6 @@ def _same_local_issue_ref(left: str, right: str) -> bool:
 
 
 def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
-    run_dir = Path(record.run_dir).resolve()
     blocked_findings: list[IssueReviewFeedback] = []
     change_findings: list[IssueReviewFeedback] = []
     try:
@@ -702,7 +707,11 @@ def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
                 field="",
             )
         )
-        return _issue_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _issue_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
     except (JSONDecodeError, OSError, ValueError) as exc:
         blocked_findings.append(
             _issue_review_feedback(
@@ -711,7 +720,11 @@ def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
                 field="",
             )
         )
-        return _issue_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _issue_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
 
     _collect_issue_review_findings(
         draft=draft,
@@ -720,7 +733,11 @@ def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
         change_findings=change_findings,
     )
     if blocked_findings:
-        return _issue_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _issue_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
     if change_findings:
         return _issue_review_artifact(
             record=record,
@@ -753,7 +770,10 @@ def _collect_issue_review_findings(
         change_findings.append(
             _issue_review_feedback(
                 code="missing_summary",
-                message="issue-draft.json must include a non-empty summary before planning can proceed.",
+                message=(
+                    "issue-draft.json must include a non-empty summary before "
+                    "planning can proceed."
+                ),
                 field="summary",
             )
         )
@@ -761,7 +781,10 @@ def _collect_issue_review_findings(
         change_findings.append(
             _issue_review_feedback(
                 code="missing_problem_statement",
-                message="issue-draft.json must include a non-empty problem_statement before planning can proceed.",
+                message=(
+                    "issue-draft.json must include a non-empty problem_statement "
+                    "before planning can proceed."
+                ),
                 field="problem_statement",
             )
         )
@@ -795,7 +818,10 @@ def _collect_issue_review_findings(
         change_findings.append(
             _issue_review_feedback(
                 code="intake_not_runnable",
-                message="issue-draft.json intake_status must be 'runnable' before planning can proceed.",
+                message=(
+                    "issue-draft.json intake_status must be 'runnable' before "
+                    "planning can proceed."
+                ),
                 field="intake_status",
             )
         )
@@ -827,7 +853,10 @@ def _issue_review_artifact(
 
 def _issue_review_summary(*, status: str, finding_count: int) -> str:
     if status == "approved":
-        return "Planning may proceed because issue-draft.json passed the local planner-safety review."
+        return (
+            "Planning may proceed because issue-draft.json passed the local "
+            "planner-safety review."
+        )
     if status == "changes_requested":
         noun = "finding" if finding_count == 1 else "findings"
         return (
