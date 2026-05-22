@@ -275,10 +275,7 @@ def _finalize_qa_result(
 
     repaired_failure_signature = _failure_signature(qa_result)
     if repaired_failure_signature < baseline_failure_signature:
-        if qa_result.status == "passed":
-            improved_quality: Literal["green", "improved", "degraded"] = "green"
-        else:
-            improved_quality = "improved"
+        improved_quality: Literal["improved"] = "improved"
         return QaResult(
             status=final_result.status,
             summary=final_result.summary,

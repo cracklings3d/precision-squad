@@ -1837,6 +1837,44 @@ def test_finalize_qa_result_accepts_strict_baseline_improvement(tmp_path: Path) 
     assert "qa_baseline_improved" not in result.detail_codes
 
 
+def test_finalize_qa_result_marks_passed_run_as_improved_when_baseline_failed(
+    tmp_path: Path,
+) -> None:
+    baseline_stdout = tmp_path / "baseline.stdout.log"
+    baseline_stdout.write_text(
+        "ERROR tests/test_renderer.py\n"
+        "E   OSError: cannot load library 'libgobject-2.0-0'\n"
+        "ERROR tests/test_headers_footers.py\n"
+        "E   ModuleNotFoundError: No module named 'markdown_pdf_renderer.styles.styles'\n",
+        encoding="utf-8",
+    )
+
+    baseline = __import__("precision_squad.models", fromlist=["QaResult"]).QaResult(
+        status="failed",
+        summary="baseline failed",
+        detail_codes=("qa_failed",),
+        command="python -m pytest tests/",
+        stdout_path=str(baseline_stdout),
+        phase="baseline",
+    )
+    repaired = __import__("precision_squad.models", fromlist=["QaResult"]).QaResult(
+        status="passed",
+        summary="repaired passed",
+        detail_codes=("qa_passed",),
+        command="python -m pytest tests/",
+    )
+
+    result = _finalize_qa_result(
+        qa_result=repaired,
+        baseline_result=baseline,
+        baseline_failure_signature=_failure_signature(baseline),
+    )
+
+    assert result.status == "passed"
+    assert result.phase == "final"
+    assert result.quality == "improved"
+
+
 def test_parse_repair_json_extracts_summary() -> None:
     from precision_squad.repair.adapter import _parse_repair_json
 
