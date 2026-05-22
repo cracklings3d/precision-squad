@@ -92,6 +92,12 @@ Canonical planning ingress for an existing reviewed run:
 python -m precision_squad.cli plan <run-id> --approved-plan-path <path>
 ```
 
+Explicit local-only implementation stage for an existing reviewed run:
+
+```bash
+python -m precision_squad.cli implement <run-id> --repo-path <local-repo>
+```
+
 Optional project config:
 
 - locations, in search order: `./.precision-squad.toml` and `./.precision-squad/precision-squad.toml`
@@ -100,6 +106,7 @@ Optional project config:
 - schema: command-shaped TOML tables only; top-level scalar keys are invalid
 - discovery root:
   - `repair issue`: `--repo-path` when provided, otherwise the current working directory
+  - `implement`: `--repo-path` when provided, otherwise the current working directory
   - `plan`: the current working directory
   - `publish run`: the current working directory
   - `install-skill`: `--project-root` when provided, otherwise the current working directory
@@ -125,6 +132,12 @@ runs_dir = ".precision-squad/runs"
 
 [plan]
 runs_dir = ".precision-squad/runs"
+
+[implement]
+repo_path = "."
+runs_dir = ".precision-squad/runs"
+repair_agent = "opencode"
+repair_model = "model-name"
 
 [publish.run]
 runs_dir = ".precision-squad/runs"
@@ -156,6 +169,13 @@ Supported keys for `review issue`:
 Supported keys for `plan`:
 
 - `runs_dir`
+
+Supported keys for `implement`:
+
+- `repo_path`
+- `runs_dir`
+- `repair_agent`
+- `repair_model`
 
 Repair agent selection for `repair issue`:
 
@@ -216,6 +236,16 @@ python -m precision_squad.cli run issue owner/repo#number --repo-path <local-rep
 `review plan` stops after reading the same run's canonical `approved-plan.json` and writing the bounded pre-implementation review artifact:
 
 - `plan-review.json`
+
+`implement` stops after validating the same run's `approved-plan.json` plus stage-approved `plan-review.json`, then running the local execution / repair / QA / evaluation / governance flow without publish artifacts:
+
+- `execution-result.json`
+- `decision-log.attempt-{attempt}.json`
+- `repair-result.json`
+- `qa-baseline-result.json`
+- `qa-result.json`
+- `evaluation-result.json`
+- `governance-verdict.json`
 
 `plan <run-id> --approved-plan-path <path>` is the canonical planning ingress. `repair issue --approved-plan-path` remains supported as a compatibility ingress for repair-oriented flows.
 

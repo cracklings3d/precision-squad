@@ -39,7 +39,18 @@ That means:
 
 ## Execution Model
 
-One `repair issue` run follows this flow:
+The explicit local stage chain is:
+
+1. `create issue`
+2. `review issue`
+3. `plan`
+4. `review plan`
+5. `implement`
+6. `publish run`
+
+`implement` is the local-only boundary between reviewed planning and publish-side behavior. It reuses the same docs-first execution, repair, QA, evaluation, and governance persistence flow as the compatibility `repair issue` path, but stops before publish planning, GitHub mutation, or post-publish review.
+
+One `repair issue` compatibility run follows this flow:
 
 1. Load and classify the GitHub issue.
 2. Create a persisted run directory under `.precision-squad/runs/<run-id>/`.

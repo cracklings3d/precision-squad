@@ -2498,6 +2498,149 @@ def test_plan_run_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Monke
     assert "Run ID: run-123" in captured.out
 
 
+def test_implement_run_prints_local_only_stage_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.implement_run",
+        lambda self, *, params, dependencies: __import__(
+            "precision_squad.coordinator", fromlist=["ImplementRunReport"]
+        ).ImplementRunReport(
+            intake=IssueIntake(
+                issue=GitHubIssue(
+                    reference=IssueReference("owner", "repo", 1),
+                    title="Test issue",
+                    body="Fix the bug.",
+                    labels=(),
+                    html_url="https://github.com/owner/repo/issues/1",
+                ),
+                summary="Test issue",
+                problem_statement="Fix the bug.",
+                assessment=IssueAssessment(status="runnable", reason_codes=()),
+            ),
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-123"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="Execution completed.",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(
+                status="success",
+                summary="Evaluation succeeded.",
+                detail_codes=(),
+            ),
+            governance_verdict=GovernanceVerdict(
+                status="approved",
+                summary="Approved",
+                reason_codes=(),
+            ),
+            repair_result=None,
+            baseline_qa_result=None,
+            qa_result=None,
+            exit_code=0,
+        ),
+    )
+
+    status = main(
+        [
+            "implement",
+            "run-123",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Execution Status: completed" in captured.out
+    assert "Governance: approved" in captured.out
+    assert "Publish Plan:" not in captured.out
+    assert "Publish Result:" not in captured.out
+
+
+def test_implement_run_uses_config_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    repo_path = tmp_path / "repo-from-config"
+    repo_path.mkdir()
+    runs_dir = tmp_path / "runs-from-config"
+    (tmp_path / ".precision-squad.toml").write_text(
+        (
+            "[implement]\n"
+            f'repo_path = "{repo_path.as_posix()}"\n'
+            f'runs_dir = "{runs_dir.as_posix()}"\n'
+            'repair_agent = "none"\n'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, str] = {}
+
+    def fake_implement_run(self, *, params, dependencies):
+        del self, dependencies
+        captured["repo_path"] = str(params.repo_path)
+        captured["runs_dir"] = str(params.runs_dir)
+        return __import__("precision_squad.coordinator", fromlist=["ImplementRunReport"]).ImplementRunReport(
+            intake=IssueIntake(
+                issue=GitHubIssue(
+                    reference=IssueReference("owner", "repo", 1),
+                    title="Test issue",
+                    body="Fix the bug.",
+                    labels=(),
+                    html_url="https://github.com/owner/repo/issues/1",
+                ),
+                summary="Test issue",
+                problem_statement="Fix the bug.",
+                assessment=IssueAssessment(status="runnable", reason_codes=()),
+            ),
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(runs_dir / "run-123"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="Execution completed.",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(
+                status="success",
+                summary="Evaluation succeeded.",
+                detail_codes=(),
+            ),
+            governance_verdict=GovernanceVerdict(
+                status="approved",
+                summary="Approved",
+                reason_codes=(),
+            ),
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.implement_run", fake_implement_run)
+
+    status = main(["implement", "run-123"])
+
+    captured_out = capsys.readouterr()
+    assert status == 0
+    assert Path(captured["repo_path"]) == repo_path
+    assert Path(captured["runs_dir"]) == runs_dir
+    assert "Run ID: run-123" in captured_out.out
+
+
 def test_review_plan_end_to_end_persists_approved_plan_review(capsys, tmp_path: Path) -> None:
     runs_dir = tmp_path / "runs"
     store = RunStore(runs_dir)

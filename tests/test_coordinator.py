@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from precision_squad.coordinator import (
+    ImplementRunParams,
     PersistApprovedPlanParams,
     RepairIssueParams,
     ReviewPlanParams,
@@ -20,10 +21,11 @@ from precision_squad.models import (
     GitHubIssue,
     IssueAssessment,
     IssueIntake,
-    IssueReference,
     IssueReview,
+    IssueReference,
     IssueReviewProvenance,
     PlanReview,
+    PlanReviewProvenance,
     PublishPlan,
     PublishResult,
     QaResult,
@@ -71,6 +73,55 @@ def _make_params(tmp_path: Path) -> RepairIssueParams:
         repair_model=None,
         review_model=None,
         approved_plan=_approved_plan(),
+    )
+
+
+def _write_implement_ingress(run_dir: Path, *, run_id: str, issue_ref: str = "owner/repo#1") -> None:
+    (run_dir / "issue-intake.json").write_text(
+        json.dumps(
+            {
+                "issue": {
+                    "reference": {"owner": "owner", "repo": "repo", "number": 1},
+                    "title": "Test issue",
+                    "body": "Fix the bug.",
+                    "labels": [],
+                    "html_url": "https://github.com/owner/repo/issues/1",
+                },
+                "summary": "Test issue",
+                "problem_statement": "Fix the bug.",
+                "assessment": {"status": "runnable", "reason_codes": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "plan-review.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "issue_ref": issue_ref,
+                "review_status": "approved",
+                "summary": "Implementation may proceed because approved-plan.json passed the same-run plan review gate.",
+                "feedback": [],
+                "provenance": {
+                    "source_artifact": "approved-plan.json",
+                    "run_id": run_id,
+                    "issue_ref": issue_ref,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _make_implement_params(tmp_path: Path, run_id: str) -> ImplementRunParams:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(exist_ok=True)
+    return ImplementRunParams(
+        run_id=run_id,
+        runs_dir=tmp_path / "runs",
+        repo_path=repo_path,
+        repair_agent="none",
+        repair_model=None,
     )
 
 
@@ -187,6 +238,95 @@ def test_repair_issue_marks_missing_decision_log_artifact_as_failed_infra(
     assert report.governance_verdict.status == "blocked"
     assert report.publish_plan is not None
     assert report.publish_plan.status == "issue_comment"
+
+
+def test_implement_run_requires_same_run_approved_review_before_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+
+    def fail_if_execute(self, intake, run_record, run_dir):
+        raise AssertionError("docs-first execution should not start before implement ingress validates")
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
+
+    with pytest.raises(ValueError, match="Plan review artifact not found"):
+        RunCoordinator().implement_run(
+            params=_make_implement_params(tmp_path, record.run_id),
+            dependencies=MagicMock(),
+        )
+
+
+def test_implement_run_persists_local_artifacts_without_publish_side_effects(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+    _write_implement_ingress(run_dir, run_id=record.run_id)
+
+    execution_result = ExecutionResult(
+        status="completed",
+        executor_name="docs",
+        summary="Execution completed.",
+        detail_codes=(),
+        artifact_dir=str(run_dir / "execution-contract"),
+    )
+    repair_result = RepairResult(
+        status="completed",
+        summary="Repair completed.",
+        detail_codes=("repair_stage_completed",),
+        workspace_path=str(tmp_path / "repair-workspace"),
+        patch_path=str(tmp_path / "repair.patch"),
+        design_decisions=(),
+    )
+    baseline = QaResult(status="passed", summary="Baseline passed.", detail_codes=(), phase="baseline")
+    final = QaResult(status="passed", summary="Final passed.", detail_codes=(), phase="final")
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(
+        coord_module.DocsFirstExecutor,
+        "execute",
+        lambda self, intake, run_record, run_dir: execution_result,
+    )
+
+    dependencies = MagicMock()
+    dependencies.synthesis_artifacts_ready.return_value = True
+    dependencies.run_repair_qa_loop.return_value = (repair_result, baseline, final)
+    dependencies.merge_execution_result.return_value = execution_result
+
+    report = RunCoordinator().implement_run(
+        params=_make_implement_params(tmp_path, record.run_id),
+        dependencies=dependencies,
+    )
+
+    assert report.exit_code == 0
+    assert (run_dir / "execution-result.json").exists()
+    assert (run_dir / "repair-result.json").exists()
+    assert (run_dir / "decision-log.attempt-1.json").exists()
+    assert (run_dir / "qa-baseline-result.json").exists()
+    assert (run_dir / "qa-result.json").exists()
+    assert (run_dir / "evaluation-result.json").exists()
+    assert (run_dir / "governance-verdict.json").exists()
+    assert not (run_dir / "publish-plan.json").exists()
+    assert not (run_dir / "publish-result.json").exists()
+    dependencies.execute_publish_plan.assert_not_called()
+    dependencies.run_post_publish_review_if_needed.assert_not_called()
 
 
 def test_persist_approved_plan_for_planning_writes_same_run_artifact(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ from .config import (
 )
 from .coordinator import (
     CreateIssueParams,
+    ImplementRunParams,
     PersistApprovedPlanParams,
     PublishRunParams,
     RepairIssueParams,
@@ -226,6 +227,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory where run artifacts are stored.",
     )
     plan_parser.set_defaults(handler=_plan_run)
+
+    implement_parser = subparsers.add_parser(
+        "implement",
+        help="Run the explicit local-only implementation stage for an existing run.",
+    )
+    implement_parser.add_argument("run_id", help="Existing run ID to implement.")
+    implement_parser.add_argument(
+        "--repo-path",
+        default=argparse.SUPPRESS,
+        help="Local filesystem path to the target repository checkout.",
+    )
+    implement_parser.add_argument(
+        "--runs-dir",
+        default=argparse.SUPPRESS,
+        help="Directory where run artifacts are stored.",
+    )
+    implement_parser.add_argument(
+        "--repair-agent",
+        default=argparse.SUPPRESS,
+        metavar="{" + ",".join(_DISPLAYED_REPAIR_AGENT_CHOICES) + "}",
+        help=(
+            "Repair agent adapter to run after implement ingress succeeds. "
+            "Defaults to opencode when omitted. Normal choices: opencode, none. "
+            "Legacy compatibility input: vercel-ai (retired compatibility path)."
+        ),
+    )
+    implement_parser.add_argument(
+        "--repair-model",
+        default=argparse.SUPPRESS,
+        help="Optional model override for the repair agent runtime.",
+    )
+    implement_parser.set_defaults(handler=_implement_run)
 
     publish_parser = subparsers.add_parser(
         "publish",
@@ -475,6 +508,38 @@ def _plan_run(args: argparse.Namespace) -> int:
     print(f"Approved Plan: {artifact_path}")
     print("Artifacts: approved-plan.json")
     return 0
+
+
+def _implement_run(args: argparse.Namespace) -> int:
+    report = RunCoordinator().implement_run(
+        params=ImplementRunParams(
+            run_id=args.run_id,
+            runs_dir=Path(args.runs_dir),
+            repo_path=Path(args.repo_path),
+            repair_agent=args.repair_agent,
+            repair_model=args.repair_model,
+        ),
+        dependencies=_CliRepairDependencies(),
+    )
+
+    print(f"Run ID: {report.run_record.run_id}")
+    print(f"Run Dir: {report.run_record.run_dir}")
+    print(f"Issue: {report.run_record.issue_ref}")
+    print(f"Execution Status: {report.execution_result.status}")
+    print(f"Execution Summary: {report.execution_result.summary}")
+    if report.repair_result is not None:
+        print(f"Repair Status: {report.repair_result.status}")
+        print(f"Repair Summary: {report.repair_result.summary}")
+    if report.qa_result is not None:
+        print(f"QA Status: {report.qa_result.status}")
+        print(f"QA Summary: {report.qa_result.summary}")
+    print(f"Evaluation Status: {report.evaluation_result.status}")
+    print(f"Governance: {report.governance_verdict.status}")
+    print(
+        "Artifacts: execution-result.json, repair-result.json, qa-baseline-result.json, "
+        "qa-result.json, evaluation-result.json, governance-verdict.json"
+    )
+    return report.exit_code
 
 
 class _CliRepairDependencies:
@@ -1003,6 +1068,13 @@ def _validate_plan_run_args(args: dict[str, Any]) -> None:
     args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
 
 
+def _validate_implement_run_args(args: dict[str, Any]) -> None:
+    args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
+    args["repo_path"] = _config_str(args.get("repo_path"), key="repo_path")
+    args["repair_agent"] = _validate_repair_agent(args.get("repair_agent"))
+    _normalize_optional_str_arg(args, "repair_model")
+
+
 def _validate_create_issue_args(args: dict[str, Any]) -> None:
     args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
 
@@ -1042,6 +1114,13 @@ def _create_issue_config_root(args: argparse.Namespace) -> Path:
 def _plan_run_config_root(args: argparse.Namespace) -> Path:
     del args
     return Path.cwd()
+
+
+def _implement_run_config_root(args: argparse.Namespace) -> Path:
+    repo_path = getattr(args, "repo_path", argparse.SUPPRESS)
+    if repo_path is argparse.SUPPRESS:
+        return Path.cwd()
+    return Path(repo_path)
 
 
 def _install_skill_config_root(args: argparse.Namespace) -> Path:
@@ -1112,6 +1191,17 @@ _COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigS
         defaults={"runs_dir": ".precision-squad/runs"},
         validate=_validate_plan_run_args,
         discovery_root=_plan_run_config_root,
+    ),
+    _implement_run: _CommandConfigSpec(
+        table=("implement",),
+        supported_keys=frozenset({"runs_dir", "repo_path", "repair_agent", "repair_model"}),
+        defaults={
+            "runs_dir": ".precision-squad/runs",
+            "repair_agent": "opencode",
+            "repair_model": None,
+        },
+        validate=_validate_implement_run_args,
+        discovery_root=_implement_run_config_root,
     ),
     _install_skill: _CommandConfigSpec(
         table=("install-skill",),
