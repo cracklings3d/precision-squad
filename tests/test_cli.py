@@ -391,6 +391,202 @@ def test_review_issue_end_to_end_persists_blocked_when_issue_draft_missing(
     assert "Review Status: blocked" in captured.out
 
 
+def test_plan_run_prints_persisted_artifact_output(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.persist_approved_plan_for_planning",
+        lambda self, *, params: run_dir / "approved-plan.json",
+    )
+
+    status = main(
+        [
+            "plan",
+            "run-123",
+            "--runs-dir",
+            str(runs_dir),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Run ID: run-123" in captured.out
+    assert "Issue: owner/repo#1" in captured.out
+    assert "Artifacts: approved-plan.json" in captured.out
+
+
+def test_plan_run_persists_approved_plan_for_reviewed_run(capsys, tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "issue-review.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "review_status": "approved",
+                "summary": "Planning may proceed because issue-draft.json passed the local planner-safety review.",
+                "feedback": [],
+                "provenance": {
+                    "source_artifact": "issue-draft.json",
+                    "run_id": "run-123",
+                    "issue_ref": "owner/repo#1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+
+    status = main(
+        [
+            "plan",
+            "run-123",
+            "--runs-dir",
+            str(runs_dir),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads((run_dir / "approved-plan.json").read_text(encoding="utf-8"))
+    assert status == 0
+    assert payload["issue_ref"] == "owner/repo#1"
+    assert payload["approved"] is True
+    assert "Approved Plan:" in captured.out
+
+
+def test_plan_run_rejects_missing_issue_review_artifact(capsys, tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+
+    status = main(
+        [
+            "plan",
+            "run-123",
+            "--runs-dir",
+            str(runs_dir),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "requires issue-review.json" in captured.err
+    assert not (run_dir / "approved-plan.json").exists()
+
+
+@pytest.mark.parametrize("review_status", ["changes_requested", "blocked"])
+def test_plan_run_rejects_non_approved_issue_review(
+    capsys, tmp_path: Path, review_status: str
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "issue-review.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "review_status": review_status,
+                "summary": "Planning must stop.",
+                "feedback": [],
+                "provenance": {
+                    "source_artifact": "issue-draft.json",
+                    "run_id": "run-123",
+                    "issue_ref": "owner/repo#1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+
+    status = main(
+        [
+            "plan",
+            "run-123",
+            "--runs-dir",
+            str(runs_dir),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "review_status" in captured.err
+    assert review_status in captured.err
+    assert not (run_dir / "approved-plan.json").exists()
+
+
 def test_repair_agent_choices_include_legacy_compatibility_input() -> None:
     assert _REPAIR_AGENT_CHOICES == ("opencode", "none", "vercel-ai")
 
@@ -2113,6 +2309,43 @@ def test_publish_run_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr("precision_squad.cli._run_post_publish_review_if_needed", lambda **kwargs: None)
 
     status = main(["publish", "run", "run-123"])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Run ID: run-123" in captured.out
+
+
+def test_plan_run_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    runs_dir = tmp_path / "runs-from-config"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (tmp_path / ".precision-squad.toml").write_text(
+        f'[plan]\nruns_dir = "{runs_dir.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.persist_approved_plan_for_planning",
+        lambda self, *, params: run_dir / "approved-plan.json",
+    )
+
+    status = main(["plan", "run-123", "--approved-plan-path", str(plan_path)])
 
     captured = capsys.readouterr()
     assert status == 0

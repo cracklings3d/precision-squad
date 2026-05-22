@@ -19,6 +19,7 @@ from .config import (
 )
 from .coordinator import (
     CreateIssueParams,
+    PersistApprovedPlanParams,
     PublishRunParams,
     RepairIssueParams,
     ReviewIssueParams,
@@ -195,6 +196,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory where run artifacts are stored.",
     )
     review_issue_parser.set_defaults(handler=_review_issue)
+
+    plan_parser = subparsers.add_parser(
+        "plan",
+        help="Persist a canonical approved plan for an existing reviewed run.",
+    )
+    plan_parser.add_argument("run_id", help="Existing run ID to attach the approved plan to.")
+    plan_parser.add_argument(
+        "--approved-plan-path",
+        required=True,
+        help="Path to the approved-plan.json artifact to validate and persist for this run.",
+    )
+    plan_parser.add_argument(
+        "--runs-dir",
+        default=argparse.SUPPRESS,
+        help="Directory where run artifacts are stored.",
+    )
+    plan_parser.set_defaults(handler=_plan_run)
 
     publish_parser = subparsers.add_parser(
         "publish",
@@ -401,6 +419,26 @@ def _review_issue(args: argparse.Namespace) -> int:
             field_suffix = f" ({item.field})" if item.field else ""
             print(f"- {item.code}: {item.message} [{item.artifact}{field_suffix}]")
     return report.exit_code
+
+
+def _plan_run(args: argparse.Namespace) -> int:
+    store = RunStore(Path(args.runs_dir))
+    record = store.load_run(args.run_id)
+    approved_plan = _load_approved_plan(Path(args.approved_plan_path), record.issue_ref)
+    artifact_path = RunCoordinator().persist_approved_plan_for_planning(
+        params=PersistApprovedPlanParams(
+            run_id=args.run_id,
+            runs_dir=Path(args.runs_dir),
+            approved_plan=approved_plan,
+        )
+    )
+
+    print(f"Run ID: {record.run_id}")
+    print(f"Run Dir: {record.run_dir}")
+    print(f"Issue: {record.issue_ref}")
+    print(f"Approved Plan: {artifact_path}")
+    print("Artifacts: approved-plan.json")
+    return 0
 
 
 class _CliRepairDependencies:
@@ -921,6 +959,10 @@ def _validate_review_issue_args(args: dict[str, Any]) -> None:
     args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
 
 
+def _validate_plan_run_args(args: dict[str, Any]) -> None:
+    args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
+
+
 def _validate_create_issue_args(args: dict[str, Any]) -> None:
     args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
 
@@ -948,6 +990,11 @@ def _review_issue_config_root(args: argparse.Namespace) -> Path:
 
 
 def _create_issue_config_root(args: argparse.Namespace) -> Path:
+    del args
+    return Path.cwd()
+
+
+def _plan_run_config_root(args: argparse.Namespace) -> Path:
     del args
     return Path.cwd()
 
@@ -1006,6 +1053,13 @@ _COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigS
         defaults={"runs_dir": ".precision-squad/runs"},
         validate=_validate_review_issue_args,
         discovery_root=_review_issue_config_root,
+    ),
+    _plan_run: _CommandConfigSpec(
+        table=("plan",),
+        supported_keys=frozenset({"runs_dir"}),
+        defaults={"runs_dir": ".precision-squad/runs"},
+        validate=_validate_plan_run_args,
+        discovery_root=_plan_run_config_root,
     ),
     _install_skill: _CommandConfigSpec(
         table=("install-skill",),

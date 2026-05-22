@@ -86,6 +86,12 @@ Bounded pre-planning review command:
 python -m precision_squad.cli review issue <run-id>
 ```
 
+Canonical planning ingress for an existing reviewed run:
+
+```bash
+python -m precision_squad.cli plan <run-id> --approved-plan-path <path>
+```
+
 Optional project config:
 
 - locations, in search order: `./.precision-squad.toml` and `./.precision-squad/precision-squad.toml`
@@ -94,6 +100,7 @@ Optional project config:
 - schema: command-shaped TOML tables only; top-level scalar keys are invalid
 - discovery root:
   - `repair issue`: `--repo-path` when provided, otherwise the current working directory
+  - `plan`: the current working directory
   - `publish run`: the current working directory
   - `install-skill`: `--project-root` when provided, otherwise the current working directory
 - relative path values from config are resolved relative to the config file that supplied them
@@ -114,6 +121,9 @@ approved_plan_path = "approved-plan.json"
 runs_dir = ".precision-squad/runs"
 
 [review.issue]
+runs_dir = ".precision-squad/runs"
+
+[plan]
 runs_dir = ".precision-squad/runs"
 
 [publish.run]
@@ -140,6 +150,10 @@ Supported keys for `create issue`:
 - `runs_dir`
 
 Supported keys for `review issue`:
+
+- `runs_dir`
+
+Supported keys for `plan`:
 
 - `runs_dir`
 
@@ -194,6 +208,12 @@ python -m precision_squad.cli run issue owner/repo#number --repo-path <local-rep
 `review issue` stops after reading the same run's `issue-draft.json` and writing the bounded review artifact:
 
 - `issue-review.json`
+
+`plan` stops after validating the operator-supplied approved plan and writing the same run's canonical planning artifact, gated by `issue-review.json` approval:
+
+- `approved-plan.json`
+
+`plan <run-id> --approved-plan-path <path>` is the canonical planning ingress. `repair issue --approved-plan-path` remains supported as a compatibility ingress for repair-oriented flows.
 
 Publish a stored run without rerunning repair:
 
