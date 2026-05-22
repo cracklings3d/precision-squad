@@ -16,6 +16,7 @@ from precision_squad.models import (
     GitHubIssue,
     GovernanceVerdict,
     IssueAssessment,
+    IssueDraft,
     IssueIntake,
     IssueReference,
     PublishPlan,
@@ -68,6 +69,7 @@ def test_create_run_writes_expected_artifacts(tmp_path: Path) -> None:
     assert run_dir.exists()
     assert (run_dir / "run-request.json").exists()
     assert (run_dir / "issue-intake.json").exists()
+    assert (run_dir / "issue-draft.json").exists()
     assert (run_dir / "issue.md").exists()
     assert (run_dir / "run-record.json").exists()
 
@@ -77,6 +79,34 @@ def test_create_run_writes_expected_artifacts(tmp_path: Path) -> None:
     issue_context = (run_dir / "issue.md").read_text(encoding="utf-8")
     assert "## Issue Comments" in issue_context
     assert "Reviewer says use exact output." in issue_context
+
+
+def test_load_issue_draft_reads_normalized_handoff_artifact(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    request = RunRequest(issue_ref="owner/repo#1", runs_dir=str(tmp_path / "runs"))
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue title",
+            body="Issue body",
+            labels=("bug", "backend"),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue title",
+        problem_statement="Issue body",
+        assessment=IssueAssessment(status="blocked", reason_codes=("issue_marked_as_plan",)),
+    )
+
+    record = store.create_run(request, intake)
+
+    draft = store.load_issue_draft(record.run_id)
+
+    assert isinstance(draft, IssueDraft)
+    assert draft.issue_ref == "owner/repo#1"
+    assert draft.labels == ("bug", "backend")
+    assert draft.intake_status == "blocked"
+    assert draft.intake_reason_codes == ("issue_marked_as_plan",)
+    assert draft.provenance.source_artifacts == ("run-request.json", "issue-intake.json")
 
 
 def test_write_execution_result_persists_json(tmp_path: Path) -> None:

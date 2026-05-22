@@ -65,6 +65,7 @@ def test_plan_issue_blocks_before_executor(
     run_dir = Path(report.run_record.run_dir)
     assert (run_dir / "run-request.json").exists()
     assert (run_dir / "issue-intake.json").exists()
+    assert (run_dir / "issue-draft.json").exists()
     assert (run_dir / "run-record.json").exists()
     assert (run_dir / "governance-verdict.json").exists()
     assert (run_dir / "publish-plan.json").exists()

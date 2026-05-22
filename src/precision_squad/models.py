@@ -49,6 +49,32 @@ class IssueIntake:
 
 
 @dataclass(frozen=True, slots=True)
+class IssueDraftProvenance:
+    """Explicit provenance for a normalized issue handoff artifact."""
+
+    source_artifacts: tuple[str, ...]
+    requested_issue_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class IssueDraft:
+    """Derived normalized issue handoff for downstream issue-stage consumers."""
+
+    owner: str
+    repo: str
+    number: int
+    issue_ref: str
+    issue_url: str
+    title: str
+    summary: str
+    problem_statement: str
+    labels: tuple[str, ...]
+    intake_status: Literal["runnable", "blocked"]
+    intake_reason_codes: tuple[str, ...]
+    provenance: IssueDraftProvenance
+
+
+@dataclass(frozen=True, slots=True)
 class RunRequest:
     """Operator request to run one issue through the control plane."""
 

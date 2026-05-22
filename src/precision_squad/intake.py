@@ -6,7 +6,15 @@ import re
 
 from .docs_remediation import is_docs_remediation_title_or_body
 from .github_client import GitHubIssueClient
-from .models import GitHubIssue, IssueAssessment, IssueIntake, IssueReference
+from .models import (
+    GitHubIssue,
+    IssueAssessment,
+    IssueDraft,
+    IssueDraftProvenance,
+    IssueIntake,
+    IssueReference,
+    RunRequest,
+)
 
 ISSUE_REFERENCE_PATTERN = re.compile(
     r"^(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)#(?P<number>[1-9][0-9]*)$"
@@ -96,6 +104,28 @@ def load_issue_intake(issue_ref: str, token_env: str = "GITHUB_TOKEN") -> IssueI
     client = GitHubIssueClient.from_env(token_env)
     issue = client.fetch_issue(reference)
     return build_issue_intake(issue)
+
+
+def derive_issue_draft(request: RunRequest, intake: IssueIntake) -> IssueDraft:
+    """Build the canonical normalized issue-stage handoff artifact."""
+    issue = intake.issue
+    return IssueDraft(
+        owner=issue.reference.owner,
+        repo=issue.reference.repo,
+        number=issue.reference.number,
+        issue_ref=str(issue.reference),
+        issue_url=issue.html_url,
+        title=issue.title,
+        summary=intake.summary,
+        problem_statement=intake.problem_statement,
+        labels=issue.labels,
+        intake_status=intake.assessment.status,
+        intake_reason_codes=intake.assessment.reason_codes,
+        provenance=IssueDraftProvenance(
+            source_artifacts=("run-request.json", "issue-intake.json"),
+            requested_issue_ref=request.issue_ref,
+        ),
+    )
 
 
 def is_docs_remediation_issue(issue: GitHubIssue | IssueIntake) -> bool:

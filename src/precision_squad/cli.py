@@ -17,7 +17,7 @@ from .config import (
     load_command_config,
     merge_config_into_args,
 )
-from .coordinator import PublishRunParams, RepairIssueParams, RunCoordinator
+from .coordinator import CreateIssueParams, PublishRunParams, RepairIssueParams, RunCoordinator
 from .env import load_local_env
 from .executor import DocsFirstExecutor
 from .github_client import GitHubClientError, GitHubWriteClient
@@ -153,6 +153,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_parser.set_defaults(handler=_repair_issue)
 
+    create_parser = subparsers.add_parser(
+        "create",
+        help="Create bounded issue-preparation artifacts for a GitHub issue.",
+    )
+    create_subparsers = create_parser.add_subparsers(dest="create_command")
+    create_issue_parser = create_subparsers.add_parser(
+        "issue",
+        help="Create the normalized issue handoff for a GitHub issue reference.",
+    )
+    create_issue_parser.add_argument(
+        "issue_ref",
+        help="GitHub issue reference in the form owner/repo#number.",
+    )
+    create_issue_parser.add_argument(
+        "--runs-dir",
+        default=argparse.SUPPRESS,
+        help="Directory where run artifacts will be stored.",
+    )
+    create_issue_parser.set_defaults(handler=_create_issue)
+
     publish_parser = subparsers.add_parser(
         "publish",
         help="Publish artifacts from an existing stored run without rerunning repair.",
@@ -279,6 +299,28 @@ def _repair_issue(args: argparse.Namespace) -> int:
         if post_publish_review_result.issue_comment_url:
             print(f"Review Feedback URL: {post_publish_review_result.issue_comment_url}")
     return report.exit_code
+
+
+def _create_issue(args: argparse.Namespace) -> int:
+    intake = load_issue_intake(args.issue_ref)
+    report = RunCoordinator().create_issue(
+        params=CreateIssueParams(
+            issue_ref=args.issue_ref,
+            runs_dir=Path(args.runs_dir),
+        ),
+        intake=intake,
+    )
+
+    print(f"Issue: {intake.issue.reference}")
+    print(f"Title: {intake.issue.title}")
+    print(f"Run ID: {report.run_record.run_id}")
+    print(f"Run Dir: {report.run_record.run_dir}")
+    print(f"Classification: {intake.assessment.status}")
+    print(
+        "Artifacts: run-request.json, issue-intake.json, issue-draft.json, issue.md, "
+        "run-record.json"
+    )
+    return 0
 
 
 def _publish_run(args: argparse.Namespace) -> int:
@@ -829,6 +871,10 @@ def _validate_publish_run_args(args: dict[str, Any]) -> None:
     _normalize_optional_str_arg(args, "review_model")
 
 
+def _validate_create_issue_args(args: dict[str, Any]) -> None:
+    args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
+
+
 def _validate_install_skill_args(args: dict[str, Any]) -> None:
     args["project_root"] = _config_str(args.get("project_root"), key="project_root")
     args["force"] = _coerce_bool(args.get("force"), key="force")
@@ -842,6 +888,11 @@ def _repair_issue_config_root(args: argparse.Namespace) -> Path:
 
 
 def _publish_run_config_root(args: argparse.Namespace) -> Path:
+    del args
+    return Path.cwd()
+
+
+def _create_issue_config_root(args: argparse.Namespace) -> Path:
     del args
     return Path.cwd()
 
@@ -879,6 +930,13 @@ _COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigS
         },
         validate=_validate_repair_issue_args,
         discovery_root=_repair_issue_config_root,
+    ),
+    _create_issue: _CommandConfigSpec(
+        table=("create", "issue"),
+        supported_keys=frozenset({"runs_dir"}),
+        defaults={"runs_dir": ".precision-squad/runs"},
+        validate=_validate_create_issue_args,
+        discovery_root=_create_issue_config_root,
     ),
     _publish_run: _CommandConfigSpec(
         table=("publish", "run"),

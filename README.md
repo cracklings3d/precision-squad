@@ -74,6 +74,12 @@ Primary repair command:
 python -m precision_squad.cli repair issue owner/repo#number --repo-path <local-repo>
 ```
 
+Bounded issue-preparation command:
+
+```bash
+python -m precision_squad.cli create issue owner/repo#number
+```
+
 Optional project config:
 
 - locations, in search order: `./.precision-squad.toml` and `./.precision-squad/precision-squad.toml`
@@ -98,6 +104,9 @@ repair_model = "model-name"
 review_model = "model-name"
 approved_plan_path = "approved-plan.json"
 
+[create.issue]
+runs_dir = ".precision-squad/runs"
+
 [publish.run]
 runs_dir = ".precision-squad/runs"
 review_model = "model-name"
@@ -116,6 +125,10 @@ Supported keys for `repair issue`:
 - `repair_model`
 - `review_model`
 - `approved_plan_path`
+
+Supported keys for `create issue`:
+
+- `runs_dir`
 
 Repair agent selection for `repair issue`:
 
@@ -156,6 +169,14 @@ Legacy alias still supported:
 ```bash
 python -m precision_squad.cli run issue owner/repo#number --repo-path <local-repo>
 ```
+
+`create issue` stops after writing the bounded issue-preparation artifacts:
+
+- `run-request.json`
+- `issue-intake.json`
+- `issue-draft.json`
+- `issue.md`
+- `run-record.json`
 
 Publish a stored run without rerunning repair:
 

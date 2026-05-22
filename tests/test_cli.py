@@ -46,6 +46,84 @@ def test_main_without_args_shows_help(capsys) -> None:
     assert "run" in captured.out
 
 
+def test_create_issue_prints_bounded_issue_preparation_output(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "precision-squad", 67),
+            title="Add the create issue stage command",
+            body="## Description\nPersist normalized issue handoff artifacts.",
+            labels=("enhancement", "workflow"),
+            html_url="https://github.com/cracklings3d/precision-squad/issues/67",
+        ),
+        summary="Add the create issue stage command",
+        problem_statement="Persist normalized issue handoff artifacts.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    status = main(
+        [
+            "create",
+            "issue",
+            "cracklings3d/precision-squad#67",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Issue: cracklings3d/precision-squad#67" in captured.out
+    assert "Classification: runnable" in captured.out
+    assert "issue-draft.json" in captured.out
+
+
+def test_create_issue_persists_bounded_preparation_artifacts(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "precision-squad", 67),
+            title="Add the create issue stage command",
+            body="## Description\nPersist normalized issue handoff artifacts.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/precision-squad/issues/67",
+        ),
+        summary="Add the create issue stage command",
+        problem_statement="Persist normalized issue handoff artifacts.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    status = main(
+        [
+            "create",
+            "issue",
+            "cracklings3d/precision-squad#67",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    run_dir_line = next(line for line in captured.out.splitlines() if line.startswith("Run Dir:"))
+    run_dir = Path(run_dir_line.removeprefix("Run Dir:").strip())
+    draft_payload = json.loads((run_dir / "issue-draft.json").read_text(encoding="utf-8"))
+
+    assert status == 0
+    assert (run_dir / "run-request.json").exists()
+    assert (run_dir / "issue-intake.json").exists()
+    assert (run_dir / "issue-draft.json").exists()
+    assert (run_dir / "issue.md").exists()
+    assert (run_dir / "run-record.json").exists()
+    assert not (run_dir / "execution-result.json").exists()
+    assert draft_payload["issue_ref"] == "cracklings3d/precision-squad#67"
+    assert draft_payload["summary"] == "Add the create issue stage command"
+    assert draft_payload["provenance"]["source_artifacts"] == ["run-request.json", "issue-intake.json"]
+
+
 def test_repair_agent_choices_include_legacy_compatibility_input() -> None:
     assert _REPAIR_AGENT_CHOICES == ("opencode", "none", "vercel-ai")
 

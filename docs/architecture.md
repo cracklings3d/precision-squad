@@ -284,6 +284,7 @@ Important persisted artifacts include:
 
 - `run-request.json`
 - `issue-intake.json`
+- `issue-draft.json`
 - `run-record.json`
 - `execution-result.json`
 - `evaluation-result.json`
@@ -296,6 +297,8 @@ Important persisted artifacts include:
 - `post-publish-review-result.json`
 
 This is deliberate. The system prefers inspectability and replayability over hidden state.
+
+`issue-draft.json` is the derived normalized issue-stage handoff artifact for pre-implement issue preparation. It is created by `create issue` and persisted beside the raw request and intake artifacts so downstream issue-stage consumers do not depend on `issue-intake.json` internals.
 
 ## Design Choices
 
