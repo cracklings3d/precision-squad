@@ -76,7 +76,14 @@ def _make_params(tmp_path: Path) -> RepairIssueParams:
     )
 
 
-def _write_implement_ingress(run_dir: Path, *, run_id: str, issue_ref: str = "owner/repo#1") -> None:
+def _write_implement_ingress(
+    run_dir: Path,
+    *,
+    run_id: str,
+    issue_ref: str = "owner/repo#1",
+    review_status: str = "approved",
+    provenance_run_id: str | None = None,
+) -> None:
     (run_dir / "issue-intake.json").write_text(
         json.dumps(
             {
@@ -99,12 +106,12 @@ def _write_implement_ingress(run_dir: Path, *, run_id: str, issue_ref: str = "ow
             {
                 "run_id": run_id,
                 "issue_ref": issue_ref,
-                "review_status": "approved",
+                "review_status": review_status,
                 "summary": "Implementation may proceed because approved-plan.json passed the same-run plan review gate.",
                 "feedback": [],
                 "provenance": {
                     "source_artifact": "approved-plan.json",
-                    "run_id": run_id,
+                    "run_id": provenance_run_id or run_id,
                     "issue_ref": issue_ref,
                 },
             }
@@ -260,6 +267,91 @@ def test_implement_run_requires_same_run_approved_review_before_execution(
     monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
 
     with pytest.raises(ValueError, match="Plan review artifact not found"):
+        RunCoordinator().implement_run(
+            params=_make_implement_params(tmp_path, record.run_id),
+            dependencies=MagicMock(),
+        )
+
+
+def test_implement_run_refuses_when_approved_plan_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    _write_implement_ingress(run_dir, run_id=record.run_id)
+
+    def fail_if_execute(self, intake, run_record, run_dir):
+        raise AssertionError("docs-first execution should not start before implement ingress validates")
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
+
+    with pytest.raises(ValueError, match="Approved plan artifact not found"):
+        RunCoordinator().implement_run(
+            params=_make_implement_params(tmp_path, record.run_id),
+            dependencies=MagicMock(),
+        )
+
+
+@pytest.mark.parametrize("review_status", ["changes_requested", "blocked"])
+def test_implement_run_refuses_when_plan_review_not_approved(
+    tmp_path: Path, monkeypatch, review_status: str
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+    _write_implement_ingress(run_dir, run_id=record.run_id, review_status=review_status)
+
+    def fail_if_execute(self, intake, run_record, run_dir):
+        raise AssertionError("docs-first execution should not start before implement ingress validates")
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
+
+    with pytest.raises(ValueError, match="review_status"):
+        RunCoordinator().implement_run(
+            params=_make_implement_params(tmp_path, record.run_id),
+            dependencies=MagicMock(),
+        )
+
+
+def test_implement_run_refuses_when_plan_review_provenance_run_id_mismatches(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+    _write_implement_ingress(
+        run_dir,
+        run_id=record.run_id,
+        provenance_run_id="run-other",
+    )
+
+    def fail_if_execute(self, intake, run_record, run_dir):
+        raise AssertionError("docs-first execution should not start before implement ingress validates")
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
+
+    with pytest.raises(ValueError, match="provenance.run_id"):
         RunCoordinator().implement_run(
             params=_make_implement_params(tmp_path, record.run_id),
             dependencies=MagicMock(),
