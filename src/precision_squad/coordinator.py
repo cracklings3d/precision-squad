@@ -1126,6 +1126,7 @@ def _is_change_level_approved_plan_validation_error(exc: ApprovedPlanValidationE
         "Approved plan is missing a non-empty 'plan_summary'",
         "Approved plan is missing required field 'implementation_steps'",
         "Approved plan has no implementation steps",
+        "Approved plan implementation_steps[1] must be a non-empty string",
     }
 
 
