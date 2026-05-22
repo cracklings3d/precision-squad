@@ -83,12 +83,14 @@ def _write_implement_ingress(
     issue_ref: str = "owner/repo#1",
     review_status: str = "approved",
     provenance_run_id: str | None = None,
+    intake_issue_number: int = 1,
+    provenance_issue_ref: str | None = None,
 ) -> None:
     (run_dir / "issue-intake.json").write_text(
         json.dumps(
             {
                 "issue": {
-                    "reference": {"owner": "owner", "repo": "repo", "number": 1},
+                    "reference": {"owner": "owner", "repo": "repo", "number": intake_issue_number},
                     "title": "Test issue",
                     "body": "Fix the bug.",
                     "labels": [],
@@ -112,7 +114,7 @@ def _write_implement_ingress(
                 "provenance": {
                     "source_artifact": "approved-plan.json",
                     "run_id": provenance_run_id or run_id,
-                    "issue_ref": issue_ref,
+                    "issue_ref": provenance_issue_ref or issue_ref,
                 },
             }
         ),
@@ -352,6 +354,65 @@ def test_implement_run_refuses_when_plan_review_provenance_run_id_mismatches(
     monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
 
     with pytest.raises(ValueError, match="provenance.run_id"):
+        RunCoordinator().implement_run(
+            params=_make_implement_params(tmp_path, record.run_id),
+            dependencies=MagicMock(),
+        )
+
+
+def test_implement_run_refuses_when_issue_intake_issue_ref_mismatches_run_record(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+    _write_implement_ingress(run_dir, run_id=record.run_id, intake_issue_number=2)
+
+    def fail_if_execute(self, intake, run_record, run_dir):
+        raise AssertionError("docs-first execution should not start before implement ingress validates")
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
+
+    with pytest.raises(ValueError, match="issue-intake.json to match the stored run issue_ref"):
+        RunCoordinator().implement_run(
+            params=_make_implement_params(tmp_path, record.run_id),
+            dependencies=MagicMock(),
+        )
+
+
+def test_implement_run_refuses_when_plan_review_issue_ref_mismatches_run_record(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+    _write_implement_ingress(
+        run_dir,
+        run_id=record.run_id,
+        issue_ref="owner/repo#2",
+        provenance_issue_ref="owner/repo#2",
+    )
+
+    def fail_if_execute(self, intake, run_record, run_dir):
+        raise AssertionError("docs-first execution should not start before implement ingress validates")
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
+
+    with pytest.raises(ValueError, match="does not match expected issue_ref 'owner/repo#1'"):
         RunCoordinator().implement_run(
             params=_make_implement_params(tmp_path, record.run_id),
             dependencies=MagicMock(),
