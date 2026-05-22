@@ -26,6 +26,9 @@ from precision_squad.models import (
     GovernanceVerdict,
     IssueAssessment,
     IssueIntake,
+    IssueReview,
+    IssueReviewFeedback,
+    IssueReviewProvenance,
     IssueReference,
     PostPublishReviewResult,
     PublishPlan,
@@ -122,6 +125,266 @@ def test_create_issue_persists_bounded_preparation_artifacts(
     assert draft_payload["issue_ref"] == "cracklings3d/precision-squad#67"
     assert draft_payload["summary"] == "Add the create issue stage command"
     assert draft_payload["provenance"]["source_artifacts"] == ["run-request.json", "issue-intake.json"]
+
+
+def test_review_issue_prints_approved_review_output(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    issue_review = IssueReview(
+        run_id="run-123",
+        issue_ref="cracklings3d/precision-squad#68",
+        review_status="approved",
+        summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
+        feedback=(),
+        provenance=IssueReviewProvenance(
+            source_artifact="issue-draft.json",
+            run_id="run-123",
+            issue_ref="cracklings3d/precision-squad#68",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_issue",
+        lambda self, *, params: __import__(
+            "precision_squad.coordinator", fromlist=["ReviewIssueReport"]
+        ).ReviewIssueReport(
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="cracklings3d/precision-squad#68",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-123"),
+            ),
+            issue_review=issue_review,
+            exit_code=0,
+        ),
+    )
+
+    status = main(["review", "issue", "run-123", "--runs-dir", str(tmp_path / "runs")])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Review Status: approved" in captured.out
+    assert "Artifacts: issue-review.json" in captured.out
+
+
+def test_review_issue_prints_feedback_for_changes_requested(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    issue_review = IssueReview(
+        run_id="run-123",
+        issue_ref="cracklings3d/precision-squad#68",
+        review_status="changes_requested",
+        summary="Planning must stop because issue-draft.json has 1 planner-safety finding that require changes.",
+        feedback=(
+            IssueReviewFeedback(
+                code="missing_summary",
+                message="issue-draft.json must include a non-empty summary before planning can proceed.",
+                artifact="issue-draft.json",
+                field="summary",
+            ),
+        ),
+        provenance=IssueReviewProvenance(
+            source_artifact="issue-draft.json",
+            run_id="run-123",
+            issue_ref="cracklings3d/precision-squad#68",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_issue",
+        lambda self, *, params: __import__(
+            "precision_squad.coordinator", fromlist=["ReviewIssueReport"]
+        ).ReviewIssueReport(
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="cracklings3d/precision-squad#68",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-123"),
+            ),
+            issue_review=issue_review,
+            exit_code=2,
+        ),
+    )
+
+    status = main(["review", "issue", "run-123", "--runs-dir", str(tmp_path / "runs")])
+
+    captured = capsys.readouterr()
+    assert status == 2
+    assert "Review Status: changes_requested" in captured.out
+    assert "missing_summary" in captured.out
+
+
+def test_review_issue_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        "[review.issue]\nruns_dir = \".precision-squad/runs\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    captured_runs_dir: dict[str, str] = {}
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_issue",
+        lambda self, *, params: (
+            captured_runs_dir.__setitem__("runs_dir", str(params.runs_dir)),
+            __import__("precision_squad.coordinator", fromlist=["ReviewIssueReport"]).ReviewIssueReport(
+                run_record=RunRecord(
+                    run_id="run-123",
+                    issue_ref="owner/repo#1",
+                    status="runnable",
+                    created_at="2026-05-01T00:00:00Z",
+                    updated_at="2026-05-01T00:00:00Z",
+                    run_dir=str(tmp_path / ".precision-squad" / "runs" / "run-123"),
+                ),
+                issue_review=IssueReview(
+                    run_id="run-123",
+                    issue_ref="owner/repo#1",
+                    review_status="blocked",
+                    summary="Planning must stop because review issue is blocked by 1 blocking finding in issue-draft.json.",
+                    feedback=(
+                        IssueReviewFeedback(
+                            code="issue_draft_missing",
+                            message="Create issue must persist issue-draft.json before review issue can run.",
+                            artifact="issue-draft.json",
+                            field="",
+                        ),
+                    ),
+                    provenance=IssueReviewProvenance(
+                        source_artifact="issue-draft.json",
+                        run_id="run-123",
+                        issue_ref="owner/repo#1",
+                    ),
+                ),
+                exit_code=3,
+            ),
+        )[1],
+    )
+
+    status = main(["review", "issue", "run-123"])
+
+    captured = capsys.readouterr()
+    assert status == 3
+    assert captured_runs_dir["runs_dir"].endswith(".precision-squad\\runs")
+    assert "Review Status: blocked" in captured.out
+
+
+def test_review_issue_end_to_end_persists_approved_issue_review(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    request = RunRequest(
+        issue_ref="cracklings3d/precision-squad#68",
+        runs_dir=str(runs_dir),
+    )
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("cracklings3d", "precision-squad", 68),
+            title="Add the review issue stage gate",
+            body="Persist an issue review artifact.",
+            labels=("enhancement",),
+            html_url="https://github.com/cracklings3d/precision-squad/issues/68",
+        ),
+        summary="Add the review issue stage gate",
+        problem_statement="Persist an issue review artifact.",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    record = store.create_run(request, intake)
+
+    status = main(["review", "issue", record.run_id, "--runs-dir", str(runs_dir)])
+
+    captured = capsys.readouterr()
+    payload = json.loads((Path(record.run_dir) / "issue-review.json").read_text(encoding="utf-8"))
+    assert status == 0
+    assert payload["review_status"] == "approved"
+    assert payload["provenance"]["source_artifact"] == "issue-draft.json"
+    assert "Review Status: approved" in captured.out
+
+
+def test_review_issue_end_to_end_persists_changes_requested_when_summary_missing(
+    capsys, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "cracklings3d/precision-squad#68",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "issue-draft.json").write_text(
+        json.dumps(
+            {
+                "owner": "cracklings3d",
+                "repo": "precision-squad",
+                "number": 68,
+                "issue_ref": "cracklings3d/precision-squad#68",
+                "issue_url": "https://github.com/cracklings3d/precision-squad/issues/68",
+                "title": "Add the review issue stage gate",
+                "summary": "",
+                "problem_statement": "Persist an issue review artifact.",
+                "labels": ["enhancement"],
+                "intake_status": "runnable",
+                "intake_reason_codes": [],
+                "provenance": {
+                    "source_artifacts": ["run-request.json", "issue-intake.json"],
+                    "requested_issue_ref": "cracklings3d/precision-squad#68",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(["review", "issue", "run-123", "--runs-dir", str(runs_dir)])
+
+    captured = capsys.readouterr()
+    payload = json.loads((run_dir / "issue-review.json").read_text(encoding="utf-8"))
+    assert status == 2
+    assert payload["review_status"] == "changes_requested"
+    assert payload["feedback"][0]["code"] == "missing_summary"
+    assert "Review Status: changes_requested" in captured.out
+
+
+def test_review_issue_end_to_end_persists_blocked_when_issue_draft_missing(
+    capsys, tmp_path: Path
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "cracklings3d/precision-squad#68",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = main(["review", "issue", "run-123", "--runs-dir", str(runs_dir)])
+
+    captured = capsys.readouterr()
+    payload = json.loads((run_dir / "issue-review.json").read_text(encoding="utf-8"))
+    assert status == 3
+    assert payload["review_status"] == "blocked"
+    assert payload["feedback"][0]["code"] == "issue_draft_missing"
+    assert "Review Status: blocked" in captured.out
 
 
 def test_repair_agent_choices_include_legacy_compatibility_input() -> None:

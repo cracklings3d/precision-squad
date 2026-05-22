@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from json import JSONDecodeError
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol, cast
 
 from .executor import DocsFirstExecutor
 from .governance import apply_governance, evaluate_run
@@ -15,6 +16,10 @@ from .models import (
     EvaluationResult,
     ExecutionResult,
     GovernanceVerdict,
+    IssueDraft,
+    IssueReview,
+    IssueReviewFeedback,
+    IssueReviewProvenance,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -25,7 +30,11 @@ from .models import (
 )
 from .publishing import RequiredDecisionLogArtifactMissingError, build_publish_plan
 from .repair import RepairAdapter
-from .run_store import ApprovedPlanNotFoundError, ApprovedPlanValidationError, RunStore
+from .run_store import (
+    ApprovedPlanNotFoundError,
+    ApprovedPlanValidationError,
+    RunStore,
+)
 
 
 class RepairDependencies(Protocol):
@@ -185,6 +194,26 @@ class CreateIssueReport:
     run_record: RunRecord
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewIssueParams:
+    run_id: str
+    runs_dir: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewIssueReport:
+    run_record: RunRecord
+    issue_review: IssueReview
+    exit_code: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class PersistApprovedPlanParams:
+    run_id: str
+    runs_dir: Path
+    approved_plan: ApprovedPlan
+
+
 class RunCoordinator:
     """Coordinates repair and publish workflows independent of CLI output."""
 
@@ -193,6 +222,25 @@ class RunCoordinator:
         request = RunRequest(issue_ref=params.issue_ref, runs_dir=str(params.runs_dir))
         record = store.create_run(request, intake)
         return CreateIssueReport(intake=intake, run_record=record)
+
+    def review_issue(self, *, params: ReviewIssueParams) -> ReviewIssueReport:
+        store = RunStore(params.runs_dir)
+        record = store.load_run(params.run_id)
+        review = _derive_issue_review(store=store, record=record)
+        store.write_issue_review(Path(record.run_dir).resolve(), review)
+        exit_code = 0 if review.review_status == "approved" else 2 if review.review_status == "changes_requested" else 3
+        return ReviewIssueReport(run_record=record, issue_review=review, exit_code=exit_code)
+
+    def persist_approved_plan_for_planning(self, *, params: PersistApprovedPlanParams) -> Path:
+        store = RunStore(params.runs_dir)
+        record = store.load_run(params.run_id)
+        if not _same_local_issue_ref(record.issue_ref, params.approved_plan.issue_ref):
+            raise ValueError(
+                "Approved plan issue_ref does not match the stored run issue_ref for planning ingress."
+            )
+        run_dir = Path(record.run_dir).resolve()
+        store.write_gated_approved_plan(run_dir, params.approved_plan)
+        return run_dir / "approved-plan.json"
 
     def repair_issue(
         self,
@@ -634,6 +682,159 @@ class RunCoordinator:
 
 def _same_local_issue_ref(left: str, right: str) -> bool:
     return canonicalize_local_issue_ref(left) == canonicalize_local_issue_ref(right)
+
+
+def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
+    run_dir = Path(record.run_dir).resolve()
+    blocked_findings: list[IssueReviewFeedback] = []
+    change_findings: list[IssueReviewFeedback] = []
+    try:
+        draft = store.load_issue_draft(record.run_id)
+    except FileNotFoundError:
+        blocked_findings.append(
+            _issue_review_feedback(
+                code="issue_draft_missing",
+                message="Create issue must persist issue-draft.json before review issue can run.",
+                field="",
+            )
+        )
+        return _issue_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+    except (JSONDecodeError, OSError, ValueError) as exc:
+        blocked_findings.append(
+            _issue_review_feedback(
+                code="issue_draft_unreadable",
+                message=f"issue-draft.json could not be loaded for review: {exc}",
+                field="",
+            )
+        )
+        return _issue_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+
+    _collect_issue_review_findings(
+        draft=draft,
+        record=record,
+        blocked_findings=blocked_findings,
+        change_findings=change_findings,
+    )
+    if blocked_findings:
+        return _issue_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+    if change_findings:
+        return _issue_review_artifact(
+            record=record,
+            status="changes_requested",
+            feedback=tuple(change_findings),
+        )
+    return _issue_review_artifact(record=record, status="approved", feedback=())
+
+
+def _collect_issue_review_findings(
+    *,
+    draft: IssueDraft,
+    record: RunRecord,
+    blocked_findings: list[IssueReviewFeedback],
+    change_findings: list[IssueReviewFeedback],
+) -> None:
+    expected_issue_ref = canonicalize_local_issue_ref(record.issue_ref)
+    draft_issue_ref = canonicalize_local_issue_ref(draft.issue_ref)
+    if draft_issue_ref != expected_issue_ref:
+        blocked_findings.append(
+            _issue_review_feedback(
+                code="issue_identity_mismatch",
+                message="issue-draft.json issue_ref does not match the stored run issue_ref.",
+                field="issue_ref",
+            )
+        )
+        return
+
+    if not draft.summary.strip():
+        change_findings.append(
+            _issue_review_feedback(
+                code="missing_summary",
+                message="issue-draft.json must include a non-empty summary before planning can proceed.",
+                field="summary",
+            )
+        )
+    if not draft.problem_statement.strip():
+        change_findings.append(
+            _issue_review_feedback(
+                code="missing_problem_statement",
+                message="issue-draft.json must include a non-empty problem_statement before planning can proceed.",
+                field="problem_statement",
+            )
+        )
+
+    expected_sources = {"run-request.json", "issue-intake.json"}
+    actual_sources = set(draft.provenance.source_artifacts)
+    missing_sources = sorted(expected_sources - actual_sources)
+    if missing_sources:
+        change_findings.append(
+            _issue_review_feedback(
+                code="missing_issue_stage_provenance",
+                message=(
+                    "issue-draft.json provenance must reference run-request.json and "
+                    f"issue-intake.json; missing {', '.join(missing_sources)}."
+                ),
+                field="provenance.source_artifacts",
+            )
+        )
+    if canonicalize_local_issue_ref(draft.provenance.requested_issue_ref) != expected_issue_ref:
+        change_findings.append(
+            _issue_review_feedback(
+                code="requested_issue_ref_mismatch",
+                message=(
+                    "issue-draft.json provenance.requested_issue_ref must match the stored run "
+                    "issue_ref."
+                ),
+                field="provenance.requested_issue_ref",
+            )
+        )
+    if draft.intake_status != "runnable":
+        change_findings.append(
+            _issue_review_feedback(
+                code="intake_not_runnable",
+                message="issue-draft.json intake_status must be 'runnable' before planning can proceed.",
+                field="intake_status",
+            )
+        )
+
+
+def _issue_review_feedback(*, code: str, message: str, field: str) -> IssueReviewFeedback:
+    return IssueReviewFeedback(code=code, message=message, artifact="issue-draft.json", field=field)
+
+
+def _issue_review_artifact(
+    *,
+    record: RunRecord,
+    status: str,
+    feedback: tuple[IssueReviewFeedback, ...],
+) -> IssueReview:
+    return IssueReview(
+        run_id=record.run_id,
+        issue_ref=record.issue_ref,
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
+        summary=_issue_review_summary(status=status, finding_count=len(feedback)),
+        feedback=feedback,
+        provenance=IssueReviewProvenance(
+            source_artifact="issue-draft.json",
+            run_id=record.run_id,
+            issue_ref=record.issue_ref,
+        ),
+    )
+
+
+def _issue_review_summary(*, status: str, finding_count: int) -> str:
+    if status == "approved":
+        return "Planning may proceed because issue-draft.json passed the local planner-safety review."
+    if status == "changes_requested":
+        noun = "finding" if finding_count == 1 else "findings"
+        return (
+            "Planning must stop because issue-draft.json has "
+            f"{finding_count} planner-safety {noun} that require changes."
+        )
+    noun = "finding" if finding_count == 1 else "findings"
+    return (
+        "Planning must stop because review issue is blocked by "
+        f"{finding_count} blocking {noun} in issue-draft.json."
+    )
 
 
 def _blocked_retry_report(*, intake: IssueIntake, issue_ref: str) -> RepairIssueReport:

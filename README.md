@@ -80,6 +80,12 @@ Bounded issue-preparation command:
 python -m precision_squad.cli create issue owner/repo#number
 ```
 
+Bounded pre-planning review command:
+
+```bash
+python -m precision_squad.cli review issue <run-id>
+```
+
 Optional project config:
 
 - locations, in search order: `./.precision-squad.toml` and `./.precision-squad/precision-squad.toml`
@@ -107,6 +113,9 @@ approved_plan_path = "approved-plan.json"
 [create.issue]
 runs_dir = ".precision-squad/runs"
 
+[review.issue]
+runs_dir = ".precision-squad/runs"
+
 [publish.run]
 runs_dir = ".precision-squad/runs"
 review_model = "model-name"
@@ -127,6 +136,10 @@ Supported keys for `repair issue`:
 - `approved_plan_path`
 
 Supported keys for `create issue`:
+
+- `runs_dir`
+
+Supported keys for `review issue`:
 
 - `runs_dir`
 
@@ -177,6 +190,10 @@ python -m precision_squad.cli run issue owner/repo#number --repo-path <local-rep
 - `issue-draft.json`
 - `issue.md`
 - `run-record.json`
+
+`review issue` stops after reading the same run's `issue-draft.json` and writing the bounded review artifact:
+
+- `issue-review.json`
 
 Publish a stored run without rerunning repair:
 

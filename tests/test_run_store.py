@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 
+from precision_squad.coordinator import PersistApprovedPlanParams, RunCoordinator
 from precision_squad.models import (
     ApprovedPlan,
     DecisionLogArtifact,
@@ -18,6 +20,9 @@ from precision_squad.models import (
     IssueAssessment,
     IssueDraft,
     IssueIntake,
+    IssueReview,
+    IssueReviewFeedback,
+    IssueReviewProvenance,
     IssueReference,
     PublishPlan,
     PublishResult,
@@ -26,7 +31,9 @@ from precision_squad.models import (
 )
 from precision_squad.run_store import (
     ApprovedPlanNotFoundError,
+    ApprovedPlanGateError,
     ApprovedPlanValidationError,
+    IssueReviewNotFoundError,
     RunStore,
     load_approved_plan_artifact,
 )
@@ -40,6 +47,35 @@ def _approved_plan() -> ApprovedPlan:
         named_references=(),
         retrieval_surface_summary="src/",
         approved=True,
+    )
+
+
+def _issue_review(
+    *, status: Literal["approved", "changes_requested", "blocked"] = "approved"
+) -> IssueReview:
+    feedback = ()
+    if status != "approved":
+        feedback = (
+            IssueReviewFeedback(
+                code="missing_summary",
+                message="Summary is required.",
+                artifact="issue-draft.json",
+                field="summary",
+            ),
+        )
+    return IssueReview(
+        run_id="run-123",
+        issue_ref="owner/repo#1",
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
+        summary="Planning may proceed because issue-draft.json passed the local planner-safety review."
+        if status == "approved"
+        else "Planning must stop because issue-draft.json has 1 planner-safety finding that require changes.",
+        feedback=feedback,
+        provenance=IssueReviewProvenance(
+            source_artifact="issue-draft.json",
+            run_id="run-123",
+            issue_ref="owner/repo#1",
+        ),
     )
 
 
@@ -126,6 +162,94 @@ def test_write_execution_result_persists_json(tmp_path: Path) -> None:
     saved_result = json.loads((run_dir / "execution-result.json").read_text(encoding="utf-8"))
     assert saved_result["status"] == "blocked"
     assert saved_result["executor_name"] == "docs"
+
+
+def test_write_and_load_issue_review_persists_same_run_artifact(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    store.write_issue_review(run_dir, _issue_review())
+
+    loaded = store.load_issue_review(run_dir, issue_ref="owner/repo#1")
+    payload = json.loads((run_dir / "issue-review.json").read_text(encoding="utf-8"))
+    assert loaded == _issue_review()
+    assert payload["review_status"] == "approved"
+    assert payload["provenance"]["source_artifact"] == "issue-draft.json"
+
+
+def test_load_issue_review_missing_artifact_raises_not_found(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    with pytest.raises(IssueReviewNotFoundError, match="Issue review artifact not found"):
+        RunStore.load_issue_review(run_dir, issue_ref="owner/repo#1")
+
+
+def test_write_gated_approved_plan_requires_issue_review_artifact(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+
+    with pytest.raises(ApprovedPlanGateError, match="requires issue-review.json"):
+        store.write_gated_approved_plan(run_dir, _approved_plan())
+
+
+@pytest.mark.parametrize("status", ["changes_requested", "blocked"])
+def test_write_gated_approved_plan_rejects_non_approved_issue_review(
+    tmp_path: Path, status: Literal["changes_requested", "blocked"]
+) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    store.write_issue_review(run_dir, _issue_review(status=status))
+
+    with pytest.raises(ApprovedPlanGateError, match="review_status"):
+        store.write_gated_approved_plan(run_dir, _approved_plan())
+
+
+def test_write_gated_approved_plan_allows_approved_issue_review(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    store.write_issue_review(run_dir, _issue_review())
+
+    store.write_gated_approved_plan(run_dir, _approved_plan())
+
+    payload = json.loads((run_dir / "approved-plan.json").read_text(encoding="utf-8"))
+    assert payload["issue_ref"] == "owner/repo#1"
+
+
+def test_planning_persistence_helper_requires_review_approval(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-record.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-123",
+                "issue_ref": "owner/repo#1",
+                "status": "runnable",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:00:00Z",
+                "run_dir": str(run_dir),
+                "attempt": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    RunStore(runs_dir).write_issue_review(run_dir, _issue_review())
+
+    path = RunCoordinator().persist_approved_plan_for_planning(
+        params=PersistApprovedPlanParams(
+            run_id="run-123",
+            runs_dir=runs_dir,
+            approved_plan=_approved_plan(),
+        )
+    )
+
+    assert path == run_dir / "approved-plan.json"
+    assert path.exists()
 
 
 def test_write_follow_on_artifacts_persists_json(tmp_path: Path) -> None:
