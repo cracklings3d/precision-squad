@@ -287,7 +287,21 @@ class RunStore:
 
     @staticmethod
     def require_plan_review_for_implement(run_dir: Path, *, issue_ref: str) -> PlanReview:
-        record = _read_run_record(run_dir / "run-record.json")
+        record_path = run_dir / "run-record.json"
+        try:
+            record = _read_run_record(record_path)
+        except FileNotFoundError as exc:
+            raise PlanReviewValidationError(
+                f"Implement ingress requires a valid run-record.json at {record_path}."
+            ) from exc
+        except JSONDecodeError as exc:
+            raise PlanReviewValidationError(
+                f"Implement ingress requires run-record.json at {record_path} to be valid JSON: {exc.msg}"
+            ) from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PlanReviewValidationError(
+                f"Implement ingress requires run-record.json at {record_path} to be valid: {exc}"
+            ) from exc
         review = RunStore.load_plan_review(
             run_dir,
             issue_ref=issue_ref,
