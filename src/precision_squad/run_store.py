@@ -172,15 +172,30 @@ class RunStore:
     def write_approved_plan(self, run_dir: Path, plan: ApprovedPlan) -> None:
         self._write_json(run_dir / APPROVED_PLAN_FILENAME, plan)
 
-    def write_gated_approved_plan(self, run_dir: Path, plan: ApprovedPlan) -> None:
-        self.require_issue_review_approval(run_dir, issue_ref=plan.issue_ref)
+    def write_gated_approved_plan(
+        self,
+        run_dir: Path,
+        plan: ApprovedPlan,
+        *,
+        expected_run_id: str | None = None,
+    ) -> None:
+        self.require_issue_review_approval(
+            run_dir,
+            issue_ref=plan.issue_ref,
+            expected_run_id=expected_run_id,
+        )
         self._write_json(run_dir / APPROVED_PLAN_FILENAME, plan)
 
     def write_issue_review(self, run_dir: Path, review: IssueReview) -> None:
         self._write_json(run_dir / ISSUE_REVIEW_FILENAME, review)
 
     @staticmethod
-    def load_issue_review(run_dir: Path, *, issue_ref: str) -> IssueReview:
+    def load_issue_review(
+        run_dir: Path,
+        *,
+        issue_ref: str,
+        expected_run_id: str | None = None,
+    ) -> IssueReview:
         path = run_dir / ISSUE_REVIEW_FILENAME
         if not path.exists():
             raise IssueReviewNotFoundError(f"Issue review artifact not found: {path}")
@@ -191,12 +206,26 @@ class RunStore:
             raise IssueReviewValidationError(
                 f"Issue review artifact at {path} is not valid JSON: {exc.msg}"
             ) from exc
-        return _parse_issue_review_payload(payload, path=path, issue_ref=issue_ref)
+        return _parse_issue_review_payload(
+            payload,
+            path=path,
+            issue_ref=issue_ref,
+            expected_run_id=expected_run_id,
+        )
 
     @staticmethod
-    def require_issue_review_approval(run_dir: Path, *, issue_ref: str) -> IssueReview:
+    def require_issue_review_approval(
+        run_dir: Path,
+        *,
+        issue_ref: str,
+        expected_run_id: str | None = None,
+    ) -> IssueReview:
         try:
-            review = RunStore.load_issue_review(run_dir, issue_ref=issue_ref)
+            review = RunStore.load_issue_review(
+                run_dir,
+                issue_ref=issue_ref,
+                expected_run_id=expected_run_id,
+            )
         except IssueReviewNotFoundError as exc:
             raise ApprovedPlanGateError(
                 f"Approved plan persistence requires issue-review.json for {issue_ref}."
@@ -401,6 +430,7 @@ def _parse_issue_review_payload(
     *,
     path: Path,
     issue_ref: str,
+    expected_run_id: str | None,
 ) -> IssueReview:
     if not isinstance(payload, dict):
         raise IssueReviewValidationError(f"Expected JSON object in {path}")
@@ -417,6 +447,11 @@ def _parse_issue_review_payload(
     run_id = payload.get("run_id")
     if not isinstance(run_id, str) or not run_id.strip():
         raise IssueReviewValidationError("Issue review field 'run_id' must be a non-empty string")
+    if expected_run_id is not None and run_id != expected_run_id:
+        raise IssueReviewValidationError(
+            "Issue review run_id "
+            f"'{run_id}' does not match expected run_id '{expected_run_id}'"
+        )
 
     review_status = payload.get("review_status")
     if review_status not in {"approved", "changes_requested", "blocked"}:
@@ -465,9 +500,9 @@ def _parse_issue_review_payload(
     source_artifact = provenance_raw.get("source_artifact")
     provenance_run_id = provenance_raw.get("run_id")
     provenance_issue_ref = provenance_raw.get("issue_ref")
-    if not isinstance(source_artifact, str) or not source_artifact.strip():
+    if source_artifact != "issue-draft.json":
         raise IssueReviewValidationError(
-            "Issue review provenance.source_artifact must be a non-empty string"
+            "Issue review provenance.source_artifact must be exactly 'issue-draft.json'"
         )
     if not isinstance(provenance_run_id, str) or provenance_run_id != run_id:
         raise IssueReviewValidationError(

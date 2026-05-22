@@ -239,7 +239,11 @@ class RunCoordinator:
                 "Approved plan issue_ref does not match the stored run issue_ref for planning ingress."
             )
         run_dir = Path(record.run_dir).resolve()
-        store.write_gated_approved_plan(run_dir, params.approved_plan)
+        store.write_gated_approved_plan(
+            run_dir,
+            params.approved_plan,
+            expected_run_id=record.run_id,
+        )
         return run_dir / "approved-plan.json"
 
     def repair_issue(
