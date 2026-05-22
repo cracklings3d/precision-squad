@@ -1,11 +1,17 @@
-"""Focused tests for decision-log persistence in RunCoordinator."""
+"""Focused tests for RunCoordinator bounded workflows."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from precision_squad.coordinator import RepairIssueParams, RunCoordinator
+import pytest
+
+from precision_squad.coordinator import (
+    PersistApprovedPlanParams,
+    RepairIssueParams,
+    RunCoordinator,
+)
 from precision_squad.models import (
     ApprovedPlan,
     ExecutionResult,
@@ -13,10 +19,13 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    IssueReview,
+    IssueReviewProvenance,
     PublishPlan,
     PublishResult,
     QaResult,
     RepairResult,
+    RunRequest,
 )
 from precision_squad.run_store import RunStore
 
@@ -175,3 +184,68 @@ def test_repair_issue_marks_missing_decision_log_artifact_as_failed_infra(
     assert report.governance_verdict.status == "blocked"
     assert report.publish_plan is not None
     assert report.publish_plan.status == "issue_comment"
+
+
+def test_persist_approved_plan_for_planning_writes_same_run_artifact(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_issue_review(
+        run_dir,
+        IssueReview(
+            run_id=record.run_id,
+            issue_ref="owner/repo#1",
+            review_status="approved",
+            summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
+            feedback=(),
+            provenance=IssueReviewProvenance(
+                source_artifact="issue-draft.json",
+                run_id=record.run_id,
+                issue_ref="owner/repo#1",
+            ),
+        ),
+    )
+
+    path = RunCoordinator().persist_approved_plan_for_planning(
+        params=PersistApprovedPlanParams(
+            run_id=record.run_id,
+            runs_dir=runs_dir,
+            approved_plan=_approved_plan(),
+        )
+    )
+
+    assert path == run_dir / "approved-plan.json"
+    assert path.exists()
+
+
+def test_persist_approved_plan_for_planning_rejects_issue_mismatch(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#2", runs_dir=str(runs_dir)),
+        IssueIntake(
+            issue=GitHubIssue(
+                reference=IssueReference("owner", "repo", 2),
+                title="Test issue two",
+                body="Fix the other bug.",
+                labels=(),
+                html_url="https://github.com/owner/repo/issues/2",
+            ),
+            summary="Test issue two",
+            problem_statement="Fix the other bug.",
+            assessment=IssueAssessment(status="runnable", reason_codes=()),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not match the stored run issue_ref"):
+        RunCoordinator().persist_approved_plan_for_planning(
+            params=PersistApprovedPlanParams(
+                run_id=record.run_id,
+                runs_dir=runs_dir,
+                approved_plan=_approved_plan(),
+            )
+        )
