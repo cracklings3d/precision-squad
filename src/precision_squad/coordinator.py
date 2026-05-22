@@ -1020,7 +1020,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
     except ApprovedPlanValidationError as exc:
-        if not change_findings:
+        if not (_is_change_level_approved_plan_validation_error(exc) and change_findings):
             blocked_findings.append(
                 _plan_review_feedback(
                     code="approved_plan_invalid",
@@ -1117,6 +1117,16 @@ def _collect_plan_review_findings(
 
 def _has_usable_implementation_steps(value: object) -> bool:
     return isinstance(value, list) and any(isinstance(step, str) and step.strip() for step in value)
+
+
+def _is_change_level_approved_plan_validation_error(exc: ApprovedPlanValidationError) -> bool:
+    message = str(exc)
+    return message in {
+        "Approved plan is missing required field 'plan_summary'",
+        "Approved plan is missing a non-empty 'plan_summary'",
+        "Approved plan is missing required field 'implementation_steps'",
+        "Approved plan has no implementation steps",
+    }
 
 
 def _plan_review_feedback(
