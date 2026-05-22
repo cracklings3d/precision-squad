@@ -10,6 +10,7 @@ import pytest
 
 from precision_squad.models import (
     GitHubIssue,
+    ImplReviewResult,
     IssueAssessment,
     IssueIntake,
     IssueReference,
@@ -21,6 +22,8 @@ from precision_squad.post_publish_review import (
     ReviewRunner,
     _build_review_prompt,
     _parse_review_output,
+    mirror_impl_review_to_post_publish,
+    run_impl_review,
     run_post_publish_review,
 )
 from precision_squad.run_store import RunStore
@@ -547,3 +550,324 @@ def test_run_post_publish_review_rejection_comment_stays_bounded_but_concrete(
     assert "Surfaced justification conflicts with implementation." in comment
     assert "aggregated_plan_alignment" not in comment
     assert "stdout_path" not in comment
+
+
+def test_run_impl_review_returns_approved_for_same_run_same_issue_published_pr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_approved_plan(tmp_path)
+    comments: list[str] = []
+
+    class StubWriter:
+        def get_pull_request(self, owner: str, repo: str, pull_number: int):
+            del owner, repo
+            return {
+                "number": pull_number,
+                "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+                "head": {"sha": "head-sha"},
+                "base": {"repo": {"name": "markdown-pdf-renderer", "owner": {"login": "cracklings3d"}}},
+                "body": "- Run ID: `run-123`\n- Issue: `cracklings3d/markdown-pdf-renderer#9`\n",
+            }
+
+        def create_issue_comment(self, reference, body):
+            del reference
+            comments.append(body)
+            return "comment-url"
+
+        def reopen_issue(self, reference):
+            del reference
+
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.GitHubWriteClient.from_env",
+        lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "- Run ID: `run-123`\n- Issue: `cracklings3d/markdown-pdf-renderer#9`\n",
+    )
+
+    result = run_impl_review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        publish_plan_pull_request_url=None,
+        publish_plan_pull_number=None,
+        publish_result=type("PublishResultStub", (), {"status": "published", "target": "draft_pr", "url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13", "pull_number": 13})(),
+        reviewer=_stub_agent(_review_result(role="reviewer", status="approved", summary="Reviewer approves.")),
+        architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
+    )
+
+    assert result.review_status == "approved"
+    assert result.allows_downstream_automation is True
+    assert result.pull_head_sha == "head-sha"
+    assert comments == []
+
+
+def test_run_impl_review_derives_live_pr_url_when_only_pull_number_is_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_approved_plan(tmp_path)
+    comments: list[str] = []
+
+    class StubWriter:
+        def get_pull_request(self, owner: str, repo: str, pull_number: int):
+            del owner, repo
+            return {
+                "number": pull_number,
+                "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+                "head": {"sha": "head-sha"},
+                "base": {"repo": {"name": "markdown-pdf-renderer", "owner": {"login": "cracklings3d"}}},
+            }
+
+        def create_issue_comment(self, reference, body):
+            del reference
+            comments.append(body)
+            return "comment-url"
+
+        def reopen_issue(self, reference):
+            del reference
+
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.GitHubWriteClient.from_env",
+        lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "- Run ID: `run-123`\n- Issue: `cracklings3d/markdown-pdf-renderer#9`\n",
+    )
+
+    result = run_impl_review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        publish_plan_pull_request_url=None,
+        publish_plan_pull_number=13,
+        publish_result=type(
+            "PublishResultStub",
+            (),
+            {"status": "published", "target": "draft_pr", "url": None, "pull_number": 13},
+        )(),
+        reviewer=_stub_agent(_review_result(role="reviewer", status="approved", summary="Reviewer approves.")),
+        architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
+    )
+
+    assert result.review_status == "approved"
+    assert result.pull_request_url == "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13"
+    assert result.pull_number == 13
+    assert comments == []
+
+
+@pytest.mark.parametrize("review_status", ["changes_requested", "blocked"])
+def test_mirror_impl_review_to_post_publish_maps_stage_statuses(review_status: str) -> None:
+    review = ImplReviewResult(
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        summary="summary",
+        pull_request_url="https://example/pull/1",
+        pull_number=1,
+        pull_head_sha="sha",
+    )
+
+    mirrored = mirror_impl_review_to_post_publish(review)
+
+    assert mirrored.status == ("rejected" if review_status == "changes_requested" else "failed_infra")
+
+
+def test_run_impl_review_blocks_on_provenance_mismatch_and_posts_feedback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_approved_plan(tmp_path)
+    comments: list[str] = []
+
+    class StubWriter:
+        def get_pull_request(self, owner: str, repo: str, pull_number: int):
+            del owner, repo
+            return {
+                "number": pull_number,
+                "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+                "head": {"sha": "head-sha"},
+                "base": {"repo": {"name": "markdown-pdf-renderer", "owner": {"login": "cracklings3d"}}},
+            }
+
+        def create_issue_comment(self, reference, body):
+            del reference
+            comments.append(body)
+            return "comment-url"
+
+        def reopen_issue(self, reference):
+            del reference
+
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.GitHubWriteClient.from_env",
+        lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "- Run ID: `run-other`\n- Issue: `cracklings3d/markdown-pdf-renderer#999`\n",
+    )
+
+    result = run_impl_review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        publish_plan_pull_request_url=None,
+        publish_plan_pull_number=None,
+        publish_result=type("PublishResultStub", (), {"status": "published", "target": "draft_pr", "url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13", "pull_number": 13})(),
+        reviewer=_stub_agent(_review_result(role="reviewer", status="approved", summary="Reviewer approves.")),
+        architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
+    )
+
+    assert result.review_status == "blocked"
+    assert result.issue_reopened is True
+    assert result.issue_comment_url == "comment-url"
+    assert any(item.code == "pr_body_run_id_mismatch" for item in result.feedback)
+    assert comments and "Structured Feedback" in comments[0]
+
+
+def test_run_impl_review_uses_canonical_validation_before_mapping_compatibility_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_approved_plan(tmp_path)
+
+    class StubWriter:
+        def get_pull_request(self, owner: str, repo: str, pull_number: int):
+            del owner, repo
+            return {
+                "number": pull_number,
+                "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+                "head": {"sha": "live-head-sha"},
+                "base": {"repo": {"name": "markdown-pdf-renderer", "owner": {"login": "cracklings3d"}}},
+            }
+
+        def create_issue_comment(self, reference, body):
+            del reference, body
+            return "comment-url"
+
+        def reopen_issue(self, reference):
+            del reference
+
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.GitHubWriteClient.from_env",
+        lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "- Run ID: `run-other`\n- Issue: `cracklings3d/markdown-pdf-renderer#9`\n",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.run_post_publish_review",
+        lambda **kwargs: pytest.fail("legacy review flow should not run when canonical provenance fails"),
+    )
+
+    result = run_impl_review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        publish_plan_pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+        publish_plan_pull_number=13,
+        publish_result=type(
+            "PublishResultStub",
+            (),
+            {
+                "status": "published",
+                "target": "draft_pr",
+                "url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+                "pull_number": 13,
+            },
+        )(),
+        reviewer=_stub_agent(_review_result(role="reviewer", status="approved", summary="Reviewer approves.")),
+        architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
+    )
+
+    assert result.review_status == "blocked"
+    assert result.pull_head_sha == "live-head-sha"
+    assert any(item.code == "pr_body_run_id_mismatch" for item in result.feedback)
+
+
+def test_run_impl_review_posts_non_approved_side_effects_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_approved_plan(tmp_path)
+    comments: list[str] = []
+    reopen_calls = 0
+
+    class StubWriter:
+        def get_pull_request(self, owner: str, repo: str, pull_number: int):
+            del owner, repo
+            return {
+                "number": pull_number,
+                "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+                "head": {"sha": "live-head-sha"},
+                "base": {"repo": {"name": "markdown-pdf-renderer", "owner": {"login": "cracklings3d"}}},
+            }
+
+        def create_issue_comment(self, reference, body):
+            del reference
+            comments.append(body)
+            return f"comment-url-{len(comments)}"
+
+        def reopen_issue(self, reference):
+            nonlocal reopen_calls
+            del reference
+            reopen_calls += 1
+
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review.GitHubWriteClient.from_env",
+        lambda token_env="GITHUB_TOKEN": StubWriter(),
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_body",
+        lambda *args, **kwargs: "- Run ID: `run-123`\n- Issue: `cracklings3d/markdown-pdf-renderer#9`\n",
+    )
+    monkeypatch.setattr(
+        "precision_squad.post_publish_review._fetch_pr_diff",
+        lambda *args, **kwargs: "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@",
+    )
+
+    result = run_impl_review(
+        intake=_intake(),
+        run_record=_record(tmp_path),
+        run_dir=tmp_path,
+        publish_plan_pull_request_url="https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+        publish_plan_pull_number=13,
+        publish_result=type(
+            "PublishResultStub",
+            (),
+            {
+                "status": "published",
+                "target": "draft_pr",
+                "url": "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13",
+                "pull_number": 13,
+            },
+        )(),
+        reviewer=_stub_agent(
+            _review_result(
+                role="reviewer",
+                status="rejected",
+                summary="Reviewer requests changes.",
+                feedback=("Fix the implementation review flow.",),
+            )
+        ),
+        architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
+    )
+
+    assert result.review_status == "changes_requested"
+    assert result.issue_comment_url == "comment-url-1"
+    assert result.issue_reopened is True
+    assert len(comments) == 1
+    assert reopen_calls == 1

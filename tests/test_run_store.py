@@ -17,6 +17,8 @@ from precision_squad.models import (
     ExecutionResult,
     GitHubIssue,
     GovernanceVerdict,
+    ImplReviewFeedback,
+    ImplReviewResult,
     IssueAssessment,
     IssueDraft,
     IssueIntake,
@@ -226,6 +228,40 @@ def test_write_and_load_plan_review_persists_same_run_artifact(tmp_path: Path) -
     assert loaded == _plan_review()
     assert payload["review_status"] == "approved"
     assert payload["provenance"]["source_artifact"] == "approved-plan.json"
+
+
+def test_write_and_load_impl_review_persists_canonical_artifact(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "run-123"
+    run_dir.mkdir(parents=True)
+    review = ImplReviewResult(
+        review_status="changes_requested",
+        summary="Published PR requires changes.",
+        pull_request_url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+        pull_head_sha="abc123",
+        feedback=(
+            ImplReviewFeedback(
+                code="reviewer_changes_requested",
+                message="Fix the implementation.",
+                source="reviewer",
+            ),
+        ),
+        reviewer_status="rejected",
+        reviewer_summary="Reviewer requested changes.",
+        architect_status="approved",
+        architect_summary="Architect approved.",
+        issue_comment_url="comment-url",
+        issue_reopened=True,
+    )
+
+    store.write_impl_review(run_dir, review)
+
+    loaded = store.load_impl_review(run_dir)
+    payload = json.loads((run_dir / "impl-review.json").read_text(encoding="utf-8"))
+    assert loaded == review
+    assert payload["review_status"] == "changes_requested"
+    assert payload["feedback"][0]["source"] == "reviewer"
 
 
 def test_load_plan_review_missing_artifact_raises_not_found(tmp_path: Path) -> None:

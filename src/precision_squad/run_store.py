@@ -18,6 +18,8 @@ from .models import (
     EvaluationResult,
     ExecutionResult,
     GovernanceVerdict,
+    ImplReviewFeedback,
+    ImplReviewResult,
     IssueDraft,
     IssueDraftProvenance,
     IssueIntake,
@@ -43,6 +45,7 @@ PersistedArtifact = (
     | EvaluationResult
     | ExecutionResult
     | GovernanceVerdict
+    | ImplReviewResult
     | IssueDraft
     | IssueIntake
     | IssueReview
@@ -58,6 +61,7 @@ PersistedArtifact = (
 
 APPROVED_PLAN_FILENAME = "approved-plan.json"
 DECISION_LOG_FILENAME_TEMPLATE = "decision-log.attempt-{attempt}.json"
+IMPL_REVIEW_FILENAME = "impl-review.json"
 ISSUE_REVIEW_FILENAME = "issue-review.json"
 PLAN_REVIEW_FILENAME = "plan-review.json"
 _ALLOWED_NAMED_REFERENCE_TYPES = {"file", "interface", "symbol", "example"}
@@ -212,6 +216,18 @@ class RunStore:
 
     def write_plan_review(self, run_dir: Path, review: PlanReview) -> None:
         self._write_json(run_dir / PLAN_REVIEW_FILENAME, review)
+
+    def write_impl_review(self, run_dir: Path, review: ImplReviewResult) -> None:
+        self._write_json(run_dir / IMPL_REVIEW_FILENAME, review)
+
+    @staticmethod
+    def load_impl_review(run_dir: Path) -> ImplReviewResult:
+        path = run_dir / IMPL_REVIEW_FILENAME
+        if not path.exists():
+            raise ValueError(f"Implementation review artifact not found: {path}")
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+        return _parse_impl_review_payload(payload, path=path)
 
     @staticmethod
     def load_issue_review(
@@ -705,6 +721,76 @@ def _parse_plan_review_payload(
             run_id=provenance_run_id,
             issue_ref=provenance_issue_ref,
         ),
+    )
+
+
+def _parse_impl_review_payload(payload: object, *, path: Path) -> ImplReviewResult:
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected JSON object in {path}")
+
+    review_status = payload.get("review_status")
+    if review_status not in {"approved", "changes_requested", "blocked"}:
+        raise ValueError(
+            "Implementation review field 'review_status' must be 'approved', "
+            "'changes_requested', or 'blocked'"
+        )
+
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("Implementation review field 'summary' must be a non-empty string")
+
+    feedback_raw = payload.get("feedback")
+    if not isinstance(feedback_raw, list):
+        raise ValueError("Implementation review field 'feedback' must be a list")
+    feedback: list[ImplReviewFeedback] = []
+    for index, item in enumerate(feedback_raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Implementation review feedback[{index}] must be an object")
+        code = item.get("code")
+        message = item.get("message")
+        source = item.get("source")
+        if not isinstance(code, str) or not code.strip():
+            raise ValueError(
+                f"Implementation review feedback[{index}].code must be a non-empty string"
+            )
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError(
+                f"Implementation review feedback[{index}].message must be a non-empty string"
+            )
+        if source not in {"stage", "reviewer", "architect"}:
+            raise ValueError(
+                "Implementation review feedback[{}].source must be 'stage', 'reviewer', or "
+                "'architect'".format(index)
+            )
+        feedback.append(
+            ImplReviewFeedback(
+                code=code,
+                message=message,
+                source=cast(Literal["stage", "reviewer", "architect"], source),
+            )
+        )
+
+    return ImplReviewResult(
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        summary=summary,
+        pull_request_url=cast(str | None, payload.get("pull_request_url")),
+        pull_number=cast(int | None, payload.get("pull_number")),
+        pull_head_sha=cast(str | None, payload.get("pull_head_sha")),
+        feedback=tuple(feedback),
+        reviewer_status=cast(
+            Literal["approved", "rejected", "failed_infra", "not_run"],
+            payload.get("reviewer_status", "not_run"),
+        ),
+        reviewer_summary=cast(str, payload.get("reviewer_summary", "Reviewer review did not run.")),
+        architect_status=cast(
+            Literal["approved", "rejected", "failed_infra", "not_run"],
+            payload.get("architect_status", "not_run"),
+        ),
+        architect_summary=cast(
+            str, payload.get("architect_summary", "Architect review did not run.")
+        ),
+        issue_comment_url=cast(str | None, payload.get("issue_comment_url")),
+        issue_reopened=bool(payload.get("issue_reopened", False)),
     )
 
 

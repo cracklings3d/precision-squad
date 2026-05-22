@@ -23,6 +23,7 @@ from .coordinator import (
     PersistApprovedPlanParams,
     PublishRunParams,
     RepairIssueParams,
+    ReviewImplParams,
     ReviewIssueParams,
     ReviewPlanParams,
     RunCoordinator,
@@ -38,6 +39,7 @@ from .models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    ImplReviewResult,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -45,7 +47,11 @@ from .models import (
     RepairResult,
     RunRecord,
 )
-from .post_publish_review import OpenCodePrReviewAgent, run_post_publish_review
+from .post_publish_review import (
+    OpenCodePrReviewAgent,
+    mirror_impl_review_to_post_publish,
+    run_impl_review,
+)
 from .publish_executor import execute_publish_plan
 from .repair import (
     OpenCodeRepairAdapter,
@@ -210,6 +216,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory where run artifacts are stored.",
     )
     review_plan_parser.set_defaults(handler=_review_plan)
+
+    review_impl_parser = review_subparsers.add_parser(
+        "impl",
+        help="Review the published draft PR for an existing run ID.",
+    )
+    review_impl_parser.add_argument("run_id", help="Existing run ID to review.")
+    review_impl_parser.add_argument(
+        "--runs-dir",
+        default=argparse.SUPPRESS,
+        help="Directory where run artifacts are stored.",
+    )
+    review_impl_parser.add_argument(
+        "--review-model",
+        default=argparse.SUPPRESS,
+        help="Optional model override for post-publish review agents.",
+    )
+    review_impl_parser.set_defaults(handler=_review_impl)
 
     plan_parser = subparsers.add_parser(
         "plan",
@@ -490,6 +513,35 @@ def _review_plan(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
+def _review_impl(args: argparse.Namespace) -> int:
+    report = RunCoordinator().review_impl(
+        params=ReviewImplParams(
+            run_id=args.run_id,
+            runs_dir=Path(args.runs_dir),
+            review_model=args.review_model,
+        ),
+        dependencies=_CliPublishDependencies(),
+    )
+    review = report.impl_review
+
+    print(f"Run ID: {report.run_record.run_id}")
+    print(f"Run Dir: {report.run_record.run_dir}")
+    print(f"Issue: {report.run_record.issue_ref}")
+    print(f"Review Status: {review.review_status}")
+    print(f"Review Summary: {review.summary}")
+    if review.pull_request_url:
+        print(f"Publish URL: {review.pull_request_url}")
+    print(f"Downstream Automation Allowed: {review.allows_downstream_automation}")
+    print("Artifacts: impl-review.json")
+    if review.issue_comment_url:
+        print(f"Review Feedback URL: {review.issue_comment_url}")
+    if review.feedback:
+        print("Feedback:")
+        for item in review.feedback:
+            print(f"- {item.code}: {item.message} [{item.source}]")
+    return report.exit_code
+
+
 def _plan_run(args: argparse.Namespace) -> int:
     store = RunStore(Path(args.runs_dir))
     record = store.load_run(args.run_id)
@@ -640,7 +692,7 @@ class _CliRepairDependencies:
         run_dir: Path,
         publish_result: PublishResult,
         review_model: str | None,
-    ) -> PostPublishReviewResult | None:
+    ) -> ImplReviewResult | PostPublishReviewResult | None:
         return _run_post_publish_review_if_needed(
             intake=intake,
             run_record=run_record,
@@ -669,7 +721,7 @@ class _CliPublishDependencies:
         run_dir: Path,
         publish_result: PublishResult,
         review_model: str | None,
-    ) -> PostPublishReviewResult | None:
+    ) -> ImplReviewResult | PostPublishReviewResult | None:
         return _run_post_publish_review_if_needed(
             intake=intake,
             run_record=run_record,
@@ -682,6 +734,27 @@ class _CliPublishDependencies:
         self, intake: IssueIntake, review_result: PostPublishReviewResult
     ) -> bool:
         return _post_publish_review_is_stale(intake, review_result)
+
+    def run_impl_review(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        publish_plan: PublishPlan,
+        publish_result: PublishResult,
+        review_model: str | None,
+    ) -> ImplReviewResult:
+        return run_impl_review(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            publish_plan_pull_request_url=publish_plan.pull_request_url,
+            publish_plan_pull_number=publish_plan.pull_number,
+            publish_result=publish_result,
+            reviewer=OpenCodePrReviewAgent(role="reviewer", model=review_model),
+            architect=OpenCodePrReviewAgent(role="architect", model=review_model),
+        )
 
 
 def _install_skill(args: argparse.Namespace) -> int:
@@ -792,6 +865,24 @@ def _read_post_publish_review_result(run_dir: Path) -> PostPublishReviewResult |
         issue_comment_url=_as_optional_str(payload.get("issue_comment_url")),
         issue_reopened=_as_bool(payload.get("issue_reopened", False)),
     )
+
+
+def _read_impl_review_result(run_dir: Path) -> ImplReviewResult | None:
+    path = run_dir / "impl-review.json"
+    if not path.exists():
+        return None
+    return RunStore.load_impl_review(run_dir)
+
+
+def _read_publish_plan_for_impl_review(run_dir: Path) -> PublishPlan:
+    return _read_publish_plan(run_dir)
+
+
+def _read_publish_result_for_impl_review(run_dir: Path) -> PublishResult:
+    result = _read_publish_result(run_dir)
+    if result is None:
+        raise ValueError(f"Run {run_dir.name} is missing publish-result.json")
+    return result
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -995,7 +1086,7 @@ def _run_post_publish_review_if_needed(
     run_dir: Path,
     publish_result: PublishResult,
     review_model: str | None,
-) -> PostPublishReviewResult | None:
+) -> ImplReviewResult | None:
     if (
         publish_result.status != "published"
         or publish_result.target != "draft_pr"
@@ -1003,11 +1094,14 @@ def _run_post_publish_review_if_needed(
     ):
         return None
 
-    return run_post_publish_review(
+    publish_plan = _read_publish_plan_for_impl_review(run_dir)
+    return run_impl_review(
         intake=intake,
         run_record=run_record,
         run_dir=run_dir,
-        pull_request_url=publish_result.url,
+        publish_plan_pull_request_url=publish_plan.pull_request_url,
+        publish_plan_pull_number=publish_plan.pull_number,
+        publish_result=publish_result,
         reviewer=OpenCodePrReviewAgent(role="reviewer", model=review_model),
         architect=OpenCodePrReviewAgent(role="architect", model=review_model),
     )
@@ -1064,6 +1158,11 @@ def _validate_review_plan_args(args: dict[str, Any]) -> None:
     args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
 
 
+def _validate_review_impl_args(args: dict[str, Any]) -> None:
+    args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
+    _normalize_optional_str_arg(args, "review_model")
+
+
 def _validate_plan_run_args(args: dict[str, Any]) -> None:
     args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
 
@@ -1102,6 +1201,11 @@ def _review_issue_config_root(args: argparse.Namespace) -> Path:
 
 
 def _review_plan_config_root(args: argparse.Namespace) -> Path:
+    del args
+    return Path.cwd()
+
+
+def _review_impl_config_root(args: argparse.Namespace) -> Path:
     del args
     return Path.cwd()
 
@@ -1184,6 +1288,13 @@ _COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigS
         defaults={"runs_dir": ".precision-squad/runs"},
         validate=_validate_review_plan_args,
         discovery_root=_review_plan_config_root,
+    ),
+    _review_impl: _CommandConfigSpec(
+        table=("review", "impl"),
+        supported_keys=frozenset({"runs_dir", "review_model"}),
+        defaults={"runs_dir": ".precision-squad/runs", "review_model": None},
+        validate=_validate_review_impl_args,
+        discovery_root=_review_impl_config_root,
     ),
     _plan_run: _CommandConfigSpec(
         table=("plan",),

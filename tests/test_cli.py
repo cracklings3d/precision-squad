@@ -24,6 +24,8 @@ from precision_squad.models import (
     ExecutionResult,
     GitHubIssue,
     GovernanceVerdict,
+    ImplReviewFeedback,
+    ImplReviewResult,
     IssueAssessment,
     IssueIntake,
     IssueReference,
@@ -418,6 +420,141 @@ def test_review_plan_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Mo
     assert status == 3
     assert Path(captured_runs_dir["runs_dir"]) == (tmp_path / ".precision-squad" / "runs")
     assert "Review Status: blocked" in captured.out
+
+
+def test_review_impl_prints_approved_review_output(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    impl_review = ImplReviewResult(
+        review_status="approved",
+        summary="Published PR passed implementation review.",
+        pull_request_url="https://github.com/cracklings3d/precision-squad/pull/72",
+        pull_number=72,
+        pull_head_sha="head-sha",
+        reviewer_status="approved",
+        reviewer_summary="Reviewer approved.",
+        architect_status="approved",
+        architect_summary="Architect approved.",
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_impl",
+        lambda self, *, params, dependencies: __import__(
+            "precision_squad.coordinator", fromlist=["ReviewImplReport"]
+        ).ReviewImplReport(
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="cracklings3d/precision-squad#72",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-123"),
+            ),
+            impl_review=impl_review,
+            exit_code=0,
+        ),
+    )
+
+    status = main(["review", "impl", "run-123", "--runs-dir", str(tmp_path / "runs")])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Review Status: approved" in captured.out
+    assert "Artifacts: impl-review.json" in captured.out
+    assert "Downstream Automation Allowed: True" in captured.out
+
+
+def test_review_impl_prints_feedback_for_blocked_review(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    impl_review = ImplReviewResult(
+        review_status="blocked",
+        summary="Implementation review could not validate provenance.",
+        pull_request_url="https://github.com/cracklings3d/precision-squad/pull/72",
+        pull_number=72,
+        pull_head_sha="head-sha",
+        feedback=(
+            ImplReviewFeedback(
+                code="pr_body_run_id_mismatch",
+                message="Published PR Run ID marker does not match run-record.json.",
+                source="stage",
+            ),
+        ),
+        reviewer_status="not_run",
+        reviewer_summary="Reviewer did not run because review impl was blocked.",
+        architect_status="not_run",
+        architect_summary="Architect did not run because review impl was blocked.",
+        issue_comment_url="comment-url",
+        issue_reopened=True,
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_impl",
+        lambda self, *, params, dependencies: __import__(
+            "precision_squad.coordinator", fromlist=["ReviewImplReport"]
+        ).ReviewImplReport(
+            run_record=RunRecord(
+                run_id="run-123",
+                issue_ref="cracklings3d/precision-squad#72",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-123"),
+            ),
+            impl_review=impl_review,
+            exit_code=3,
+        ),
+    )
+
+    status = main(["review", "impl", "run-123", "--runs-dir", str(tmp_path / "runs")])
+
+    captured = capsys.readouterr()
+    assert status == 3
+    assert "Review Status: blocked" in captured.out
+    assert "pr_body_run_id_mismatch" in captured.out
+    assert "Review Feedback URL: comment-url" in captured.out
+
+
+def test_review_impl_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        "[review.impl]\nruns_dir = \".precision-squad/runs\"\nreview_model = \"test-model\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    captured_params: dict[str, str] = {}
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.review_impl",
+        lambda self, *, params, dependencies: (
+            captured_params.__setitem__("runs_dir", str(params.runs_dir)),
+            captured_params.__setitem__("review_model", str(params.review_model)),
+            __import__("precision_squad.coordinator", fromlist=["ReviewImplReport"]).ReviewImplReport(
+                run_record=RunRecord(
+                    run_id="run-123",
+                    issue_ref="owner/repo#1",
+                    status="runnable",
+                    created_at="2026-05-01T00:00:00Z",
+                    updated_at="2026-05-01T00:00:00Z",
+                    run_dir=str(tmp_path / ".precision-squad" / "runs" / "run-123"),
+                ),
+                impl_review=ImplReviewResult(
+                    review_status="approved",
+                    summary="ok",
+                    pull_request_url="https://github.com/owner/repo/pull/1",
+                    pull_number=1,
+                    pull_head_sha="sha",
+                ),
+                exit_code=0,
+            ),
+        )[2],
+    )
+
+    status = main(["review", "impl", "run-123"])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert Path(captured_params["runs_dir"]) == (tmp_path / ".precision-squad" / "runs")
+    assert captured_params["review_model"] == "test-model"
+    assert "Review Status: approved" in captured.out
 
 
 def test_review_issue_end_to_end_persists_approved_issue_review(

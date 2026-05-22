@@ -362,6 +362,38 @@ class ApprovedPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplReviewFeedback:
+    """One structured feedback item for the canonical implementation-review stage."""
+
+    code: str
+    message: str
+    source: Literal["stage", "reviewer", "architect"]
+
+
+@dataclass(frozen=True, slots=True)
+class ImplReviewResult:
+    """Canonical post-publish implementation review result."""
+
+    review_status: Literal["approved", "changes_requested", "blocked"]
+    summary: str
+    pull_request_url: str | None
+    pull_number: int | None
+    pull_head_sha: str | None
+    feedback: tuple[ImplReviewFeedback, ...] = ()
+    reviewer_status: Literal["approved", "rejected", "failed_infra", "not_run"] = "not_run"
+    reviewer_summary: str = "Reviewer review did not run."
+    architect_status: Literal["approved", "rejected", "failed_infra", "not_run"] = "not_run"
+    architect_summary: str = "Architect review did not run."
+    issue_comment_url: str | None = None
+    issue_reopened: bool = False
+
+    @property
+    def allows_downstream_automation(self) -> bool:
+        """Return whether downstream automation may continue."""
+        return self.review_status == "approved"
+
+
+@dataclass(frozen=True, slots=True)
 class PostPublishReviewResult:
     """Combined result for post-publish PR review."""
 
