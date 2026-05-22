@@ -160,9 +160,9 @@ def make_ambiguous_repo(tmp_path: Path) -> Path:
 def make_repo_with_failing_tests(tmp_path: Path) -> Path:
     """Create a git repository with one passing and one failing test.
 
-    This is used to test the baseline-tolerance (provisional) path:
+    This is used to test the baseline-tolerant quality-tag path:
     baseline QA fails, repair improves (failing test is removed), final QA
-    passes, governance marks as provisional.
+    passes, governance marks the run approved with quality=improved.
     """
     repo_root = tmp_path / "failing-repo"
     repo_root.mkdir()
