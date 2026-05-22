@@ -244,16 +244,26 @@ The active fingerprint is no longer based only on a human-facing summary. It is 
 
 ## Publishing And Review
 
-Publishing uses the stored repair workspace rather than rerunning repair.
+Per [ADR-008](./adr/adr-008-resolve-implement-and-review-impl-stage-semantics.md), `publish` sits between local `implement` work and `review impl`.
 
-The publish executor:
+Publishing uses the stored implementation result rather than rerunning repair.
+
+The publish executor consumes:
+
+- the stored implementation result from `implement`
+- an `approved` governance verdict
+
+It then:
 
 - copies `repair-workspace/repo` into `publish-workspace`
 - strips transient artifacts such as cache directories and `.pyc` files
 - commits the repaired state on a generated branch
 - creates a draft PR
+- persists publish artifacts such as `publish-plan.json` and `publish-result.json`
 
-After publish, local review agents can inspect the PR as:
+`review impl` happens only after that draft PR exists. Post-publish review consumes the published PR context and diff rather than an unpublished local-only workspace artifact.
+
+After publish, local review agents can inspect the draft PR as:
 
 - `reviewer`
 - `architect`
@@ -261,8 +271,10 @@ After publish, local review agents can inspect the PR as:
 If either rejects the PR, `precision-squad`:
 
 - posts structured feedback back to the GitHub issue
-- reopens the issue
+- reopens or keeps open the issue
 - persists a `post-publish-review-result.json`
+
+Draft PR creation does not itself close the issue.
 
 ## Persistence Model
 
