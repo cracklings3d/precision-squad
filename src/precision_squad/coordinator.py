@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from json import JSONDecodeError
 from pathlib import Path
@@ -1130,12 +1131,12 @@ def _collect_plan_review_findings(
         )
 
     implementation_steps = approved_plan_payload.get("implementation_steps")
-    if not _has_usable_implementation_steps(implementation_steps):
+    if _has_correctable_implementation_steps_defect(implementation_steps):
         change_findings.append(
             _plan_review_feedback(
                 code="missing_implementation_steps",
                 message=(
-                    "approved-plan.json must include at least one usable implementation step so "
+                    "approved-plan.json must normalize to only usable implementation steps so "
                     "implement ingress does not have to reconstruct the reviewed plan."
                 ),
                 artifact="approved-plan.json",
@@ -1162,15 +1163,31 @@ def _has_usable_implementation_steps(value: object) -> bool:
     return isinstance(value, list) and any(isinstance(step, str) and step.strip() for step in value)
 
 
+def _has_correctable_implementation_steps_defect(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    if not value:
+        return True
+    if not all(isinstance(step, str) for step in value):
+        return False
+    return any(not step.strip() for step in value) or not _has_usable_implementation_steps(value)
+
+
 def _is_change_level_approved_plan_validation_error(exc: ApprovedPlanValidationError) -> bool:
     message = str(exc)
-    return message in {
+    if message in {
         "Approved plan is missing required field 'plan_summary'",
         "Approved plan is missing a non-empty 'plan_summary'",
         "Approved plan is missing required field 'implementation_steps'",
         "Approved plan has no implementation steps",
-        "Approved plan implementation_steps[1] must be a non-empty string",
-    }
+    }:
+        return True
+    return bool(
+        re.fullmatch(
+            r"Approved plan implementation_steps\[\d+\] must be a non-empty string",
+            message,
+        )
+    )
 
 
 def _plan_review_feedback(
