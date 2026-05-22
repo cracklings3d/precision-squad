@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
-from .intake import canonicalize_local_issue_ref
+from .intake import canonicalize_local_issue_ref, derive_issue_draft
 from .models import (
     ApprovedPlan,
     DecisionLogArtifact,
@@ -18,6 +18,8 @@ from .models import (
     EvaluationResult,
     ExecutionResult,
     GovernanceVerdict,
+    IssueDraft,
+    IssueDraftProvenance,
     IssueIntake,
     NamedReference,
     PostPublishReviewResult,
@@ -35,6 +37,7 @@ PersistedArtifact = (
     | EvaluationResult
     | ExecutionResult
     | GovernanceVerdict
+    | IssueDraft
     | IssueIntake
     | PostPublishReviewResult
     | PublishPlan
@@ -83,12 +86,27 @@ class RunStore:
             updated_at=created_at,
             run_dir=str(run_dir),
         )
+        issue_draft = derive_issue_draft(request, intake)
 
         self._write_json(run_dir / "run-request.json", request)
         self._write_json(run_dir / "issue-intake.json", intake)
+        self._write_json(run_dir / "issue-draft.json", issue_draft)
         self._write_issue_context(run_dir / "issue.md", intake)
         self._write_json(run_dir / "run-record.json", record)
         return record
+
+    def load_issue_draft(self, run_id: str) -> IssueDraft:
+        """Load the normalized issue handoff artifact for a run."""
+        run_dir = self.root / run_id
+        return self.load_issue_draft_from_dir(run_dir)
+
+    @staticmethod
+    def load_issue_draft_from_dir(run_dir: Path) -> IssueDraft:
+        """Load the normalized issue handoff artifact from a run directory."""
+        path = run_dir / "issue-draft.json"
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+        return _parse_issue_draft_payload(payload)
 
     def load_run(self, run_id: str) -> RunRecord:
         """Load an existing run record by run ID."""
@@ -242,6 +260,82 @@ def _read_run_record(path: Path) -> RunRecord:
         updated_at=str(payload["updated_at"]),
         run_dir=str(payload["run_dir"]),
         attempt=int(payload.get("attempt", 1)),
+    )
+
+
+def _parse_issue_draft_payload(payload: object) -> IssueDraft:
+    if not isinstance(payload, dict):
+        raise ValueError("Issue draft payload must be a JSON object")
+
+    provenance_raw = payload.get("provenance")
+    if not isinstance(provenance_raw, dict):
+        raise ValueError("Issue draft field 'provenance' must be an object")
+
+    source_artifacts = provenance_raw.get("source_artifacts")
+    if not isinstance(source_artifacts, list) or not all(
+        isinstance(item, str) for item in source_artifacts
+    ):
+        raise ValueError("Issue draft provenance.source_artifacts must be a list of strings")
+
+    requested_issue_ref = provenance_raw.get("requested_issue_ref")
+    if not isinstance(requested_issue_ref, str):
+        raise ValueError("Issue draft provenance.requested_issue_ref must be a string")
+
+    intake_status = payload.get("intake_status")
+    if intake_status not in {"runnable", "blocked"}:
+        raise ValueError("Issue draft field 'intake_status' must be 'runnable' or 'blocked'")
+
+    intake_reason_codes = payload.get("intake_reason_codes")
+    if not isinstance(intake_reason_codes, list) or not all(
+        isinstance(item, str) for item in intake_reason_codes
+    ):
+        raise ValueError("Issue draft field 'intake_reason_codes' must be a list of strings")
+
+    labels = payload.get("labels")
+    if not isinstance(labels, list) or not all(isinstance(item, str) for item in labels):
+        raise ValueError("Issue draft field 'labels' must be a list of strings")
+
+    owner = payload.get("owner")
+    repo = payload.get("repo")
+    number = payload.get("number")
+    issue_ref = payload.get("issue_ref")
+    issue_url = payload.get("issue_url")
+    title = payload.get("title")
+    summary = payload.get("summary")
+    problem_statement = payload.get("problem_statement")
+    if not isinstance(owner, str):
+        raise ValueError("Issue draft field 'owner' must be a string")
+    if not isinstance(repo, str):
+        raise ValueError("Issue draft field 'repo' must be a string")
+    if not isinstance(number, int):
+        raise ValueError("Issue draft field 'number' must be an integer")
+    if not isinstance(issue_ref, str):
+        raise ValueError("Issue draft field 'issue_ref' must be a string")
+    if not isinstance(issue_url, str):
+        raise ValueError("Issue draft field 'issue_url' must be a string")
+    if not isinstance(title, str):
+        raise ValueError("Issue draft field 'title' must be a string")
+    if not isinstance(summary, str):
+        raise ValueError("Issue draft field 'summary' must be a string")
+    if not isinstance(problem_statement, str):
+        raise ValueError("Issue draft field 'problem_statement' must be a string")
+
+    return IssueDraft(
+        owner=owner,
+        repo=repo,
+        number=number,
+        issue_ref=issue_ref,
+        issue_url=issue_url,
+        title=title,
+        summary=summary,
+        problem_statement=problem_statement,
+        labels=tuple(labels),
+        intake_status=cast(Literal["runnable", "blocked"], intake_status),
+        intake_reason_codes=tuple(intake_reason_codes),
+        provenance=IssueDraftProvenance(
+            source_artifacts=tuple(source_artifacts),
+            requested_issue_ref=requested_issue_ref,
+        ),
     )
 
 

@@ -173,8 +173,26 @@ class PublishRunReport:
     post_publish_review_result: PostPublishReviewResult | None
 
 
+@dataclass(frozen=True, slots=True)
+class CreateIssueParams:
+    issue_ref: str
+    runs_dir: Path
+
+
+@dataclass(frozen=True, slots=True)
+class CreateIssueReport:
+    intake: IssueIntake
+    run_record: RunRecord
+
+
 class RunCoordinator:
     """Coordinates repair and publish workflows independent of CLI output."""
+
+    def create_issue(self, *, params: CreateIssueParams, intake: IssueIntake) -> CreateIssueReport:
+        store = RunStore(params.runs_dir)
+        request = RunRequest(issue_ref=params.issue_ref, runs_dir=str(params.runs_dir))
+        record = store.create_run(request, intake)
+        return CreateIssueReport(intake=intake, run_record=record)
 
     def repair_issue(
         self,

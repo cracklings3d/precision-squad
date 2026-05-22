@@ -124,6 +124,7 @@ def test_approved_persists_all_artifacts(
     expected = [
         "run-request.json",
         "issue-intake.json",
+        "issue-draft.json",
         "run-record.json",
         "execution-result.json",
         "repair-result.json",

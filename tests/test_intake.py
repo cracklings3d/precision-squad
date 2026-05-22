@@ -7,10 +7,11 @@ import pytest
 from precision_squad.intake import (
     build_issue_intake,
     canonicalize_local_issue_ref,
+    derive_issue_draft,
     is_docs_remediation_issue,
     parse_issue_reference,
 )
-from precision_squad.models import GitHubIssue, IssueReference
+from precision_squad.models import GitHubIssue, IssueReference, RunRequest
 
 PLAN_ISSUE = GitHubIssue(
     reference=IssueReference("cracklings3d", "markdown-pdf-renderer", 1),
@@ -149,3 +150,29 @@ def test_build_issue_intake_keeps_docs_remediation_issue_runnable_despite_long_b
 
     assert intake.assessment.status == "runnable"
     assert intake.assessment.reason_codes == ()
+
+
+def test_derive_issue_draft_builds_normalized_handoff_from_request_and_intake() -> None:
+    intake = build_issue_intake(BOUNDED_ISSUE)
+
+    draft = derive_issue_draft(
+        RunRequest(
+            issue_ref="cracklings3d/markdown-pdf-renderer#9",
+            runs_dir=".precision-squad/runs",
+        ),
+        intake,
+    )
+
+    assert draft.owner == "cracklings3d"
+    assert draft.repo == "markdown-pdf-renderer"
+    assert draft.number == 9
+    assert draft.issue_ref == "cracklings3d/markdown-pdf-renderer#9"
+    assert draft.issue_url == BOUNDED_ISSUE.html_url
+    assert draft.title == BOUNDED_ISSUE.title
+    assert draft.summary == intake.summary
+    assert draft.problem_statement == intake.problem_statement
+    assert draft.labels == ("enhancement",)
+    assert draft.intake_status == "runnable"
+    assert draft.intake_reason_codes == ()
+    assert draft.provenance.source_artifacts == ("run-request.json", "issue-intake.json")
+    assert draft.provenance.requested_issue_ref == "cracklings3d/markdown-pdf-renderer#9"
