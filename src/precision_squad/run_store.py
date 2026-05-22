@@ -296,7 +296,8 @@ class RunStore:
             ) from exc
         except JSONDecodeError as exc:
             raise PlanReviewValidationError(
-                f"Implement ingress requires run-record.json at {record_path} to be valid JSON: {exc.msg}"
+                "Implement ingress requires run-record.json at "
+                f"{record_path} to be valid JSON: {exc.msg}"
             ) from exc
         except (KeyError, TypeError, ValueError) as exc:
             raise PlanReviewValidationError(
