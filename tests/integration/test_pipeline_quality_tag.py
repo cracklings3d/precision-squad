@@ -158,7 +158,7 @@ def test_broken_baseline_improved_to_approved(
     assert report.qa_result.status == "passed", (
         f"final QA should be passed: {report.qa_result.status}"
     )
-    assert report.qa_result.quality == "green"
+    assert report.qa_result.quality == "improved"
 
     assert report.governance_verdict is not None
     assert report.publish_plan is not None
