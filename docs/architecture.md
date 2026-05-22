@@ -221,27 +221,29 @@ It runs:
 - baseline QA against a clean clone of the original repo
 - final QA against the repaired workspace
 
-If the final state is strictly better than a broken baseline without introducing new failures, governance may classify the run as `provisional` instead of `approved`.
+If the final state is strictly better than a broken baseline without introducing new failures, that improvement is tracked as execution quality rather than as a separate governance verdict.
 
 This is a pragmatic escape hatch for broken repos, not a substitute for green QA.
 
+Baseline-tolerant repair no longer introduces a provisional governance verdict. Instead, quality is recorded on `ExecutionResult` as an informational tag (`green`, `improved`, or `degraded`) while governance remains a separate gate.
+
 ## Governance
 
-Governance has three outcomes:
+Governance has two outcomes:
 
 - `approved`
-- `provisional`
 - `blocked`
 
 Current intent:
 
 - `approved`: documented setup and QA evidence is present and passes
-- `provisional`: the run improved a broken baseline but is not fully green
 - `blocked`: intake, documentation, execution, or QA evidence is missing, ambiguous, unrunnable, or failed
+
+Quality is informational on `ExecutionResult`, not a governance verdict. A baseline-tolerant repair may therefore be quality-tagged as `improved` while governance still resolves to either `approved` or `blocked`.
 
 Publish behavior:
 
-- `approved` and `provisional` runs can produce draft PRs
+- `approved` runs can produce draft PRs
 - `blocked` docs-policy runs from otherwise runnable issues can produce follow-up repo issues instead
 - other `blocked` runs produce issue comments instead
 
@@ -255,7 +257,7 @@ The active fingerprint is no longer based only on a human-facing summary. It is 
 
 ## Publishing And Review
 
-Per [ADR-008](./adr/adr-008-resolve-implement-and-review-impl-stage-semantics.md), `publish` sits between local `implement` work and `review impl`.
+Per [ADR-008](./adr/adr-008-resolve-implement-and-review-impl-stage-semantics.md), `publish` sits between local `implement` work and the post-publish `review impl` stage.
 
 Publishing uses the stored implementation result rather than rerunning repair.
 
@@ -272,7 +274,7 @@ It then:
 - creates a draft PR
 - persists publish artifacts such as `publish-plan.json` and `publish-result.json`
 
-`review impl` happens only after that draft PR exists. Post-publish review consumes the published PR context and diff rather than an unpublished local-only workspace artifact.
+`review impl` happens only after that draft PR exists and reviews the same published draft PR for the same issue. The stage consumes persisted same-run context plus live published PR body, diff, locator, and head-SHA data rather than an unpublished local-only workspace artifact.
 
 After publish, local review agents can inspect the draft PR as:
 
@@ -283,7 +285,9 @@ If either rejects the PR, `precision-squad`:
 
 - posts structured feedback back to the GitHub issue
 - reopens or keeps open the issue
-- persists a `post-publish-review-result.json`
+- persists canonical `impl-review.json`
+
+`impl-review.json` is the canonical artifact for this stage. A derived `post-publish-review-result.json` compatibility mirror may still exist temporarily, but it is compatibility output rather than the canonical source of truth.
 
 Draft PR creation does not itself close the issue.
 
@@ -308,7 +312,9 @@ Important persisted artifacts include:
 - `repair-result.json`
 - `qa-baseline-result.json`
 - `qa-result.json`
-- `post-publish-review-result.json`
+- `impl-review.json`
+
+When compatibility output is still required by existing flows, `post-publish-review-result.json` may also be persisted as a derived mirror of `impl-review.json`.
 
 This is deliberate. The system prefers inspectability and replayability over hidden state.
 

@@ -19,6 +19,7 @@ from .models import (
     ExecutionResult,
     GitHubIssue,
     GovernanceVerdict,
+    ImplReviewResult,
     IssueAssessment,
     IssueDraft,
     IssueIntake,
@@ -37,6 +38,7 @@ from .models import (
     RunRecord,
     RunRequest,
 )
+from .post_publish_review import mirror_impl_review_to_post_publish
 from .publishing import RequiredDecisionLogArtifactMissingError, build_publish_plan
 from .repair import RepairAdapter
 from .run_store import (
@@ -119,7 +121,7 @@ class RepairDependencies(Protocol):
         run_dir: Path,
         publish_result: PublishResult,
         review_model: str | None,
-    ) -> PostPublishReviewResult | None: ...
+    ) -> ImplReviewResult | PostPublishReviewResult | None: ...
 
 
 class PublishDependencies(Protocol):
@@ -142,11 +144,22 @@ class PublishDependencies(Protocol):
         run_dir: Path,
         publish_result: PublishResult,
         review_model: str | None,
-    ) -> PostPublishReviewResult | None: ...
+    ) -> ImplReviewResult | PostPublishReviewResult | None: ...
 
     def post_publish_review_is_stale(
         self, intake: IssueIntake, review_result: PostPublishReviewResult
     ) -> bool: ...
+
+    def run_impl_review(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        publish_plan: PublishPlan,
+        publish_result: PublishResult,
+        review_model: str | None,
+    ) -> ImplReviewResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +268,20 @@ class ReviewPlanReport:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewImplParams:
+    run_id: str
+    runs_dir: Path
+    review_model: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewImplReport:
+    run_record: RunRecord
+    impl_review: ImplReviewResult
+    exit_code: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class PersistApprovedPlanParams:
     run_id: str
     runs_dir: Path
@@ -295,6 +322,37 @@ class RunCoordinator:
         else:
             exit_code = 3
         return ReviewPlanReport(run_record=record, plan_review=review, exit_code=exit_code)
+
+    def review_impl(
+        self,
+        *,
+        params: ReviewImplParams,
+        dependencies: PublishDependencies,
+    ) -> ReviewImplReport:
+        store = RunStore(params.runs_dir)
+        record = store.load_run(params.run_id)
+        run_dir = Path(record.run_dir).resolve()
+        intake = _load_issue_intake_artifact(run_dir, expected_issue_ref=record.issue_ref)
+        RunStore.load_approved_plan(run_dir, issue_ref=record.issue_ref)
+        publish_plan = _load_publish_plan_artifact(run_dir)
+        publish_result = _load_publish_result_artifact(run_dir)
+        impl_review = dependencies.run_impl_review(
+            intake=intake,
+            run_record=record,
+            run_dir=run_dir,
+            publish_plan=publish_plan,
+            publish_result=publish_result,
+            review_model=params.review_model,
+        )
+        store.write_impl_review(run_dir, impl_review)
+        store.write_post_publish_review_result(run_dir, mirror_impl_review_to_post_publish(impl_review))
+        if impl_review.review_status == "approved":
+            exit_code = 0
+        elif impl_review.review_status == "changes_requested":
+            exit_code = 2
+        else:
+            exit_code = 3
+        return ReviewImplReport(run_record=record, impl_review=impl_review, exit_code=exit_code)
 
     def persist_approved_plan_for_planning(self, *, params: PersistApprovedPlanParams) -> Path:
         store = RunStore(params.runs_dir)
@@ -778,15 +836,18 @@ class RunCoordinator:
             run_dir=run_dir,
         )
         store.write_publish_result(run_dir, publish_result)
-        post_publish_review_result = dependencies.run_post_publish_review_if_needed(
+        compatibility_review_result = dependencies.run_post_publish_review_if_needed(
             intake=intake,
             run_record=record,
             run_dir=run_dir,
             publish_result=publish_result,
             review_model=params.review_model,
         )
-        if post_publish_review_result is not None:
-            store.write_post_publish_review_result(run_dir, post_publish_review_result)
+        post_publish_review_result = _persist_post_publish_compatibility_artifacts(
+            store=store,
+            run_dir=run_dir,
+            review_result=compatibility_review_result,
+        )
 
         return RepairIssueReport(
             intake=intake,
@@ -937,15 +998,18 @@ class RunCoordinator:
                 "failed_infra",
                 "not_run",
             } or dependencies.post_publish_review_is_stale(intake, review_result):
-                review_result = dependencies.run_post_publish_review_if_needed(
+                compatibility_review_result = dependencies.run_post_publish_review_if_needed(
                     intake=intake,
                     run_record=run_record,
                     run_dir=run_dir,
                     publish_result=existing_result,
                     review_model=params.review_model,
                 )
-                if review_result is not None:
-                    store.write_post_publish_review_result(run_dir, review_result)
+                review_result = _persist_post_publish_compatibility_artifacts(
+                    store=store,
+                    run_dir=run_dir,
+                    review_result=compatibility_review_result,
+                )
         else:
             result = dependencies.execute_publish_plan(
                 intake,
@@ -954,15 +1018,18 @@ class RunCoordinator:
                 run_dir=run_dir,
             )
             store.write_publish_result(run_dir, result)
-            review_result = dependencies.run_post_publish_review_if_needed(
+            compatibility_review_result = dependencies.run_post_publish_review_if_needed(
                 intake=intake,
                 run_record=run_record,
                 run_dir=run_dir,
                 publish_result=result,
                 review_model=params.review_model,
             )
-            if review_result is not None:
-                store.write_post_publish_review_result(run_dir, review_result)
+            review_result = _persist_post_publish_compatibility_artifacts(
+                store=store,
+                run_dir=run_dir,
+                review_result=compatibility_review_result,
+            )
 
         if result is None:
             raise ValueError(f"Run {params.run_id} is missing publish-result.json")
@@ -1529,6 +1596,99 @@ def _load_issue_intake_artifact(run_dir: Path, *, expected_issue_ref: str) -> Is
             "Implement ingress requires issue-intake.json to match the stored run issue_ref."
         )
     return intake
+
+
+def _load_publish_plan_artifact(run_dir: Path) -> PublishPlan:
+    path = run_dir / "publish-plan.json"
+    if not path.exists():
+        raise ValueError(f"Implementation review requires publish-plan.json at {path}.")
+    try:
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+    except JSONDecodeError as exc:
+        raise ValueError(
+            f"Implementation review requires publish-plan.json at {path} to be valid JSON: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Implementation review requires publish-plan.json at {path} to be a JSON object.")
+    status = payload.get("status")
+    title = payload.get("title")
+    body = payload.get("body")
+    reason_codes = payload.get("reason_codes")
+    if status not in {"draft_pr", "issue_comment", "follow_up_issue"}:
+        raise ValueError("Implementation review requires publish-plan.json.status to be valid.")
+    if not isinstance(title, str) or not isinstance(body, str):
+        raise ValueError("Implementation review requires publish-plan.json title/body strings.")
+    if not isinstance(reason_codes, list) or not all(isinstance(item, str) for item in reason_codes):
+        raise ValueError("Implementation review requires publish-plan.json.reason_codes to be a list of strings.")
+    return PublishPlan(
+        status=cast(Literal["draft_pr", "issue_comment", "follow_up_issue"], status),
+        title=title,
+        body=body,
+        reason_codes=tuple(reason_codes),
+        branch_name=cast(str | None, payload.get("branch_name")),
+        pull_request_url=cast(str | None, payload.get("pull_request_url")),
+        pull_number=cast(int | None, payload.get("pull_number")),
+    )
+
+
+def _load_publish_result_artifact(run_dir: Path) -> PublishResult:
+    path = run_dir / "publish-result.json"
+    if not path.exists():
+        raise ValueError(f"Implementation review requires publish-result.json at {path}.")
+    try:
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+    except JSONDecodeError as exc:
+        raise ValueError(
+            f"Implementation review requires publish-result.json at {path} to be valid JSON: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Implementation review requires publish-result.json at {path} to be a JSON object."
+        )
+    status = payload.get("status")
+    target = payload.get("target")
+    summary = payload.get("summary")
+    if status not in {"dry_run", "published"}:
+        raise ValueError("Implementation review requires publish-result.json.status to be valid.")
+    if target not in {"draft_pr", "issue_comment", "follow_up_issue"}:
+        raise ValueError("Implementation review requires publish-result.json.target to be valid.")
+    if not isinstance(summary, str):
+        raise ValueError("Implementation review requires publish-result.json.summary to be a string.")
+    return PublishResult(
+        status=cast(Literal["dry_run", "published"], status),
+        target=cast(Literal["draft_pr", "issue_comment", "follow_up_issue"], target),
+        summary=summary,
+        url=cast(str | None, payload.get("url")),
+        branch_name=cast(str | None, payload.get("branch_name")),
+        pull_number=cast(int | None, payload.get("pull_number")),
+    )
+
+
+def _persist_post_publish_compatibility_artifacts(
+    *,
+    store: RunStore,
+    run_dir: Path,
+    review_result: ImplReviewResult | PostPublishReviewResult | None,
+) -> PostPublishReviewResult | None:
+    if review_result is None:
+        return None
+    if isinstance(review_result, ImplReviewResult):
+        impl_review = review_result
+        legacy_review = mirror_impl_review_to_post_publish(review_result)
+    else:
+        legacy_review = review_result
+        impl_review = _map_legacy_post_publish_review(review_result)
+    store.write_impl_review(run_dir, impl_review)
+    store.write_post_publish_review_result(run_dir, legacy_review)
+    return legacy_review
+
+
+def _map_legacy_post_publish_review(review: PostPublishReviewResult) -> ImplReviewResult:
+    from .post_publish_review import _map_post_publish_to_impl_review
+
+    return _map_post_publish_to_impl_review(review)
 
 
 def _parse_issue_intake_payload(payload: object) -> IssueIntake:

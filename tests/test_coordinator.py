@@ -12,6 +12,7 @@ from precision_squad.coordinator import (
     ImplementRunParams,
     PersistApprovedPlanParams,
     RepairIssueParams,
+    ReviewImplParams,
     ReviewPlanParams,
     RunCoordinator,
 )
@@ -19,6 +20,7 @@ from precision_squad.models import (
     ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
+    ImplReviewResult,
     IssueAssessment,
     IssueIntake,
     IssueReference,
@@ -298,6 +300,131 @@ def test_implement_run_refuses_when_approved_plan_missing(
             params=_make_implement_params(tmp_path, record.run_id),
             dependencies=MagicMock(),
         )
+
+
+def test_review_impl_persists_canonical_and_compatibility_review_artifacts(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+    run_dir = Path(record.run_dir)
+    store.write_approved_plan(run_dir, _approved_plan())
+    (run_dir / "publish-plan.json").write_text(
+        json.dumps(
+            {
+                "status": "draft_pr",
+                "title": "title",
+                "body": "body",
+                "reason_codes": [],
+                "pull_request_url": "https://github.com/owner/repo/pull/1",
+                "pull_number": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "publish-result.json").write_text(
+        json.dumps(
+            {
+                "status": "published",
+                "target": "draft_pr",
+                "summary": "published",
+                "url": "https://github.com/owner/repo/pull/1",
+                "pull_number": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dependencies = MagicMock()
+    dependencies.run_impl_review.return_value = ImplReviewResult(
+        review_status="changes_requested",
+        summary="Published PR needs changes.",
+        pull_request_url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+        pull_head_sha="head-sha",
+        reviewer_status="rejected",
+        reviewer_summary="Reviewer requested changes.",
+        architect_status="approved",
+        architect_summary="Architect approved.",
+    )
+
+    report = RunCoordinator().review_impl(
+        params=ReviewImplParams(run_id=record.run_id, runs_dir=runs_dir, review_model=None),
+        dependencies=dependencies,
+    )
+
+    impl_payload = json.loads((run_dir / "impl-review.json").read_text(encoding="utf-8"))
+    legacy_payload = json.loads((run_dir / "post-publish-review-result.json").read_text(encoding="utf-8"))
+    assert report.exit_code == 2
+    assert impl_payload["review_status"] == "changes_requested"
+    assert legacy_payload["status"] == "rejected"
+
+
+def test_publish_run_compatibility_path_persists_shared_canonical_review_and_legacy_mirror(
+    tmp_path: Path,
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    intake = _make_intake()
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        intake,
+    )
+    run_dir = Path(record.run_dir)
+    publish_plan = PublishPlan(
+        status="draft_pr",
+        title="title",
+        body="body",
+        reason_codes=(),
+        pull_request_url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+    )
+    publish_result = PublishResult(
+        status="published",
+        target="draft_pr",
+        summary="published",
+        url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+    )
+    store.write_publish_plan(run_dir, publish_plan)
+    store.write_publish_result(run_dir, publish_result)
+
+    dependencies = MagicMock()
+    dependencies.run_post_publish_review_if_needed.return_value = ImplReviewResult(
+        review_status="blocked",
+        summary="Implementation review could not validate provenance.",
+        pull_request_url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+        pull_head_sha="head-sha",
+        feedback=(),
+        reviewer_status="not_run",
+        reviewer_summary="Reviewer did not run because review impl was blocked.",
+        architect_status="not_run",
+        architect_summary="Architect did not run because review impl was blocked.",
+    )
+
+    report = RunCoordinator().publish_run(
+        params=__import__("precision_squad.coordinator", fromlist=["PublishRunParams"]).PublishRunParams(
+            run_id=record.run_id,
+            runs_dir=runs_dir,
+            review_model=None,
+        ),
+        intake=intake,
+        run_record=record,
+        publish_plan=publish_plan,
+        existing_result=publish_result,
+        existing_review_result=None,
+        dependencies=dependencies,
+    )
+
+    impl_payload = json.loads((run_dir / "impl-review.json").read_text(encoding="utf-8"))
+    legacy_payload = json.loads((run_dir / "post-publish-review-result.json").read_text(encoding="utf-8"))
+    assert report.post_publish_review_result is not None
+    assert impl_payload["review_status"] == "blocked"
+    assert legacy_payload["status"] == "failed_infra"
+    assert legacy_payload["pull_head_sha"] == "head-sha"
 
 
 @pytest.mark.parametrize("review_status", ["changes_requested", "blocked"])
