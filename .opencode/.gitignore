@@ -1,4 +1,4 @@
-runs/
-node_modules/
-package.json
-package-lock.json
+/runs/
+/node_modules/
+/package.json
+/package-lock.json
