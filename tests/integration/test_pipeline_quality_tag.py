@@ -138,7 +138,7 @@ def test_broken_baseline_improved_to_approved(
         approved_plan=approved_plan_for(),
     )
 
-    deps = _ProvisionalTestDependencies()
+    deps = _BaselineTolerantTestDependencies()
 
     report = RunCoordinator().repair_issue(
         params=params,
@@ -190,7 +190,7 @@ def test_approved_publish_plan_contains_governance_verdict(
         approved_plan=approved_plan_for(),
     )
 
-    deps = _ProvisionalTestDependencies()
+    deps = _BaselineTolerantTestDependencies()
 
     report = RunCoordinator().repair_issue(
         params=params,
@@ -204,8 +204,8 @@ def test_approved_publish_plan_contains_governance_verdict(
     assert "approved" in plan.body.lower()
 
 
-class _ProvisionalTestDependencies(_ApprovedTestDependencies):
-    """Dependencies for the provisional path that use the failing-test repair adapter."""
+class _BaselineTolerantTestDependencies(_ApprovedTestDependencies):
+    """Dependencies for the baseline-tolerant path using the failing-test repair adapter."""
 
     def __init__(self) -> None:
         self._adapter = _RepairAdapterThatFixesFailingTest()
