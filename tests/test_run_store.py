@@ -34,6 +34,7 @@ from precision_squad.run_store import (
     ApprovedPlanGateError,
     ApprovedPlanValidationError,
     IssueReviewNotFoundError,
+    IssueReviewValidationError,
     RunStore,
     load_approved_plan_artifact,
 )
@@ -220,15 +221,12 @@ def test_write_gated_approved_plan_allows_approved_issue_review(tmp_path: Path) 
     assert payload["issue_ref"] == "owner/repo#1"
 
 
-def test_planning_persistence_helper_requires_review_approval(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "run-123"
-    run_dir.mkdir(parents=True)
+def _write_run_record(run_dir: Path, *, run_id: str = "run-123", issue_ref: str = "owner/repo#1") -> None:
     (run_dir / "run-record.json").write_text(
         json.dumps(
             {
-                "run_id": "run-123",
-                "issue_ref": "owner/repo#1",
+                "run_id": run_id,
+                "issue_ref": issue_ref,
                 "status": "runnable",
                 "created_at": "2026-05-01T00:00:00Z",
                 "updated_at": "2026-05-01T00:00:00Z",
@@ -238,6 +236,106 @@ def test_planning_persistence_helper_requires_review_approval(tmp_path: Path) ->
         ),
         encoding="utf-8",
     )
+
+
+def test_planning_persistence_rejects_approved_issue_review_with_mismatched_run_id(
+    tmp_path: Path,
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    _write_run_record(run_dir)
+    payload = {
+        "run_id": "run-other",
+        "issue_ref": "owner/repo#1",
+        "review_status": "approved",
+        "summary": "Planning may proceed because issue-draft.json passed the local planner-safety review.",
+        "feedback": [],
+        "provenance": {
+            "source_artifact": "issue-draft.json",
+            "run_id": "run-other",
+            "issue_ref": "owner/repo#1",
+        },
+    }
+    (run_dir / "issue-review.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(IssueReviewValidationError, match="expected run_id 'run-123'"):
+        RunCoordinator().persist_approved_plan_for_planning(
+            params=PersistApprovedPlanParams(
+                run_id="run-123",
+                runs_dir=runs_dir,
+                approved_plan=_approved_plan(),
+            )
+        )
+
+
+def test_planning_persistence_rejects_approved_issue_review_with_invalid_provenance_source(
+    tmp_path: Path,
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    _write_run_record(run_dir)
+    payload = {
+        "run_id": "run-123",
+        "issue_ref": "owner/repo#1",
+        "review_status": "approved",
+        "summary": "Planning may proceed because issue-draft.json passed the local planner-safety review.",
+        "feedback": [],
+        "provenance": {
+            "source_artifact": "issue-intake.json",
+            "run_id": "run-123",
+            "issue_ref": "owner/repo#1",
+        },
+    }
+    (run_dir / "issue-review.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(IssueReviewValidationError, match="source_artifact"):
+        RunCoordinator().persist_approved_plan_for_planning(
+            params=PersistApprovedPlanParams(
+                run_id="run-123",
+                runs_dir=runs_dir,
+                approved_plan=_approved_plan(),
+            )
+        )
+
+
+def test_planning_persistence_rejects_malformed_but_approved_issue_review_artifact(
+    tmp_path: Path,
+) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    _write_run_record(run_dir)
+    payload = {
+        "run_id": "run-123",
+        "issue_ref": "owner/repo#1",
+        "review_status": "approved",
+        "summary": "Planning may proceed because issue-draft.json passed the local planner-safety review.",
+        "feedback": "not-a-list",
+        "provenance": {
+            "source_artifact": "issue-draft.json",
+            "run_id": "run-123",
+            "issue_ref": "owner/repo#1",
+        },
+    }
+    (run_dir / "issue-review.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(IssueReviewValidationError, match="feedback"):
+        RunCoordinator().persist_approved_plan_for_planning(
+            params=PersistApprovedPlanParams(
+                run_id="run-123",
+                runs_dir=runs_dir,
+                approved_plan=_approved_plan(),
+            )
+        )
+
+
+def test_planning_persistence_helper_requires_review_approval(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    _write_run_record(run_dir)
     RunStore(runs_dir).write_issue_review(run_dir, _issue_review())
 
     path = RunCoordinator().persist_approved_plan_for_planning(
