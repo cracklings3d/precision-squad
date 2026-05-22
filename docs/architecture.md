@@ -285,6 +285,7 @@ Important persisted artifacts include:
 - `run-request.json`
 - `issue-intake.json`
 - `issue-draft.json`
+- `issue-review.json`
 - `run-record.json`
 - `execution-result.json`
 - `evaluation-result.json`
@@ -299,6 +300,8 @@ Important persisted artifacts include:
 This is deliberate. The system prefers inspectability and replayability over hidden state.
 
 `issue-draft.json` is the derived normalized issue-stage handoff artifact for pre-implement issue preparation. It is created by `create issue` and persisted beside the raw request and intake artifacts so downstream issue-stage consumers do not depend on `issue-intake.json` internals.
+
+`issue-review.json` is the same-run pre-planning review artifact for planner-safety gating. It is created by `review issue <run-id>` from the persisted `issue-draft.json` and must be stage-approved before the later planning ingress persists canonical `approved-plan.json` for that run.
 
 ## Design Choices
 

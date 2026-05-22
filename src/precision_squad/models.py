@@ -75,6 +75,37 @@ class IssueDraft:
 
 
 @dataclass(frozen=True, slots=True)
+class IssueReviewFeedback:
+    """One deterministic planner-safety finding for issue review."""
+
+    code: str
+    message: str
+    artifact: str
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class IssueReviewProvenance:
+    """Explicit provenance for an issue review artifact."""
+
+    source_artifact: str
+    run_id: str
+    issue_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class IssueReview:
+    """Deterministic same-run planner-safety review artifact."""
+
+    run_id: str
+    issue_ref: str
+    review_status: Literal["approved", "changes_requested", "blocked"]
+    summary: str
+    feedback: tuple[IssueReviewFeedback, ...]
+    provenance: IssueReviewProvenance
+
+
+@dataclass(frozen=True, slots=True)
 class RunRequest:
     """Operator request to run one issue through the control plane."""
 

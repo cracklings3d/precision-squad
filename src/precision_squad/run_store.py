@@ -21,6 +21,9 @@ from .models import (
     IssueDraft,
     IssueDraftProvenance,
     IssueIntake,
+    IssueReview,
+    IssueReviewFeedback,
+    IssueReviewProvenance,
     NamedReference,
     PostPublishReviewResult,
     PublishPlan,
@@ -39,6 +42,7 @@ PersistedArtifact = (
     | GovernanceVerdict
     | IssueDraft
     | IssueIntake
+    | IssueReview
     | PostPublishReviewResult
     | PublishPlan
     | PublishResult
@@ -50,6 +54,7 @@ PersistedArtifact = (
 
 APPROVED_PLAN_FILENAME = "approved-plan.json"
 DECISION_LOG_FILENAME_TEMPLATE = "decision-log.attempt-{attempt}.json"
+ISSUE_REVIEW_FILENAME = "issue-review.json"
 _ALLOWED_NAMED_REFERENCE_TYPES = {"file", "interface", "symbol", "example"}
 
 
@@ -63,6 +68,22 @@ class ApprovedPlanNotFoundError(ApprovedPlanError):
 
 class ApprovedPlanValidationError(ApprovedPlanError):
     """Raised when an approved-plan artifact fails canonical validation."""
+
+
+class IssueReviewError(ValueError):
+    """Base error for issue-review artifact loading or gate failures."""
+
+
+class IssueReviewNotFoundError(IssueReviewError):
+    """Raised when an issue-review artifact is missing."""
+
+
+class IssueReviewValidationError(IssueReviewError):
+    """Raised when an issue-review artifact fails canonical validation."""
+
+
+class ApprovedPlanGateError(ValueError):
+    """Raised when approved-plan persistence is attempted without review approval."""
 
 
 class RunStore:
@@ -150,6 +171,42 @@ class RunStore:
 
     def write_approved_plan(self, run_dir: Path, plan: ApprovedPlan) -> None:
         self._write_json(run_dir / APPROVED_PLAN_FILENAME, plan)
+
+    def write_gated_approved_plan(self, run_dir: Path, plan: ApprovedPlan) -> None:
+        self.require_issue_review_approval(run_dir, issue_ref=plan.issue_ref)
+        self._write_json(run_dir / APPROVED_PLAN_FILENAME, plan)
+
+    def write_issue_review(self, run_dir: Path, review: IssueReview) -> None:
+        self._write_json(run_dir / ISSUE_REVIEW_FILENAME, review)
+
+    @staticmethod
+    def load_issue_review(run_dir: Path, *, issue_ref: str) -> IssueReview:
+        path = run_dir / ISSUE_REVIEW_FILENAME
+        if not path.exists():
+            raise IssueReviewNotFoundError(f"Issue review artifact not found: {path}")
+        try:
+            with path.open(encoding="utf-8") as f:
+                payload = json.load(f)
+        except JSONDecodeError as exc:
+            raise IssueReviewValidationError(
+                f"Issue review artifact at {path} is not valid JSON: {exc.msg}"
+            ) from exc
+        return _parse_issue_review_payload(payload, path=path, issue_ref=issue_ref)
+
+    @staticmethod
+    def require_issue_review_approval(run_dir: Path, *, issue_ref: str) -> IssueReview:
+        try:
+            review = RunStore.load_issue_review(run_dir, issue_ref=issue_ref)
+        except IssueReviewNotFoundError as exc:
+            raise ApprovedPlanGateError(
+                f"Approved plan persistence requires issue-review.json for {issue_ref}."
+            ) from exc
+        if review.review_status != "approved":
+            raise ApprovedPlanGateError(
+                "Approved plan persistence requires issue-review.json.review_status to be "
+                f"'approved'; found '{review.review_status}' for {issue_ref}."
+            )
+        return review
 
     @staticmethod
     def load_approved_plan(run_dir: Path, *, issue_ref: str) -> ApprovedPlan:
@@ -335,6 +392,102 @@ def _parse_issue_draft_payload(payload: object) -> IssueDraft:
         provenance=IssueDraftProvenance(
             source_artifacts=tuple(source_artifacts),
             requested_issue_ref=requested_issue_ref,
+        ),
+    )
+
+
+def _parse_issue_review_payload(
+    payload: object,
+    *,
+    path: Path,
+    issue_ref: str,
+) -> IssueReview:
+    if not isinstance(payload, dict):
+        raise IssueReviewValidationError(f"Expected JSON object in {path}")
+
+    review_issue_ref = payload.get("issue_ref")
+    if not isinstance(review_issue_ref, str):
+        raise IssueReviewValidationError("Issue review field 'issue_ref' must be a string")
+    if review_issue_ref != issue_ref:
+        raise IssueReviewValidationError(
+            "Issue review issue_ref "
+            f"'{review_issue_ref}' does not match expected issue_ref '{issue_ref}'"
+        )
+
+    run_id = payload.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise IssueReviewValidationError("Issue review field 'run_id' must be a non-empty string")
+
+    review_status = payload.get("review_status")
+    if review_status not in {"approved", "changes_requested", "blocked"}:
+        raise IssueReviewValidationError(
+            "Issue review field 'review_status' must be 'approved', 'changes_requested', or 'blocked'"
+        )
+
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise IssueReviewValidationError("Issue review field 'summary' must be a non-empty string")
+
+    feedback_raw = payload.get("feedback")
+    if not isinstance(feedback_raw, list):
+        raise IssueReviewValidationError("Issue review field 'feedback' must be a list")
+    feedback: list[IssueReviewFeedback] = []
+    for index, item in enumerate(feedback_raw, start=1):
+        if not isinstance(item, dict):
+            raise IssueReviewValidationError(f"Issue review feedback[{index}] must be an object")
+        code = item.get("code")
+        message = item.get("message")
+        artifact = item.get("artifact")
+        field = item.get("field")
+        if not isinstance(code, str) or not code.strip():
+            raise IssueReviewValidationError(
+                f"Issue review feedback[{index}].code must be a non-empty string"
+            )
+        if not isinstance(message, str) or not message.strip():
+            raise IssueReviewValidationError(
+                f"Issue review feedback[{index}].message must be a non-empty string"
+            )
+        if not isinstance(artifact, str) or not artifact.strip():
+            raise IssueReviewValidationError(
+                f"Issue review feedback[{index}].artifact must be a non-empty string"
+            )
+        if not isinstance(field, str):
+            raise IssueReviewValidationError(
+                f"Issue review feedback[{index}].field must be a string"
+            )
+        feedback.append(
+            IssueReviewFeedback(code=code, message=message, artifact=artifact, field=field)
+        )
+
+    provenance_raw = payload.get("provenance")
+    if not isinstance(provenance_raw, dict):
+        raise IssueReviewValidationError("Issue review field 'provenance' must be an object")
+    source_artifact = provenance_raw.get("source_artifact")
+    provenance_run_id = provenance_raw.get("run_id")
+    provenance_issue_ref = provenance_raw.get("issue_ref")
+    if not isinstance(source_artifact, str) or not source_artifact.strip():
+        raise IssueReviewValidationError(
+            "Issue review provenance.source_artifact must be a non-empty string"
+        )
+    if not isinstance(provenance_run_id, str) or provenance_run_id != run_id:
+        raise IssueReviewValidationError(
+            "Issue review provenance.run_id must match issue review run_id"
+        )
+    if not isinstance(provenance_issue_ref, str) or provenance_issue_ref != review_issue_ref:
+        raise IssueReviewValidationError(
+            "Issue review provenance.issue_ref must match issue review issue_ref"
+        )
+
+    return IssueReview(
+        run_id=run_id,
+        issue_ref=review_issue_ref,
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        summary=summary,
+        feedback=tuple(feedback),
+        provenance=IssueReviewProvenance(
+            source_artifact=source_artifact,
+            run_id=provenance_run_id,
+            issue_ref=provenance_issue_ref,
         ),
     )
 
