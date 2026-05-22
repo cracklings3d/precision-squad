@@ -11,14 +11,18 @@ from typing import Literal, Protocol, cast
 
 from .executor import DocsFirstExecutor
 from .governance import apply_governance, evaluate_run
-from .intake import IssueIntake, canonicalize_local_issue_ref, is_docs_remediation_issue
+from .intake import canonicalize_local_issue_ref, is_docs_remediation_issue
 from .models import (
     ApprovedPlan,
     DecisionLogArtifact,
     EvaluationResult,
     ExecutionResult,
+    GitHubIssue,
     GovernanceVerdict,
+    IssueAssessment,
     IssueDraft,
+    IssueIntake,
+    IssueReference,
     IssueReview,
     IssueReviewFeedback,
     IssueReviewProvenance,
@@ -40,6 +44,7 @@ from .run_store import (
     ApprovedPlanValidationError,
     IssueReviewNotFoundError,
     IssueReviewValidationError,
+    PlanReviewError,
     RunStore,
 )
 
@@ -165,6 +170,15 @@ class PublishRunParams:
 
 
 @dataclass(frozen=True, slots=True)
+class ImplementRunParams:
+    run_id: str
+    runs_dir: Path
+    repo_path: Path
+    repair_agent: str
+    repair_model: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class RepairIssueReport:
     intake: IssueIntake
     run_record: RunRecord
@@ -187,6 +201,19 @@ class PublishRunReport:
     publish_plan: PublishPlan
     publish_result: PublishResult
     post_publish_review_result: PostPublishReviewResult | None
+
+
+@dataclass(frozen=True, slots=True)
+class ImplementRunReport:
+    intake: IssueIntake
+    run_record: RunRecord
+    execution_result: ExecutionResult
+    evaluation_result: EvaluationResult
+    governance_verdict: GovernanceVerdict
+    repair_result: RepairResult | None = None
+    baseline_qa_result: QaResult | None = None
+    qa_result: QaResult | None = None
+    exit_code: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +312,33 @@ class RunCoordinator:
         )
         return run_dir / "approved-plan.json"
 
+    def implement_run(
+        self,
+        *,
+        params: ImplementRunParams,
+        dependencies: RepairDependencies,
+    ) -> ImplementRunReport:
+        store = RunStore(params.runs_dir)
+        record = store.load_run(params.run_id)
+        run_dir = Path(record.run_dir).resolve()
+        intake = _load_issue_intake_artifact(run_dir, expected_issue_ref=record.issue_ref)
+        RunStore.load_approved_plan(run_dir, issue_ref=record.issue_ref)
+        try:
+            RunStore.require_plan_review_for_implement(run_dir, issue_ref=record.issue_ref)
+        except PlanReviewError as exc:
+            raise ValueError(str(exc)) from exc
+
+        return self._run_local_implementation_flow(
+            store=store,
+            intake=intake,
+            record=record,
+            run_dir=run_dir,
+            repo_path=params.repo_path,
+            repair_agent=params.repair_agent,
+            repair_model=params.repair_model,
+            dependencies=dependencies,
+        )
+
     def repair_issue(
         self,
         *,
@@ -373,7 +427,72 @@ class RunCoordinator:
                 exit_code=3,
             )
 
-        synthesis_result = DocsFirstExecutor(repo_path=params.repo_path).execute(
+        implementation_report = self._run_local_implementation_flow(
+            store=store,
+            intake=intake,
+            record=record,
+            run_dir=run_dir,
+            repo_path=params.repo_path,
+            repair_agent=params.repair_agent,
+            repair_model=params.repair_model,
+            dependencies=dependencies,
+        )
+
+        try:
+            return self._publish_repair_issue_report(
+                store=store,
+                implementation_report=implementation_report,
+                params=params,
+                dependencies=dependencies,
+            )
+        except RequiredDecisionLogArtifactMissingError as exc:
+            execution_result = ExecutionResult(
+                status="failed_infra",
+                executor_name=implementation_report.execution_result.executor_name,
+                summary=str(exc),
+                detail_codes=tuple(
+                    dict.fromkeys(
+                        (
+                            *implementation_report.execution_result.detail_codes,
+                            "missing_decision_log_artifact",
+                        )
+                    )
+                ),
+                artifact_dir=implementation_report.execution_result.artifact_dir,
+                stdout_path=implementation_report.execution_result.stdout_path,
+                stderr_path=implementation_report.execution_result.stderr_path,
+                quality=implementation_report.execution_result.quality,
+            )
+            implementation_report = self._evaluate_and_persist_local(
+                store=store,
+                intake=intake,
+                record=record,
+                run_dir=run_dir,
+                execution_result=execution_result,
+                repair_result=None,
+                baseline_qa_result=implementation_report.baseline_qa_result,
+                qa_result=implementation_report.qa_result,
+            )
+            return self._publish_repair_issue_report(
+                store=store,
+                implementation_report=implementation_report,
+                params=params,
+                dependencies=dependencies,
+            )
+
+    def _run_local_implementation_flow(
+        self,
+        *,
+        store: RunStore,
+        intake: IssueIntake,
+        record: RunRecord,
+        run_dir: Path,
+        repo_path: Path,
+        repair_agent: str,
+        repair_model: str | None,
+        dependencies: RepairDependencies,
+    ) -> ImplementRunReport:
+        synthesis_result = DocsFirstExecutor(repo_path=repo_path).execute(
             intake,
             record,
             run_dir,
@@ -391,7 +510,9 @@ class RunCoordinator:
                 intake=intake,
                 record=record,
                 run_dir=run_dir,
-                params=params,
+                repo_path=repo_path,
+                repair_agent=repair_agent,
+                repair_model=repair_model,
                 dependencies=dependencies,
                 store=store,
             )
@@ -404,13 +525,15 @@ class RunCoordinator:
                     intake=intake,
                     record=record,
                     run_dir=run_dir,
-                    params=params,
+                    repo_path=repo_path,
+                    repair_agent=repair_agent,
+                    repair_model=repair_model,
                     dependencies=dependencies,
                     store=store,
                 )
             )
 
-        return self._evaluate_and_publish(
+        return self._evaluate_and_persist_local(
             store=store,
             intake=intake,
             record=record,
@@ -419,8 +542,6 @@ class RunCoordinator:
             repair_result=repair_result,
             baseline_qa_result=baseline_qa_result,
             qa_result=qa_result,
-            params=params,
-            dependencies=dependencies,
         )
 
     def _handle_escalation(
@@ -480,17 +601,19 @@ class RunCoordinator:
         intake: IssueIntake,
         record: RunRecord,
         run_dir: Path,
-        params: RepairIssueParams,
+        repo_path: Path,
+        repair_agent: str,
+        repair_model: str | None,
         dependencies: RepairDependencies,
         store: RunStore,
     ) -> tuple[ExecutionResult, RepairResult]:
         """Run docs-remediation repair."""
         repair_adapter = dependencies.create_repair_adapter(
-            repair_agent=params.repair_agent,
-            repair_model=params.repair_model,
+            repair_agent=repair_agent,
+            repair_model=repair_model,
         )
         repair_result = dependencies.run_docs_remediation_repair(
-            repo_path=params.repo_path,
+            repo_path=repo_path,
             adapter=repair_adapter,
             intake=intake,
             run_record=record,
@@ -541,17 +664,19 @@ class RunCoordinator:
         intake: IssueIntake,
         record: RunRecord,
         run_dir: Path,
-        params: RepairIssueParams,
+        repo_path: Path,
+        repair_agent: str,
+        repair_model: str | None,
         dependencies: RepairDependencies,
         store: RunStore,
     ) -> tuple[ExecutionResult, RepairResult | None, QaResult | None, QaResult | None]:
         """Run standard repair with QA loop."""
         repair_adapter = dependencies.create_repair_adapter(
-            repair_agent=params.repair_agent,
-            repair_model=params.repair_model,
+            repair_agent=repair_agent,
+            repair_model=repair_model,
         )
         repair_result, baseline_qa_result, qa_result = dependencies.run_repair_qa_loop(
-            repo_path=params.repo_path,
+            repo_path=repo_path,
             adapter=repair_adapter,
             intake=intake,
             run_record=record,
@@ -582,7 +707,7 @@ class RunCoordinator:
         )
         return execution_result, repair_result, baseline_qa_result, qa_result
 
-    def _evaluate_and_publish(
+    def _evaluate_and_persist_local(
         self,
         *,
         store: RunStore,
@@ -593,36 +718,58 @@ class RunCoordinator:
         repair_result: RepairResult | None,
         baseline_qa_result: QaResult | None,
         qa_result: QaResult | None,
-        params: RepairIssueParams,
-        dependencies: RepairDependencies,
-    ) -> RepairIssueReport:
-        """Run evaluation, governance, and publish."""
+    ) -> ImplementRunReport:
+        """Run evaluation and governance without crossing the publish boundary."""
         store.write_execution_result(run_dir, execution_result)
         evaluation_result = evaluate_run(intake, execution_result)
         store.write_evaluation_result(run_dir, evaluation_result)
         verdict = apply_governance(intake, execution_result, evaluation_result)
         store.write_governance_verdict(run_dir, verdict)
-        try:
-            publish_plan = build_publish_plan(intake, record, verdict, repair_result)
-        except RequiredDecisionLogArtifactMissingError as exc:
-            execution_result = ExecutionResult(
-                status="failed_infra",
-                executor_name=execution_result.executor_name,
-                summary=str(exc),
-                detail_codes=tuple(
-                    dict.fromkeys((*execution_result.detail_codes, "missing_decision_log_artifact"))
-                ),
-                artifact_dir=execution_result.artifact_dir,
-                stdout_path=execution_result.stdout_path,
-                stderr_path=execution_result.stderr_path,
-                quality=execution_result.quality,
-            )
-            store.write_execution_result(run_dir, execution_result)
-            evaluation_result = evaluate_run(intake, execution_result)
-            store.write_evaluation_result(run_dir, evaluation_result)
-            verdict = apply_governance(intake, execution_result, evaluation_result)
-            store.write_governance_verdict(run_dir, verdict)
-            publish_plan = build_publish_plan(intake, record, verdict)
+
+        execution_result, evaluation_result, verdict = self._ensure_decision_log_artifact(
+            store=store,
+            intake=intake,
+            record=record,
+            run_dir=run_dir,
+            execution_result=execution_result,
+            repair_result=repair_result,
+        )
+
+        exit_code = 0
+        if verdict.status == "blocked":
+            exit_code = 4
+
+        return ImplementRunReport(
+            intake=intake,
+            run_record=record,
+            execution_result=execution_result,
+            evaluation_result=evaluation_result,
+            governance_verdict=verdict,
+            repair_result=repair_result,
+            baseline_qa_result=baseline_qa_result,
+            qa_result=qa_result,
+            exit_code=exit_code,
+        )
+
+    def _publish_repair_issue_report(
+        self,
+        *,
+        store: RunStore,
+        implementation_report: ImplementRunReport,
+        params: RepairIssueParams,
+        dependencies: RepairDependencies,
+    ) -> RepairIssueReport:
+        intake = implementation_report.intake
+        record = implementation_report.run_record
+        run_dir = Path(record.run_dir).resolve()
+        execution_result = implementation_report.execution_result
+        evaluation_result = implementation_report.evaluation_result
+        verdict = implementation_report.governance_verdict
+        repair_result = implementation_report.repair_result
+        baseline_qa_result = implementation_report.baseline_qa_result
+        qa_result = implementation_report.qa_result
+
+        publish_plan = build_publish_plan(intake, record, verdict, repair_result)
         store.write_publish_plan(run_dir, publish_plan)
         publish_result = dependencies.execute_publish_plan(
             intake,
@@ -641,10 +788,6 @@ class RunCoordinator:
         if post_publish_review_result is not None:
             store.write_post_publish_review_result(run_dir, post_publish_review_result)
 
-        exit_code = 0
-        if verdict.status == "blocked":
-            exit_code = 4
-
         return RepairIssueReport(
             intake=intake,
             run_record=record,
@@ -657,8 +800,118 @@ class RunCoordinator:
             baseline_qa_result=baseline_qa_result,
             qa_result=qa_result,
             post_publish_review_result=post_publish_review_result,
-            exit_code=exit_code,
+            exit_code=implementation_report.exit_code,
         )
+
+    def _ensure_decision_log_artifact(
+        self,
+        *,
+        store: RunStore,
+        intake: IssueIntake,
+        record: RunRecord,
+        run_dir: Path,
+        execution_result: ExecutionResult,
+        repair_result: RepairResult | None,
+    ) -> tuple[ExecutionResult, EvaluationResult, GovernanceVerdict]:
+        if repair_result is None or repair_result.status != "completed":
+            evaluation_result = evaluate_run(intake, execution_result)
+            verdict = apply_governance(intake, execution_result, evaluation_result)
+            return execution_result, evaluation_result, verdict
+
+        decision_log_path = run_dir / f"decision-log.attempt-{record.attempt}.json"
+        if decision_log_path.exists():
+            evaluation_result = evaluate_run(intake, execution_result)
+            verdict = apply_governance(intake, execution_result, evaluation_result)
+            return execution_result, evaluation_result, verdict
+
+        execution_result = ExecutionResult(
+            status="failed_infra",
+            executor_name=execution_result.executor_name,
+            summary=(
+                "Required decision log artifact missing: "
+                f"{decision_log_path.name}"
+            ),
+            detail_codes=tuple(
+                dict.fromkeys((*execution_result.detail_codes, "missing_decision_log_artifact"))
+            ),
+            artifact_dir=execution_result.artifact_dir,
+            stdout_path=execution_result.stdout_path,
+            stderr_path=execution_result.stderr_path,
+            quality=execution_result.quality,
+        )
+        store.write_execution_result(run_dir, execution_result)
+        evaluation_result = evaluate_run(intake, execution_result)
+        store.write_evaluation_result(run_dir, evaluation_result)
+        verdict = apply_governance(intake, execution_result, evaluation_result)
+        store.write_governance_verdict(run_dir, verdict)
+        return execution_result, evaluation_result, verdict
+
+    def _evaluate_and_publish(
+        self,
+        *,
+        store: RunStore,
+        intake: IssueIntake,
+        record: RunRecord,
+        run_dir: Path,
+        execution_result: ExecutionResult,
+        repair_result: RepairResult | None,
+        baseline_qa_result: QaResult | None,
+        qa_result: QaResult | None,
+        params: RepairIssueParams,
+        dependencies: RepairDependencies,
+    ) -> RepairIssueReport:
+        """Run evaluation, governance, and publish."""
+        implementation_report = self._evaluate_and_persist_local(
+            store=store,
+            intake=intake,
+            record=record,
+            run_dir=run_dir,
+            execution_result=execution_result,
+            repair_result=repair_result,
+            baseline_qa_result=baseline_qa_result,
+            qa_result=qa_result,
+        )
+        try:
+            return self._publish_repair_issue_report(
+                store=store,
+                implementation_report=implementation_report,
+                params=params,
+                dependencies=dependencies,
+            )
+        except RequiredDecisionLogArtifactMissingError as exc:
+            execution_result = ExecutionResult(
+                status="failed_infra",
+                executor_name=implementation_report.execution_result.executor_name,
+                summary=str(exc),
+                detail_codes=tuple(
+                    dict.fromkeys(
+                        (
+                            *implementation_report.execution_result.detail_codes,
+                            "missing_decision_log_artifact",
+                        )
+                    )
+                ),
+                artifact_dir=implementation_report.execution_result.artifact_dir,
+                stdout_path=implementation_report.execution_result.stdout_path,
+                stderr_path=implementation_report.execution_result.stderr_path,
+                quality=implementation_report.execution_result.quality,
+            )
+            implementation_report = self._evaluate_and_persist_local(
+                store=store,
+                intake=intake,
+                record=record,
+                run_dir=run_dir,
+                execution_result=execution_result,
+                repair_result=None,
+                baseline_qa_result=baseline_qa_result,
+                qa_result=qa_result,
+            )
+            return self._publish_repair_issue_report(
+                store=store,
+                implementation_report=implementation_report,
+                params=params,
+                dependencies=dependencies,
+            )
 
     def publish_run(
         self,
@@ -1251,4 +1504,67 @@ def _blocked_retry_report(*, intake: IssueIntake, issue_ref: str) -> RepairIssue
             run_dir="",
         ),
         exit_code=3,
+    )
+
+
+def _load_issue_intake_artifact(run_dir: Path, *, expected_issue_ref: str) -> IssueIntake:
+    path = run_dir / "issue-intake.json"
+    if not path.exists():
+        raise ValueError(f"Implement ingress requires issue-intake.json at {path}.")
+    try:
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+    except JSONDecodeError as exc:
+        raise ValueError(
+            f"Implement ingress requires issue-intake.json at {path} to be valid JSON: {exc.msg}"
+        ) from exc
+    try:
+        intake = _parse_issue_intake_payload(payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Implement ingress requires issue-intake.json at {path} to be valid: {exc}"
+        ) from exc
+    if not _same_local_issue_ref(str(intake.issue.reference), expected_issue_ref):
+        raise ValueError(
+            "Implement ingress requires issue-intake.json to match the stored run issue_ref."
+        )
+    return intake
+
+
+def _parse_issue_intake_payload(payload: object) -> IssueIntake:
+    if not isinstance(payload, dict):
+        raise ValueError("Expected JSON object")
+    issue_payload = cast(dict[str, object], payload["issue"])
+    reference_payload = cast(dict[str, object], issue_payload["reference"])
+    assessment_payload = cast(dict[str, object], payload["assessment"])
+    status = assessment_payload["status"]
+    number_value = reference_payload["number"]
+    if status not in {"runnable", "blocked"}:
+        raise ValueError("Issue intake assessment.status must be 'runnable' or 'blocked'")
+    if not isinstance(number_value, int):
+        raise ValueError("Issue intake issue.reference.number must be an integer")
+    return IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference(
+                owner=str(reference_payload["owner"]),
+                repo=str(reference_payload["repo"]),
+                number=number_value,
+            ),
+            title=str(issue_payload["title"]),
+            body=str(issue_payload["body"]),
+            labels=tuple(str(label) for label in cast(list[object], issue_payload["labels"])),
+            html_url=str(issue_payload["html_url"]),
+            comments=tuple(
+                str(comment) for comment in cast(list[object], issue_payload.get("comments", []))
+            ),
+        ),
+        summary=str(payload["summary"]),
+        problem_statement=str(payload["problem_statement"]),
+        assessment=IssueAssessment(
+            status=cast(Literal["runnable", "blocked"], status),
+            reason_codes=tuple(
+                str(reason_code)
+                for reason_code in cast(list[object], assessment_payload["reason_codes"])
+            ),
+        ),
     )
