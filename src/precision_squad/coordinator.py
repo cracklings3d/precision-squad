@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -39,9 +39,6 @@ from .run_store import (
     ApprovedPlanValidationError,
     IssueReviewNotFoundError,
     IssueReviewValidationError,
-    PlanReviewNotApprovedError,
-    PlanReviewNotFoundError,
-    PlanReviewValidationError,
     RunStore,
 )
 
@@ -929,7 +926,11 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
                 field="",
             )
         )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
     except IssueReviewValidationError as exc:
         blocked_findings.append(
             _plan_review_feedback(
@@ -939,7 +940,11 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
                 field="",
             )
         )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
 
     if issue_review.review_status != "approved":
         blocked_findings.append(
@@ -953,7 +958,11 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
                 field="review_status",
             )
         )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
 
     if not approved_plan_path.exists():
         blocked_findings.append(
@@ -967,7 +976,11 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
                 field="",
             )
         )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
     try:
         with approved_plan_path.open(encoding="utf-8") as f:
             approved_plan_payload = json.load(f)
@@ -983,17 +996,28 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
                 field="",
             )
         )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
     if not isinstance(approved_plan_payload, dict):
         blocked_findings.append(
             _plan_review_feedback(
                 code="approved_plan_invalid",
-                message="approved-plan.json could not be validated for plan review: expected a JSON object.",
+                message=(
+                    "approved-plan.json could not be validated for plan review: "
+                    "expected a JSON object."
+                ),
                 artifact="approved-plan.json",
                 field="",
             )
         )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
 
     _collect_plan_review_findings(
         approved_plan_payload=approved_plan_payload,
@@ -1002,7 +1026,11 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         change_findings=change_findings,
     )
     if blocked_findings:
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
 
     try:
         store.load_approved_plan(run_dir, issue_ref=record.issue_ref)
@@ -1018,7 +1046,11 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
                 field="",
             )
         )
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
     except ApprovedPlanValidationError as exc:
         if not (_is_change_level_approved_plan_validation_error(exc) and change_findings):
             blocked_findings.append(
@@ -1029,10 +1061,18 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
                     field="",
                 )
             )
-            return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+            return _plan_review_artifact(
+                record=record,
+                status="blocked",
+                feedback=tuple(blocked_findings),
+            )
 
     if blocked_findings:
-        return _plan_review_artifact(record=record, status="blocked", feedback=tuple(blocked_findings))
+        return _plan_review_artifact(
+            record=record,
+            status="blocked",
+            feedback=tuple(blocked_findings),
+        )
     if change_findings:
         return _plan_review_artifact(
             record=record,
@@ -1054,7 +1094,10 @@ def _collect_plan_review_findings(
         blocked_findings.append(
             _plan_review_feedback(
                 code="approved_plan_issue_missing",
-                message="approved-plan.json must include a non-empty issue_ref for the reviewed run.",
+                message=(
+                    "approved-plan.json must include a non-empty issue_ref for the "
+                    "reviewed run."
+                ),
                 artifact="approved-plan.json",
                 field="issue_ref",
             )
