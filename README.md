@@ -213,6 +213,10 @@ python -m precision_squad.cli run issue owner/repo#number --repo-path <local-rep
 
 - `approved-plan.json`
 
+`review plan` stops after reading the same run's canonical `approved-plan.json` and writing the bounded pre-implementation review artifact:
+
+- `plan-review.json`
+
 `plan <run-id> --approved-plan-path <path>` is the canonical planning ingress. `repair issue --approved-plan-path` remains supported as a compatibility ingress for repair-oriented flows.
 
 Publish a stored run without rerunning repair:

@@ -286,6 +286,8 @@ Important persisted artifacts include:
 - `issue-intake.json`
 - `issue-draft.json`
 - `issue-review.json`
+- `approved-plan.json`
+- `plan-review.json`
 - `run-record.json`
 - `execution-result.json`
 - `evaluation-result.json`
@@ -302,6 +304,8 @@ This is deliberate. The system prefers inspectability and replayability over hid
 `issue-draft.json` is the derived normalized issue-stage handoff artifact for pre-implement issue preparation. It is created by `create issue` and persisted beside the raw request and intake artifacts so downstream issue-stage consumers do not depend on `issue-intake.json` internals.
 
 `issue-review.json` is the same-run pre-planning review artifact for planner-safety gating. It is created by `review issue <run-id>` from the persisted `issue-draft.json` and must be stage-approved before the later planning ingress persists canonical `approved-plan.json` for that run.
+
+`plan-review.json` is the same-run pre-implementation review artifact for implement ingress gating. It is created by `review plan <run-id>` from the persisted canonical `approved-plan.json` and must be stage-approved before implement-stage code consumes that approved plan for the same run.
 
 ## Design Choices
 

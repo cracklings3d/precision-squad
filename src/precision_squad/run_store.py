@@ -25,6 +25,9 @@ from .models import (
     IssueReviewFeedback,
     IssueReviewProvenance,
     NamedReference,
+    PlanReview,
+    PlanReviewFeedback,
+    PlanReviewProvenance,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -43,6 +46,7 @@ PersistedArtifact = (
     | IssueDraft
     | IssueIntake
     | IssueReview
+    | PlanReview
     | PostPublishReviewResult
     | PublishPlan
     | PublishResult
@@ -55,6 +59,7 @@ PersistedArtifact = (
 APPROVED_PLAN_FILENAME = "approved-plan.json"
 DECISION_LOG_FILENAME_TEMPLATE = "decision-log.attempt-{attempt}.json"
 ISSUE_REVIEW_FILENAME = "issue-review.json"
+PLAN_REVIEW_FILENAME = "plan-review.json"
 _ALLOWED_NAMED_REFERENCE_TYPES = {"file", "interface", "symbol", "example"}
 
 
@@ -84,6 +89,22 @@ class IssueReviewValidationError(IssueReviewError):
 
 class ApprovedPlanGateError(ValueError):
     """Raised when approved-plan persistence is attempted without review approval."""
+
+
+class PlanReviewError(ValueError):
+    """Base error for plan-review artifact loading or gate failures."""
+
+
+class PlanReviewNotFoundError(PlanReviewError):
+    """Raised when a plan-review artifact is missing."""
+
+
+class PlanReviewValidationError(PlanReviewError):
+    """Raised when a plan-review artifact fails canonical validation."""
+
+
+class PlanReviewNotApprovedError(PlanReviewError):
+    """Raised when a valid plan-review artifact is not approved for implement ingress."""
 
 
 class RunStore:
@@ -189,6 +210,9 @@ class RunStore:
     def write_issue_review(self, run_dir: Path, review: IssueReview) -> None:
         self._write_json(run_dir / ISSUE_REVIEW_FILENAME, review)
 
+    def write_plan_review(self, run_dir: Path, review: PlanReview) -> None:
+        self._write_json(run_dir / PLAN_REVIEW_FILENAME, review)
+
     @staticmethod
     def load_issue_review(
         run_dir: Path,
@@ -234,6 +258,45 @@ class RunStore:
             raise ApprovedPlanGateError(
                 "Approved plan persistence requires issue-review.json.review_status to be "
                 f"'approved'; found '{review.review_status}' for {issue_ref}."
+            )
+        return review
+
+    @staticmethod
+    def load_plan_review(
+        run_dir: Path,
+        *,
+        issue_ref: str,
+        expected_run_id: str | None = None,
+    ) -> PlanReview:
+        path = run_dir / PLAN_REVIEW_FILENAME
+        if not path.exists():
+            raise PlanReviewNotFoundError(f"Plan review artifact not found: {path}")
+        try:
+            with path.open(encoding="utf-8") as f:
+                payload = json.load(f)
+        except JSONDecodeError as exc:
+            raise PlanReviewValidationError(
+                f"Plan review artifact at {path} is not valid JSON: {exc.msg}"
+            ) from exc
+        return _parse_plan_review_payload(
+            payload,
+            path=path,
+            issue_ref=issue_ref,
+            expected_run_id=expected_run_id,
+        )
+
+    @staticmethod
+    def require_plan_review_for_implement(run_dir: Path, *, issue_ref: str) -> PlanReview:
+        record = _read_run_record(run_dir / "run-record.json")
+        review = RunStore.load_plan_review(
+            run_dir,
+            issue_ref=issue_ref,
+            expected_run_id=record.run_id,
+        )
+        if review.review_status != "approved":
+            raise PlanReviewNotApprovedError(
+                "Implement ingress requires plan-review.json.review_status to be 'approved'; "
+                f"found '{review.review_status}' for {issue_ref}."
             )
         return review
 
@@ -522,6 +585,108 @@ def _parse_issue_review_payload(
         feedback=tuple(feedback),
         provenance=IssueReviewProvenance(
             source_artifact=source_artifact,
+            run_id=provenance_run_id,
+            issue_ref=provenance_issue_ref,
+        ),
+    )
+
+
+def _parse_plan_review_payload(
+    payload: object,
+    *,
+    path: Path,
+    issue_ref: str,
+    expected_run_id: str | None,
+) -> PlanReview:
+    if not isinstance(payload, dict):
+        raise PlanReviewValidationError(f"Expected JSON object in {path}")
+
+    review_issue_ref = payload.get("issue_ref")
+    if not isinstance(review_issue_ref, str):
+        raise PlanReviewValidationError("Plan review field 'issue_ref' must be a string")
+    if review_issue_ref != issue_ref:
+        raise PlanReviewValidationError(
+            "Plan review issue_ref "
+            f"'{review_issue_ref}' does not match expected issue_ref '{issue_ref}'"
+        )
+
+    run_id = payload.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise PlanReviewValidationError("Plan review field 'run_id' must be a non-empty string")
+    if expected_run_id is not None and run_id != expected_run_id:
+        raise PlanReviewValidationError(
+            f"Plan review run_id '{run_id}' does not match expected run_id '{expected_run_id}'"
+        )
+
+    review_status = payload.get("review_status")
+    if review_status not in {"approved", "changes_requested", "blocked"}:
+        raise PlanReviewValidationError(
+            "Plan review field 'review_status' must be 'approved', "
+            "'changes_requested', or 'blocked'"
+        )
+
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise PlanReviewValidationError("Plan review field 'summary' must be a non-empty string")
+
+    feedback_raw = payload.get("feedback")
+    if not isinstance(feedback_raw, list):
+        raise PlanReviewValidationError("Plan review field 'feedback' must be a list")
+    feedback: list[PlanReviewFeedback] = []
+    for index, item in enumerate(feedback_raw, start=1):
+        if not isinstance(item, dict):
+            raise PlanReviewValidationError(f"Plan review feedback[{index}] must be an object")
+        code = item.get("code")
+        message = item.get("message")
+        artifact = item.get("artifact")
+        field = item.get("field")
+        if not isinstance(code, str) or not code.strip():
+            raise PlanReviewValidationError(
+                f"Plan review feedback[{index}].code must be a non-empty string"
+            )
+        if not isinstance(message, str) or not message.strip():
+            raise PlanReviewValidationError(
+                f"Plan review feedback[{index}].message must be a non-empty string"
+            )
+        if not isinstance(artifact, str) or not artifact.strip():
+            raise PlanReviewValidationError(
+                f"Plan review feedback[{index}].artifact must be a non-empty string"
+            )
+        if not isinstance(field, str):
+            raise PlanReviewValidationError(
+                f"Plan review feedback[{index}].field must be a string"
+            )
+        feedback.append(
+            PlanReviewFeedback(code=code, message=message, artifact=artifact, field=field)
+        )
+
+    provenance_raw = payload.get("provenance")
+    if not isinstance(provenance_raw, dict):
+        raise PlanReviewValidationError("Plan review field 'provenance' must be an object")
+    source_artifact = provenance_raw.get("source_artifact")
+    provenance_run_id = provenance_raw.get("run_id")
+    provenance_issue_ref = provenance_raw.get("issue_ref")
+    if source_artifact != APPROVED_PLAN_FILENAME:
+        raise PlanReviewValidationError(
+            f"Plan review provenance.source_artifact must be exactly '{APPROVED_PLAN_FILENAME}'"
+        )
+    if not isinstance(provenance_run_id, str) or provenance_run_id != run_id:
+        raise PlanReviewValidationError(
+            "Plan review provenance.run_id must match plan review run_id"
+        )
+    if not isinstance(provenance_issue_ref, str) or provenance_issue_ref != review_issue_ref:
+        raise PlanReviewValidationError(
+            "Plan review provenance.issue_ref must match plan review issue_ref"
+        )
+
+    return PlanReview(
+        run_id=run_id,
+        issue_ref=review_issue_ref,
+        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        summary=summary,
+        feedback=tuple(feedback),
+        provenance=PlanReviewProvenance(
+            source_artifact=cast(str, source_artifact),
             run_id=provenance_run_id,
             issue_ref=provenance_issue_ref,
         ),

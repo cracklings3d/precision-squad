@@ -28,6 +28,8 @@ SUPPORTED_TABLES = {
             "approved_plan_path",
         }
     ),
+    ("review", "plan"): frozenset({"runs_dir"}),
+    ("review", "issue"): frozenset({"runs_dir"}),
     ("publish", "run"): frozenset({"runs_dir", "review_model"}),
     ("install-skill",): frozenset({"project_root", "force"}),
 }
@@ -234,6 +236,18 @@ def test_load_command_config_returns_only_active_command_table(tmp_path: Path) -
     )
 
     assert result == {"runs_dir": str((tmp_path / "runs").resolve())}
+
+
+def test_review_plan_config_uses_project_root_discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / ".precision-squad.toml").write_text(
+        '[review.plan]\nruns_dir = ".precision-squad/runs"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = _resolve_cli_args(build_parser(), ["review", "plan", "run-123"])
+
+    assert args.runs_dir == str((tmp_path / ".precision-squad" / "runs").resolve())
 
 
 def test_load_command_config_preserves_absolute_paths(tmp_path: Path) -> None:
