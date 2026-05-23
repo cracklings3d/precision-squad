@@ -15,7 +15,13 @@ from pathlib import Path
 import pytest
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
-from precision_squad.models import ApprovedPlan, ImplReviewResult, IssueIntake, RepairResult, RunRecord
+from precision_squad.models import (
+    ApprovedPlan,
+    ImplReviewResult,
+    IssueIntake,
+    RepairResult,
+    RunRecord,
+)
 from precision_squad.repair import RepairAdapter
 from tests.integration.support import approved_plan_for, configure_git_identity
 
