@@ -318,8 +318,6 @@ def run_impl_review(
     architect: ReviewRunner | None,
     token_env: str = "GITHUB_TOKEN",
 ) -> ImplReviewResult:
-    feedback: list[ImplReviewFeedback] = []
-
     published_status = getattr(publish_result, "status", None)
     published_target = getattr(publish_result, "target", None)
     if published_status != "published" or published_target != "draft_pr":
@@ -330,7 +328,10 @@ def run_impl_review(
             feedback=(
                 ImplReviewFeedback(
                     code="publish_not_reviewable",
-                    message="publish-result.json must indicate a published draft PR before review impl can run.",
+                    message=(
+                        "publish-result.json must indicate a published draft PR "
+                        "before review impl can run."
+                    ),
                     source="stage",
                 ),
             ),
@@ -352,7 +353,10 @@ def run_impl_review(
             feedback=(
                 ImplReviewFeedback(
                     code="pull_request_locator_invalid",
-                    message="publish-plan.json and publish-result.json must resolve to one published PR URL and pull number.",
+                    message=(
+                        "publish-plan.json and publish-result.json must resolve "
+                        "to one published PR URL and pull number."
+                    ),
                     source="stage",
                 ),
             ),
@@ -464,7 +468,10 @@ def run_impl_review(
         return _finalize_non_approved_impl_review(
             intake=intake,
             run_record=run_record,
-            summary="Implementation review could not validate published PR provenance for this run.",
+            summary=(
+                "Implementation review could not validate published PR provenance "
+                "for this run."
+            ),
             pull_request_url=live_url,
             pull_number=normalized_pull_number,
             pull_head_sha=live_head_sha,
@@ -706,7 +713,11 @@ def _normalize_review_target(
     if publish_plan_pull_number is not None and publish_result_pull_number is not None:
         if publish_plan_pull_number != publish_result_pull_number:
             return None, None
-    if publish_plan_pull_request_url and publish_result_url and publish_plan_pull_request_url != publish_result_url:
+    if (
+        publish_plan_pull_request_url
+        and publish_result_url
+        and publish_plan_pull_request_url != publish_result_url
+    ):
         return None, None
     if candidate_number is None and url_number is not None:
         candidate_number = url_number
@@ -801,7 +812,10 @@ def _validate_review_provenance(
         feedback.append(
             ImplReviewFeedback(
                 code="pr_body_issue_mismatch",
-                message="Published PR Issue marker does not match the canonical issue being reviewed.",
+                message=(
+                    "Published PR Issue marker does not match the canonical issue "
+                    "being reviewed."
+                ),
                 source="stage",
             )
         )
@@ -829,17 +843,28 @@ def _map_post_publish_to_impl_review(result: PostPublishReviewResult) -> ImplRev
         feedback: list[ImplReviewFeedback] = []
         for message in result.reviewer_feedback:
             feedback.append(
-                ImplReviewFeedback(code="reviewer_changes_requested", message=message, source="reviewer")
+                ImplReviewFeedback(
+                    code="reviewer_changes_requested",
+                    message=message,
+                    source="reviewer",
+                )
             )
         for message in result.architect_feedback:
             feedback.append(
-                ImplReviewFeedback(code="architect_changes_requested", message=message, source="architect")
+                ImplReviewFeedback(
+                    code="architect_changes_requested",
+                    message=message,
+                    source="architect",
+                )
             )
         if not feedback:
             feedback.append(
                 ImplReviewFeedback(
                     code="changes_requested",
-                    message="Published PR requires changes before downstream automation may proceed.",
+                    message=(
+                        "Published PR requires changes before downstream automation "
+                        "may proceed."
+                    ),
                     source="stage",
                 )
             )

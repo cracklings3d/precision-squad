@@ -36,10 +36,10 @@ from .models import (
     ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
+    ImplReviewResult,
     IssueAssessment,
     IssueIntake,
     IssueReference,
-    ImplReviewResult,
     PostPublishReviewResult,
     PublishPlan,
     PublishResult,
@@ -49,7 +49,6 @@ from .models import (
 )
 from .post_publish_review import (
     OpenCodePrReviewAgent,
-    mirror_impl_review_to_post_publish,
     run_impl_review,
 )
 from .publish_executor import execute_publish_plan
