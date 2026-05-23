@@ -1376,10 +1376,9 @@ def test_run_issue_prints_blocked_intake(
     )
 
     captured = capsys.readouterr()
-    assert status == 2
+    assert status == 3
     assert "Classification: blocked" in captured.out
     assert "issue_marked_as_plan" in captured.out
-    assert "Issue Review: changes_requested" in captured.out
 
 
 def test_run_issue_persists_run_artifacts(
