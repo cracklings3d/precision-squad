@@ -364,6 +364,16 @@ def _repair_issue(args: argparse.Namespace) -> int:
         for reason_code in intake.assessment.reason_codes:
             print(f"- {reason_code}")
 
+    if report.execution_result is None and report.issue_review is not None:
+        issue_review = report.issue_review
+        print(f"Issue Review: {issue_review.review_status}")
+        print(f"Issue Review Summary: {issue_review.summary}")
+        if report.plan_review is not None:
+            plan_review = report.plan_review
+            print(f"Plan Review: {plan_review.review_status}")
+            print(f"Plan Review Summary: {plan_review.summary}")
+        return report.exit_code
+
     if report.execution_result is None:
         verdict = report.governance_verdict
         publish_plan = cast(PublishPlan, report.publish_plan)
@@ -378,8 +388,8 @@ def _repair_issue(args: argparse.Namespace) -> int:
     execution_result = report.execution_result
     evaluation_result = cast(Any, report.evaluation_result)
     verdict = report.governance_verdict
-    publish_plan = cast(PublishPlan, report.publish_plan)
-    publish_result = cast(PublishResult, report.publish_result)
+    publish_plan = cast(PublishPlan | None, report.publish_plan)
+    publish_result = cast(PublishResult | None, report.publish_result)
     repair_result = report.repair_result
     qa_result = report.qa_result
     post_publish_review_result = report.post_publish_review_result
@@ -397,10 +407,11 @@ def _repair_issue(args: argparse.Namespace) -> int:
         print(f"QA Summary: {qa_result.summary}")
     print(f"Evaluation Status: {evaluation_result.status}")
     print(f"Governance: {verdict.status if verdict else 'N/A'}")
-    print(f"Publish Plan: {publish_plan.status}")
-    print(f"Publish Result: {publish_result.status}")
-    print(f"Publish Summary: {publish_result.summary}")
-    if publish_result.url:
+    if publish_plan is not None and publish_result is not None:
+        print(f"Publish Plan: {publish_plan.status}")
+        print(f"Publish Result: {publish_result.status}")
+        print(f"Publish Summary: {publish_result.summary}")
+    if publish_result is not None and publish_result.url:
         print(f"Publish URL: {publish_result.url}")
     if post_publish_review_result is not None:
         print(f"Post-Publish Review: {post_publish_review_result.status}")
@@ -691,13 +702,39 @@ class _CliRepairDependencies:
         run_dir: Path,
         publish_result: PublishResult,
         review_model: str | None,
-    ) -> ImplReviewResult | PostPublishReviewResult | None:
+        ) -> ImplReviewResult | PostPublishReviewResult | None:
         return _run_post_publish_review_if_needed(
             intake=intake,
             run_record=run_record,
             run_dir=run_dir,
             publish_result=publish_result,
             review_model=review_model,
+        )
+
+    def post_publish_review_is_stale(
+        self, intake: IssueIntake, review_result: PostPublishReviewResult
+    ) -> bool:
+        return _post_publish_review_is_stale(intake, review_result)
+
+    def run_impl_review(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        publish_plan: PublishPlan,
+        publish_result: PublishResult,
+        review_model: str | None,
+    ) -> ImplReviewResult:
+        return run_impl_review(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            publish_plan_pull_request_url=publish_plan.pull_request_url,
+            publish_plan_pull_number=publish_plan.pull_number,
+            publish_result=publish_result,
+            reviewer=OpenCodePrReviewAgent(role="reviewer", model=review_model),
+            architect=OpenCodePrReviewAgent(role="architect", model=review_model),
         )
 
 

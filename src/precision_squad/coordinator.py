@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Callable, Literal, Protocol, cast
 
 from .executor import DocsFirstExecutor
 from .governance import apply_governance, evaluate_run
@@ -123,6 +123,21 @@ class RepairDependencies(Protocol):
         review_model: str | None,
     ) -> ImplReviewResult | PostPublishReviewResult | None: ...
 
+    def post_publish_review_is_stale(
+        self, intake: IssueIntake, review_result: PostPublishReviewResult
+    ) -> bool: ...
+
+    def run_impl_review(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        publish_plan: PublishPlan,
+        publish_result: PublishResult,
+        review_model: str | None,
+    ) -> ImplReviewResult: ...
+
 
 class PublishDependencies(Protocol):
     """Dependencies that drive publish-run orchestration."""
@@ -180,6 +195,8 @@ class PublishRunParams:
     run_id: str
     runs_dir: Path
     review_model: str | None
+    publish: bool = True
+    run_post_publish_review: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +212,8 @@ class ImplementRunParams:
 class RepairIssueReport:
     intake: IssueIntake
     run_record: RunRecord
+    issue_review: IssueReview | None = None
+    plan_review: PlanReview | None = None
     execution_result: ExecutionResult | None = None
     evaluation_result: EvaluationResult | None = None
     governance_verdict: GovernanceVerdict | None = None
@@ -336,7 +355,8 @@ class RunCoordinator:
         RunStore.load_approved_plan(run_dir, issue_ref=record.issue_ref)
         publish_plan = _load_publish_plan_artifact(run_dir)
         publish_result = _load_publish_result_artifact(run_dir)
-        impl_review = dependencies.run_impl_review(
+        impl_review = _run_impl_review_with_compatibility(
+            dependencies=dependencies,
             intake=intake,
             run_record=record,
             run_dir=run_dir,
@@ -408,7 +428,6 @@ class RunCoordinator:
         dependencies: RepairDependencies,
     ) -> RepairIssueReport:
         store = RunStore(params.runs_dir)
-        request = RunRequest(issue_ref=params.issue_ref, runs_dir=str(params.runs_dir))
 
         # Handle retry logic
         attempt = 1
@@ -444,6 +463,8 @@ class RunCoordinator:
             except ValueError:
                 return _blocked_retry_report(intake=intake, issue_ref=params.issue_ref)
 
+        request = RunRequest(issue_ref=params.issue_ref, runs_dir=str(params.runs_dir))
+
         # Check if escalated (max 3 attempts exceeded)
         if attempt > 3:
             return self._handle_escalation(
@@ -456,7 +477,14 @@ class RunCoordinator:
                 params=params,
             )
 
-        record = store.create_run(request, intake)
+        create_report = self.create_issue(
+            params=CreateIssueParams(
+                issue_ref=params.issue_ref,
+                runs_dir=params.runs_dir,
+            ),
+            intake=intake,
+        )
+        record = create_report.run_record
         run_dir = Path(record.run_dir).resolve()
 
         # Update attempt counter if retrying
@@ -464,47 +492,79 @@ class RunCoordinator:
             record = record.with_attempt(attempt)
             store.write_run_record(record)
 
-        # Persist the approved plan early so later stages can load it.
-        if effective_approved_plan is not None:
-            store.write_approved_plan(run_dir, effective_approved_plan)
-
-        if intake.assessment.status == "blocked":
-            verdict = apply_governance(intake, execution_result=None, evaluation_result=None)
-            publish_plan = build_publish_plan(intake, record, verdict)
-            store.write_governance_verdict(run_dir, verdict)
-            store.write_publish_plan(run_dir, publish_plan)
-            publish_result = dependencies.execute_publish_plan(
-                intake,
-                publish_plan,
-                publish=params.publish,
+        issue_review_report = self.review_issue(
+            params=ReviewIssueParams(
+                run_id=record.run_id,
+                runs_dir=params.runs_dir,
             )
-            store.write_publish_result(run_dir, publish_result)
+        )
+        if issue_review_report.exit_code != 0:
             return RepairIssueReport(
                 intake=intake,
                 run_record=record,
-                governance_verdict=verdict,
-                publish_plan=publish_plan,
-                publish_result=publish_result,
-                exit_code=3,
+                issue_review=issue_review_report.issue_review,
+                exit_code=issue_review_report.exit_code,
             )
 
-        implementation_report = self._run_local_implementation_flow(
-            store=store,
-            intake=intake,
-            record=record,
-            run_dir=run_dir,
-            repo_path=params.repo_path,
-            repair_agent=params.repair_agent,
-            repair_model=params.repair_model,
+        if effective_approved_plan is None:
+            raise ValueError(
+                "repair issue requires an approved plan after issue review approval; "
+                "provide --approved-plan-path or retry from a run with approved-plan.json."
+            )
+
+        self.persist_approved_plan_for_planning(
+            params=PersistApprovedPlanParams(
+                run_id=record.run_id,
+                runs_dir=params.runs_dir,
+                approved_plan=effective_approved_plan,
+            )
+        )
+        plan_review_report = self.review_plan(
+            params=ReviewPlanParams(
+                run_id=record.run_id,
+                runs_dir=params.runs_dir,
+            )
+        )
+        if plan_review_report.exit_code != 0:
+            return RepairIssueReport(
+                intake=intake,
+                run_record=record,
+                issue_review=issue_review_report.issue_review,
+                plan_review=plan_review_report.plan_review,
+                exit_code=plan_review_report.exit_code,
+            )
+
+        implementation_report = self.implement_run(
+            params=ImplementRunParams(
+                run_id=record.run_id,
+                runs_dir=params.runs_dir,
+                repo_path=params.repo_path,
+                repair_agent=params.repair_agent,
+                repair_model=params.repair_model,
+            ),
             dependencies=dependencies,
         )
+        if implementation_report.governance_verdict.status != "approved":
+            return RepairIssueReport(
+                intake=intake,
+                run_record=record,
+                issue_review=issue_review_report.issue_review,
+                plan_review=plan_review_report.plan_review,
+                execution_result=implementation_report.execution_result,
+                evaluation_result=implementation_report.evaluation_result,
+                governance_verdict=implementation_report.governance_verdict,
+                repair_result=implementation_report.repair_result,
+                baseline_qa_result=implementation_report.baseline_qa_result,
+                qa_result=implementation_report.qa_result,
+                exit_code=implementation_report.exit_code,
+            )
 
         try:
-            return self._publish_repair_issue_report(
-                store=store,
-                implementation_report=implementation_report,
-                params=params,
-                dependencies=dependencies,
+            publish_plan = build_publish_plan(
+                intake,
+                record,
+                implementation_report.governance_verdict,
+                implementation_report.repair_result,
             )
         except RequiredDecisionLogArtifactMissingError as exc:
             execution_result = ExecutionResult(
@@ -534,12 +594,79 @@ class RunCoordinator:
                 baseline_qa_result=implementation_report.baseline_qa_result,
                 qa_result=implementation_report.qa_result,
             )
-            return self._publish_repair_issue_report(
-                store=store,
-                implementation_report=implementation_report,
-                params=params,
+            if implementation_report.governance_verdict.status != "approved":
+                return RepairIssueReport(
+                    intake=intake,
+                    run_record=record,
+                    issue_review=issue_review_report.issue_review,
+                    plan_review=plan_review_report.plan_review,
+                    execution_result=implementation_report.execution_result,
+                    evaluation_result=implementation_report.evaluation_result,
+                    governance_verdict=implementation_report.governance_verdict,
+                    repair_result=implementation_report.repair_result,
+                    baseline_qa_result=implementation_report.baseline_qa_result,
+                    qa_result=implementation_report.qa_result,
+                    exit_code=implementation_report.exit_code,
+                )
+            publish_plan = build_publish_plan(
+                intake,
+                record,
+                implementation_report.governance_verdict,
+                implementation_report.repair_result,
+            )
+        store.write_publish_plan(run_dir, publish_plan)
+        publish_report = self.publish_run(
+            params=PublishRunParams(
+                run_id=record.run_id,
+                runs_dir=params.runs_dir,
+                review_model=params.review_model,
+                publish=params.publish,
+                run_post_publish_review=False,
+            ),
+            intake=intake,
+            run_record=record,
+            publish_plan=publish_plan,
+            existing_result=None,
+            existing_review_result=None,
+            dependencies=dependencies,
+        )
+
+        post_publish_review_result: PostPublishReviewResult | None = None
+        exit_code = implementation_report.exit_code
+        if (
+            publish_report.publish_result.status == "published"
+            and publish_report.publish_result.target == "draft_pr"
+            and publish_report.publish_result.url
+        ):
+            review_impl_report = self.review_impl(
+                params=ReviewImplParams(
+                    run_id=record.run_id,
+                    runs_dir=params.runs_dir,
+                    review_model=params.review_model,
+                ),
                 dependencies=dependencies,
             )
+            post_publish_review_result = mirror_impl_review_to_post_publish(
+                review_impl_report.impl_review
+            )
+            exit_code = review_impl_report.exit_code
+
+        return RepairIssueReport(
+            intake=intake,
+            run_record=record,
+            issue_review=issue_review_report.issue_review,
+            plan_review=plan_review_report.plan_review,
+            execution_result=implementation_report.execution_result,
+            evaluation_result=implementation_report.evaluation_result,
+            governance_verdict=implementation_report.governance_verdict,
+            publish_plan=publish_plan,
+            publish_result=publish_report.publish_result,
+            repair_result=implementation_report.repair_result,
+            baseline_qa_result=implementation_report.baseline_qa_result,
+            qa_result=implementation_report.qa_result,
+            post_publish_review_result=post_publish_review_result,
+            exit_code=exit_code,
+        )
 
     def _run_local_implementation_flow(
         self,
@@ -997,7 +1124,9 @@ class RunCoordinator:
         store = RunStore(params.runs_dir)
 
         if existing_result is not None and existing_result.status == "published":
-            if review_result is None or review_result.status in {
+            if not params.run_post_publish_review:
+                review_result = None
+            elif review_result is None or review_result.status in {
                 "failed_infra",
                 "not_run",
             } or dependencies.post_publish_review_is_stale(intake, review_result):
@@ -1017,22 +1146,23 @@ class RunCoordinator:
             result = dependencies.execute_publish_plan(
                 intake,
                 publish_plan,
-                publish=True,
+                publish=params.publish,
                 run_dir=run_dir,
             )
             store.write_publish_result(run_dir, result)
-            compatibility_review_result = dependencies.run_post_publish_review_if_needed(
-                intake=intake,
-                run_record=run_record,
-                run_dir=run_dir,
-                publish_result=result,
-                review_model=params.review_model,
-            )
-            review_result = _persist_post_publish_compatibility_artifacts(
-                store=store,
-                run_dir=run_dir,
-                review_result=compatibility_review_result,
-            )
+            if params.run_post_publish_review:
+                compatibility_review_result = dependencies.run_post_publish_review_if_needed(
+                    intake=intake,
+                    run_record=run_record,
+                    run_dir=run_dir,
+                    publish_result=result,
+                    review_model=params.review_model,
+                )
+                review_result = _persist_post_publish_compatibility_artifacts(
+                    store=store,
+                    run_dir=run_dir,
+                    review_result=compatibility_review_result,
+                )
 
         if result is None:
             raise ValueError(f"Run {params.run_id} is missing publish-result.json")
@@ -1698,6 +1828,47 @@ def _persist_post_publish_compatibility_artifacts(
     store.write_impl_review(run_dir, impl_review)
     store.write_post_publish_review_result(run_dir, legacy_review)
     return legacy_review
+
+
+def _run_impl_review_with_compatibility(
+    *,
+    dependencies: PublishDependencies,
+    intake: IssueIntake,
+    run_record: RunRecord,
+    run_dir: Path,
+    publish_plan: PublishPlan,
+    publish_result: PublishResult,
+    review_model: str | None,
+) -> ImplReviewResult:
+    run_impl_review = cast(
+        Callable[..., ImplReviewResult] | None,
+        getattr(dependencies, "run_impl_review", None),
+    )
+    if callable(run_impl_review):
+        return run_impl_review(
+            intake=intake,
+            run_record=run_record,
+            run_dir=run_dir,
+            publish_plan=publish_plan,
+            publish_result=publish_result,
+            review_model=review_model,
+        )
+
+    compatibility_review = dependencies.run_post_publish_review_if_needed(
+        intake=intake,
+        run_record=run_record,
+        run_dir=run_dir,
+        publish_result=publish_result,
+        review_model=review_model,
+    )
+    if compatibility_review is None:
+        raise ValueError(
+            "Implementation review requires a dependency that provides run_impl_review() "
+            "or returns a compatibility review result from run_post_publish_review_if_needed()."
+        )
+    if isinstance(compatibility_review, ImplReviewResult):
+        return compatibility_review
+    return _map_legacy_post_publish_review(compatibility_review)
 
 
 def _map_legacy_post_publish_review(review: PostPublishReviewResult) -> ImplReviewResult:

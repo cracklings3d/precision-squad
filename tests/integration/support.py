@@ -7,6 +7,7 @@ from pathlib import Path
 
 from precision_squad.models import (
     ApprovedPlan,
+    ImplReviewResult,
     IssueIntake,
     PublishResult,
     QaResult,
@@ -150,3 +151,30 @@ class _ApprovedTestDependencies:
     def run_post_publish_review_if_needed(self, **kwargs):
         del kwargs
         return None
+
+    def post_publish_review_is_stale(self, intake, review_result) -> bool:
+        del intake, review_result
+        return False
+
+    def run_impl_review(
+        self,
+        *,
+        intake: IssueIntake,
+        run_record: RunRecord,
+        run_dir: Path,
+        publish_plan,
+        publish_result: PublishResult,
+        review_model: str | None,
+    ) -> ImplReviewResult:
+        del intake, run_record, run_dir, publish_plan, review_model
+        return ImplReviewResult(
+            review_status="approved",
+            summary="Implementation review approved in integration test.",
+            pull_request_url=publish_result.url,
+            pull_number=publish_result.pull_number,
+            pull_head_sha="integration-test-head-sha",
+            reviewer_status="approved",
+            reviewer_summary="Reviewer approved in integration test.",
+            architect_status="approved",
+            architect_summary="Architect approved in integration test.",
+        )

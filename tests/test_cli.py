@@ -1236,6 +1236,96 @@ def test_repair_issue_alias_prints_runnable_intake(
     assert "Execution Status: completed" in captured.out
 
 
+@pytest.mark.parametrize("command_name", ["repair", "run"])
+def test_repair_issue_and_run_issue_print_same_stage_stop_output(
+    command_name: str,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    intake = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Example issue",
+            body="Example body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Example summary",
+        problem_statement="Example problem",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    plan_path = _write_valid_plan(tmp_path, issue_ref="owner/repo#1")
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", lambda _: intake)
+
+    monkeypatch.setattr(
+        "precision_squad.cli.RunCoordinator.repair_issue",
+        lambda self, *, params, intake, dependencies: RepairIssueReport(
+            intake=intake,
+            run_record=RunRecord(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(tmp_path / "runs" / "run-1"),
+            ),
+            issue_review=IssueReview(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                review_status="approved",
+                summary="Issue review approved.",
+                feedback=(),
+                provenance=IssueReviewProvenance(
+                    source_artifact="issue-draft.json",
+                    run_id="run-1",
+                    issue_ref="owner/repo#1",
+                ),
+            ),
+            plan_review=PlanReview(
+                run_id="run-1",
+                issue_ref="owner/repo#1",
+                review_status="changes_requested",
+                summary="Plan review needs changes.",
+                feedback=(
+                    PlanReviewFeedback(
+                        code="missing_retrieval_surface_summary",
+                        message="Need retrieval surface summary.",
+                        artifact="approved-plan.json",
+                        field="retrieval_surface_summary",
+                    ),
+                ),
+                provenance=PlanReviewProvenance(
+                    source_artifact="approved-plan.json",
+                    run_id="run-1",
+                    issue_ref="owner/repo#1",
+                ),
+            ),
+            exit_code=2,
+        ),
+    )
+
+    status = main(
+        [
+            command_name,
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--approved-plan-path",
+            str(plan_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 2
+    assert "Issue Review: approved" in captured.out
+    assert "Plan Review: changes_requested" in captured.out
+    assert "Execution Status:" not in captured.out
+
+
 def test_run_issue_prints_blocked_intake(
     capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1286,12 +1376,10 @@ def test_run_issue_prints_blocked_intake(
     )
 
     captured = capsys.readouterr()
-    assert status == 3
+    assert status == 2
     assert "Classification: blocked" in captured.out
     assert "issue_marked_as_plan" in captured.out
-    assert "Governance: blocked" in captured.out
-    assert "Publish Plan: issue_comment" in captured.out
-    assert "Publish Result: dry_run" in captured.out
+    assert "Issue Review: changes_requested" in captured.out
 
 
 def test_run_issue_persists_run_artifacts(
@@ -1427,11 +1515,9 @@ def test_run_issue_uses_executor_and_persists_execution_result(
     assert (run_dir / "execution-result.json").exists()
     assert (run_dir / "evaluation-result.json").exists()
     assert (run_dir / "governance-verdict.json").exists()
-    assert (run_dir / "publish-plan.json").exists()
-    assert (run_dir / "publish-result.json").exists()
+    assert not (run_dir / "publish-plan.json").exists()
+    assert not (run_dir / "publish-result.json").exists()
     assert "Execution Status: blocked" in captured.out
-    assert "Publish Plan: issue_comment" in captured.out
-    assert "Publish Result: dry_run" in captured.out
 
 
 def test_run_issue_does_not_enter_repair_loop_when_docs_are_missing(
@@ -1486,8 +1572,7 @@ def test_run_issue_does_not_enter_repair_loop_when_docs_are_missing(
     assert status == 4
     assert "Execution Status: missing_docs" in captured.out
     assert "Governance: blocked" in captured.out
-    assert "Publish Plan: follow_up_issue" in captured.out
-    assert "Publish Result: dry_run" in captured.out
+    assert "Publish Plan:" not in captured.out
 
 
 def test_docs_remediation_issue_runs_repair_without_recursive_follow_up_issue(
@@ -1666,7 +1751,7 @@ def test_docs_remediation_issue_stays_blocked_when_revalidation_fails(
     assert status == 4
     assert "Execution Status: missing_docs" in captured.out
     assert "Governance: blocked" in captured.out
-    assert "Publish Plan: issue_comment" in captured.out
+    assert "Publish Plan:" not in captured.out
 
 
 def test_run_issue_persists_repair_result_when_synthesis_artifacts_exist(
@@ -1753,6 +1838,7 @@ def test_run_issue_persists_repair_result_when_synthesis_artifacts_exist(
     assert (run_dir / "qa-result.json").exists()
     assert "Repair Status: not_configured" in captured.out
     assert "QA Status: not_run" in captured.out
+    assert "Publish Plan:" not in captured.out
 
 
 def test_run_issue_marks_baseline_tolerant_success_approved(

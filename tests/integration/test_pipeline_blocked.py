@@ -15,6 +15,7 @@ from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
     ApprovedPlan,
     ExecutionResult,
+    ImplReviewResult,
     IssueIntake,
     PublishResult,
     RepairResult,
@@ -385,6 +386,13 @@ class _BlockedTestDependencies:
     def run_post_publish_review_if_needed(self, **kwargs):
         return None
 
+    def post_publish_review_is_stale(self, intake, review_result) -> bool:
+        del intake, review_result
+        return False
+
+    def run_impl_review(self, **kwargs) -> ImplReviewResult:
+        raise AssertionError("implementation review should not run for blocked intake")
+
 
 class _QaFailedTestDependencies:
     """Dependencies that simulate a QA failure after successful repair."""
@@ -469,6 +477,13 @@ class _QaFailedTestDependencies:
 
     def run_post_publish_review_if_needed(self, **kwargs):
         return None
+
+    def post_publish_review_is_stale(self, intake, review_result) -> bool:
+        del intake, review_result
+        return False
+
+    def run_impl_review(self, **kwargs) -> ImplReviewResult:
+        raise AssertionError("implementation review should not run for QA-failed run")
 
 
 class _StubRepairAdapter:
