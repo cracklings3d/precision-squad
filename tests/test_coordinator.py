@@ -77,6 +77,227 @@ def _make_params(tmp_path: Path) -> RepairIssueParams:
     )
 
 
+def test_repair_issue_happy_path_runs_staged_chain_and_persists_review_artifacts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "repo").mkdir()
+    dependencies = MagicMock()
+    dependencies.synthesis_artifacts_ready.return_value = False
+    dependencies.execute_publish_plan.return_value = PublishResult(
+        status="published",
+        target="draft_pr",
+        summary="Published draft PR.",
+        url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+    )
+    dependencies.run_post_publish_review_if_needed.return_value = None
+    dependencies.run_impl_review.return_value = ImplReviewResult(
+        review_status="approved",
+        summary="Implementation review approved.",
+        pull_request_url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+        pull_head_sha="head-sha",
+        reviewer_status="approved",
+        reviewer_summary="Reviewer approved.",
+        architect_status="approved",
+        architect_summary="Architect approved.",
+    )
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(
+        coord_module.DocsFirstExecutor,
+        "execute",
+        lambda self, intake, run_record, run_dir: ExecutionResult(
+            status="completed",
+            executor_name="docs",
+            summary="Execution completed.",
+            detail_codes=(),
+        ),
+    )
+
+    report = RunCoordinator().repair_issue(
+        params=RepairIssueParams(
+            issue_ref="owner/repo#1",
+            runs_dir=tmp_path / "runs",
+            repo_path=tmp_path / "repo",
+            publish=True,
+            repair_agent="none",
+            repair_model=None,
+            review_model=None,
+            approved_plan=_approved_plan(),
+        ),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    assert report.exit_code == 0
+    assert report.issue_review is not None
+    assert report.issue_review.review_status == "approved"
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "approved"
+    assert report.publish_result is not None
+    assert report.publish_result.status == "published"
+    assert report.post_publish_review_result is not None
+    assert dependencies.run_post_publish_review_if_needed.call_count == 0
+    dependencies.run_impl_review.assert_called_once()
+    _, publish_kwargs = dependencies.execute_publish_plan.call_args
+    assert publish_kwargs["publish"] is True
+    assert publish_kwargs["run_dir"] == run_dir
+    assert (run_dir / "issue-draft.json").exists()
+    assert (run_dir / "issue-review.json").exists()
+    assert (run_dir / "approved-plan.json").exists()
+    assert (run_dir / "plan-review.json").exists()
+    assert (run_dir / "governance-verdict.json").exists()
+    assert (run_dir / "publish-plan.json").exists()
+    assert (run_dir / "publish-result.json").exists()
+    assert (run_dir / "impl-review.json").exists()
+    assert (run_dir / "post-publish-review-result.json").exists()
+
+
+def test_repair_issue_stops_after_failed_issue_review(tmp_path: Path, monkeypatch) -> None:
+    original_create_issue = RunCoordinator.create_issue
+
+    def create_issue_with_invalid_draft(self, *, params, intake):
+        report = original_create_issue(self, params=params, intake=intake)
+        run_dir = Path(report.run_record.run_dir)
+        payload = json.loads((run_dir / "issue-draft.json").read_text(encoding="utf-8"))
+        payload["summary"] = ""
+        (run_dir / "issue-draft.json").write_text(json.dumps(payload), encoding="utf-8")
+        return report
+
+    monkeypatch.setattr(RunCoordinator, "create_issue", create_issue_with_invalid_draft)
+
+    dependencies = MagicMock()
+
+    report = RunCoordinator().repair_issue(
+        params=_make_params(tmp_path),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    assert report.exit_code == 2
+    assert report.issue_review is not None
+    assert report.issue_review.review_status == "changes_requested"
+    assert not (run_dir / "approved-plan.json").exists()
+    assert not (run_dir / "plan-review.json").exists()
+    assert not (run_dir / "execution-result.json").exists()
+    assert not (run_dir / "publish-plan.json").exists()
+    dependencies.execute_publish_plan.assert_not_called()
+
+
+def test_repair_issue_stops_after_failed_plan_review(tmp_path: Path, monkeypatch) -> None:
+    original_persist = RunCoordinator.persist_approved_plan_for_planning
+
+    def persist_invalid_plan(self, *, params):
+        artifact_path = original_persist(self, params=params)
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        payload["retrieval_surface_summary"] = ""
+        artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+        return artifact_path
+
+    monkeypatch.setattr(RunCoordinator, "persist_approved_plan_for_planning", persist_invalid_plan)
+
+    dependencies = MagicMock()
+
+    report = RunCoordinator().repair_issue(
+        params=_make_params(tmp_path),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    assert report.exit_code == 2
+    assert report.issue_review is not None
+    assert report.issue_review.review_status == "approved"
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "changes_requested"
+    assert not (run_dir / "execution-result.json").exists()
+    assert not (run_dir / "publish-plan.json").exists()
+    dependencies.execute_publish_plan.assert_not_called()
+
+
+def test_repair_issue_stops_before_publish_when_governance_blocked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    dependencies = MagicMock()
+    dependencies.synthesis_artifacts_ready.return_value = False
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(
+        coord_module.DocsFirstExecutor,
+        "execute",
+        lambda self, intake, run_record, run_dir: ExecutionResult(
+            status="missing_docs",
+            executor_name="docs",
+            summary="Missing documented QA command.",
+            detail_codes=("docs_qa_command_missing",),
+        ),
+    )
+
+    report = RunCoordinator().repair_issue(
+        params=_make_params(tmp_path),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    assert report.exit_code == 4
+    assert report.governance_verdict is not None
+    assert report.governance_verdict.status == "blocked"
+    assert not (run_dir / "publish-plan.json").exists()
+    assert not (run_dir / "publish-result.json").exists()
+    assert not (run_dir / "impl-review.json").exists()
+    dependencies.execute_publish_plan.assert_not_called()
+
+
+def test_repair_issue_non_publish_branch_persists_publish_artifacts_without_impl_review(
+    tmp_path: Path, monkeypatch
+) -> None:
+    dependencies = MagicMock()
+    dependencies.synthesis_artifacts_ready.return_value = False
+    dependencies.execute_publish_plan.return_value = PublishResult(
+        status="dry_run",
+        target="draft_pr",
+        summary="Dry run only.",
+        url=None,
+    )
+    dependencies.run_post_publish_review_if_needed.return_value = None
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(
+        coord_module.DocsFirstExecutor,
+        "execute",
+        lambda self, intake, run_record, run_dir: ExecutionResult(
+            status="completed",
+            executor_name="docs",
+            summary="Execution completed.",
+            detail_codes=(),
+        ),
+    )
+
+    report = RunCoordinator().repair_issue(
+        params=_make_params(tmp_path),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    assert report.exit_code == 0
+    assert report.publish_result is not None
+    assert report.publish_result.status == "dry_run"
+    assert (run_dir / "publish-plan.json").exists()
+    assert (run_dir / "publish-result.json").exists()
+    assert not (run_dir / "impl-review.json").exists()
+    assert not (run_dir / "post-publish-review-result.json").exists()
+    dependencies.run_impl_review.assert_not_called()
+    dependencies.run_post_publish_review_if_needed.assert_not_called()
+
+
 def _write_implement_ingress(
     run_dir: Path,
     *,
@@ -246,8 +467,7 @@ def test_repair_issue_marks_missing_decision_log_artifact_as_failed_infra(
     assert "missing_decision_log_artifact" in report.execution_result.detail_codes
     assert report.governance_verdict is not None
     assert report.governance_verdict.status == "blocked"
-    assert report.publish_plan is not None
-    assert report.publish_plan.status == "issue_comment"
+    assert report.publish_plan is None
 
 
 def test_implement_run_requires_same_run_approved_review_before_execution(

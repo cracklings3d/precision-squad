@@ -250,10 +250,15 @@ def test_publish_true_calls_execute_publish_plan_with_publish_true(
         dependencies=deps,
     )
 
+    run_dir = Path(report.run_record.run_dir)
     assert report.publish_result is not None
     assert report.publish_result.status == "published"
     assert report.publish_result.url == "https://github.com/cracklings3d/markdown-pdf-renderer/pull/999"
     assert report.publish_result.pull_number == 999
+    assert report.post_publish_review_result is not None
+    assert report.post_publish_review_result.status == "approved"
+    assert (run_dir / "impl-review.json").exists()
+    assert (run_dir / "post-publish-review-result.json").exists()
 
 
 @pytest.mark.integration

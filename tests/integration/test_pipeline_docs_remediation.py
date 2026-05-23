@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
-from precision_squad.models import ApprovedPlan, IssueIntake, RepairResult, RunRecord
+from precision_squad.models import ApprovedPlan, ImplReviewResult, IssueIntake, RepairResult, RunRecord
 from precision_squad.repair import RepairAdapter
 from tests.integration.support import approved_plan_for, configure_git_identity
 
@@ -223,6 +223,13 @@ class _DocsRemediationDependencies:
 
     def run_post_publish_review_if_needed(self, **kwargs):
         return None
+
+    def post_publish_review_is_stale(self, intake, review_result) -> bool:
+        del intake, review_result
+        return False
+
+    def run_impl_review(self, **kwargs) -> ImplReviewResult:
+        raise AssertionError("implementation review should not run for docs-remediation dry run")
 
 
 # ---------------------------------------------------------------------------
