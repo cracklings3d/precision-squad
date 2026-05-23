@@ -345,7 +345,10 @@ class RunCoordinator:
             review_model=params.review_model,
         )
         store.write_impl_review(run_dir, impl_review)
-        store.write_post_publish_review_result(run_dir, mirror_impl_review_to_post_publish(impl_review))
+        store.write_post_publish_review_result(
+            run_dir,
+            mirror_impl_review_to_post_publish(impl_review),
+        )
         if impl_review.review_status == "approved":
             exit_code = 0
         elif impl_review.review_status == "changes_requested":
@@ -1607,10 +1610,14 @@ def _load_publish_plan_artifact(run_dir: Path) -> PublishPlan:
             payload = json.load(f)
     except JSONDecodeError as exc:
         raise ValueError(
-            f"Implementation review requires publish-plan.json at {path} to be valid JSON: {exc.msg}"
+            "Implementation review requires publish-plan.json at "
+            f"{path} to be valid JSON: {exc.msg}"
         ) from exc
     if not isinstance(payload, dict):
-        raise ValueError(f"Implementation review requires publish-plan.json at {path} to be a JSON object.")
+        raise ValueError(
+            "Implementation review requires publish-plan.json at "
+            f"{path} to be a JSON object."
+        )
     status = payload.get("status")
     title = payload.get("title")
     body = payload.get("body")
@@ -1619,8 +1626,13 @@ def _load_publish_plan_artifact(run_dir: Path) -> PublishPlan:
         raise ValueError("Implementation review requires publish-plan.json.status to be valid.")
     if not isinstance(title, str) or not isinstance(body, str):
         raise ValueError("Implementation review requires publish-plan.json title/body strings.")
-    if not isinstance(reason_codes, list) or not all(isinstance(item, str) for item in reason_codes):
-        raise ValueError("Implementation review requires publish-plan.json.reason_codes to be a list of strings.")
+    if not isinstance(reason_codes, list) or not all(
+        isinstance(item, str) for item in reason_codes
+    ):
+        raise ValueError(
+            "Implementation review requires publish-plan.json.reason_codes "
+            "to be a list of strings."
+        )
     return PublishPlan(
         status=cast(Literal["draft_pr", "issue_comment", "follow_up_issue"], status),
         title=title,
@@ -1641,7 +1653,8 @@ def _load_publish_result_artifact(run_dir: Path) -> PublishResult:
             payload = json.load(f)
     except JSONDecodeError as exc:
         raise ValueError(
-            f"Implementation review requires publish-result.json at {path} to be valid JSON: {exc.msg}"
+            "Implementation review requires publish-result.json at "
+            f"{path} to be valid JSON: {exc.msg}"
         ) from exc
     if not isinstance(payload, dict):
         raise ValueError(
@@ -1655,7 +1668,9 @@ def _load_publish_result_artifact(run_dir: Path) -> PublishResult:
     if target not in {"draft_pr", "issue_comment", "follow_up_issue"}:
         raise ValueError("Implementation review requires publish-result.json.target to be valid.")
     if not isinstance(summary, str):
-        raise ValueError("Implementation review requires publish-result.json.summary to be a string.")
+        raise ValueError(
+            "Implementation review requires publish-result.json.summary to be a string."
+        )
     return PublishResult(
         status=cast(Literal["dry_run", "published"], status),
         target=cast(Literal["draft_pr", "issue_comment", "follow_up_issue"], target),
