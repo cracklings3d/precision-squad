@@ -15,7 +15,6 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
-    PostPublishReviewResult,
     RepairResult,
     RunRecord,
     SideIssue,
@@ -444,9 +443,6 @@ def test_build_publish_plan_returns_issue_comment_when_no_side_issues() -> None:
 
 
 # --- Tests for PostReviewAutomationResult dataclass ---
-
-import pytest
-from precision_squad.publishing import PostReviewAutomationResult
 
 
 def test_post_review_automation_result_success() -> None:
