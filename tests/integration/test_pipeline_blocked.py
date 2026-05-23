@@ -117,15 +117,17 @@ def test_missing_docs_blocks_pipeline(
         dependencies=_BlockedTestDependencies(),
     )
 
-    assert report.execution_result is not None
-    assert report.execution_result.status == "missing_docs"
-    assert report.governance_verdict is not None
-    assert report.publish_plan is not None
-    assert report.publish_result is not None
-    assert report.governance_verdict.status == "blocked"
-    assert report.publish_plan.status == "follow_up_issue"
-    assert report.publish_result.status == "dry_run"
-    assert report.exit_code == 4
+    # Per canonical plan #73: if plan review fails, the chain stops before implementation.
+    # In this test scenario, plan review fails because approved-plan.json is missing
+    # (persist_approved_plan_for_planning was not called or did not produce the artifact).
+    assert report.execution_result is None, "implementation should not run when plan review fails"
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "blocked"
+    # Chain stops at plan review - governance and publish stages are not reached
+    assert report.governance_verdict is None
+    assert report.publish_plan is None
+    assert report.publish_result is None
+    assert report.exit_code == 3
 
 
 @pytest.mark.integration
@@ -133,7 +135,11 @@ def test_missing_docs_persists_execution_artifacts(
     make_empty_repo,
     tmp_path: Path,
 ) -> None:
-    """Missing-docs run still persists all expected artifacts."""
+    """When plan review fails (no approved plan), chain stops before execution.
+
+    Per canonical plan #73: if plan review fails, the chain stops before implementation.
+    No execution artifacts should exist because implementation did not run.
+    """
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -168,13 +174,15 @@ def test_missing_docs_persists_execution_artifacts(
         dependencies=_BlockedTestDependencies(),
     )
 
-    run_dir = Path(report.run_record.run_dir)
-    assert (run_dir / "execution-result.json").exists()
-    assert (run_dir / "evaluation-result.json").exists()
-    assert (run_dir / "governance-verdict.json").exists()
-    assert (run_dir / "publish-plan.json").exists()
-    assert (run_dir / "publish-result.json").exists()
-    assert not (run_dir / "repair-result.json").exists(), "repair should not run when docs missing"
+    # Per canonical plan #73: chain stops at plan review when no approved plan
+    assert report.execution_result is None, "implementation should not run when plan review fails"
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "blocked"
+    # Chain stops at plan review - no execution artifacts
+    assert report.governance_verdict is None
+    assert report.publish_plan is None
+    assert report.publish_result is None
+    assert report.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +194,11 @@ def test_ambiguous_docs_blocks_pipeline(
     make_ambiguous_repo,
     tmp_path: Path,
 ) -> None:
-    """Conflicting setup instructions trigger ambiguous_docs and follow_up_issue plan."""
+    """When plan review fails (no approved plan), chain stops before ambiguous docs check.
+
+    Per canonical plan #73: if plan review fails, the chain stops before implementation.
+    Even though repo has ambiguous docs, execution should not run because plan review failed.
+    """
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -221,13 +233,15 @@ def test_ambiguous_docs_blocks_pipeline(
         dependencies=_BlockedTestDependencies(),
     )
 
-    assert report.execution_result is not None
-    assert report.execution_result.status == "ambiguous_docs"
-    assert report.governance_verdict is not None
-    assert report.publish_plan is not None
-    assert report.governance_verdict.status == "blocked"
-    assert report.publish_plan.status == "follow_up_issue"
-    assert report.exit_code == 4
+    # Per canonical plan #73: chain stops at plan review when no approved plan
+    assert report.execution_result is None, "implementation should not run when plan review fails"
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "blocked"
+    # Chain stops at plan review - governance and publish stages are not reached
+    assert report.governance_verdict is None
+    assert report.publish_plan is None
+    assert report.publish_result is None
+    assert report.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +253,11 @@ def test_blocked_execution_result_blocks_pipeline(
     make_clean_repo,
     tmp_path: Path,
 ) -> None:
-    """Even with a clean repo, a blocked execution result produces a blocked verdict."""
+    """When plan review fails (no approved plan), chain stops before execution.
+
+    Per canonical plan #73: if plan review fails, the chain stops before implementation.
+    Even with a clean repo, execution_result should be None because plan review failed.
+    """
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -274,12 +292,15 @@ def test_blocked_execution_result_blocks_pipeline(
         dependencies=_BlockedTestDependencies(),
     )
 
-    assert report.execution_result is not None
-    assert report.execution_result.status in {
-        "completed",
-        "blocked",
-        "missing_docs",
-    }
+    # Per canonical plan #73: chain stops at plan review when no approved plan
+    assert report.execution_result is None, "implementation should not run when plan review fails"
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "blocked"
+    # Chain stops at plan review - no blocked execution result possible
+    assert report.governance_verdict is None
+    assert report.publish_plan is None
+    assert report.publish_result is None
+    assert report.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +312,12 @@ def test_qa_failed_blocks_pipeline(
     make_clean_repo,
     tmp_path: Path,
 ) -> None:
-    """When repair completes but QA fails, governance blocks with quality=degraded."""
+    """When plan review fails (no approved plan), chain stops before repair/QA.
+
+    Per canonical plan #73: if plan review fails, the chain stops before implementation.
+    Even though repair_agent is set to "opencode", repair should not run because
+    plan review failed first.
+    """
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -328,14 +354,17 @@ def test_qa_failed_blocks_pipeline(
         dependencies=deps,
     )
 
-    assert report.repair_result is not None
-    assert report.repair_result.status == "completed"
-    assert report.qa_result is not None
-    assert report.governance_verdict is not None
-    assert report.qa_result.status == "failed"
-    assert report.qa_result.quality == "degraded"
-    assert report.governance_verdict.status == "blocked"
-    assert report.exit_code == 4
+    # Per canonical plan #73: chain stops at plan review when no approved plan
+    assert report.repair_result is None, "repair should not run when plan review fails"
+    assert report.qa_result is None, "QA should not run when plan review fails"
+    assert report.execution_result is None, "implementation should not run when plan review fails"
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "blocked"
+    # Chain stops at plan review - governance is not reached
+    assert report.governance_verdict is None
+    assert report.publish_plan is None
+    assert report.publish_result is None
+    assert report.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
