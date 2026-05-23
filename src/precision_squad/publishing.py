@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .docs_remediation import (
     DOCS_REMEDIATION_MARKER,
@@ -17,14 +21,35 @@ from .docs_remediation import (
     load_contract_findings,
     normalize_docs_findings,
 )
+from .github_client import GitHubClientError, GitHubWriteClient
 from .intake import is_docs_remediation_issue
-from .models import GovernanceVerdict, IssueIntake, PublishPlan, RepairResult, RunRecord
+from .models import (
+    GovernanceVerdict,
+    IssueIntake,
+    IssueReference,
+    PostPublishReviewResult,
+    PublishPlan,
+    RepairResult,
+    RunRecord,
+)
 from .rerun_context import latest_rejected_pull_request
 from .run_store import RunStore
+
+logger = logging.getLogger(__name__)
 
 
 class RequiredDecisionLogArtifactMissingError(ValueError):
     """Raised when a completed repair attempt is missing its required decision-log artifact."""
+
+
+@dataclass(frozen=True, slots=True)
+class PostReviewAutomationResult:
+    """Result of post-review GitHub automation."""
+
+    status: Literal["success", "failed", "skipped"]
+    summary: str
+    operations_completed: tuple[str, ...]
+    error: str | None = None
 
 
 def build_publish_plan(
@@ -269,3 +294,182 @@ def _render_design_decisions_section(
         for entry in artifact.entries
     ]
     return "\n## Design Decisions\n```json\n" + json.dumps(payload, indent=2) + "\n```\n"
+
+
+def _load_post_publish_review_result(run_dir: Path) -> PostPublishReviewResult | None:
+    """Load post-publish review result from run directory."""
+    path = run_dir / "post-publish-review-result.json"
+    if not path.exists():
+        return None
+    with path.open(encoding="utf-8") as f:
+        payload = json.load(f)
+    status = payload.get("status", "not_run")
+    summary = payload.get("summary", "")
+    pull_request_url = payload.get("pull_request_url")
+    pull_number = payload.get("pull_number")
+    reviewer_status = payload.get("reviewer_status", "not_run")
+    reviewer_summary = payload.get("reviewer_summary", "")
+    pull_head_sha = payload.get("pull_head_sha")
+    reviewer_feedback = tuple(payload.get("reviewer_feedback", []))
+    architect_status = payload.get("architect_status", "not_run")
+    architect_summary = payload.get("architect_summary", "Architect review did not run.")
+    architect_feedback = tuple(payload.get("architect_feedback", []))
+    issue_comment_url = payload.get("issue_comment_url")
+    issue_reopened = payload.get("issue_reopened", False)
+    return PostPublishReviewResult(
+        status=status,
+        summary=summary,
+        pull_request_url=pull_request_url,
+        pull_number=pull_number,
+        reviewer_status=reviewer_status,
+        reviewer_summary=reviewer_summary,
+        pull_head_sha=pull_head_sha,
+        reviewer_feedback=reviewer_feedback,
+        architect_status=architect_status,
+        architect_summary=architect_summary,
+        architect_feedback=architect_feedback,
+        issue_comment_url=issue_comment_url,
+        issue_reopened=issue_reopened,
+    )
+
+
+def _parse_issue_reference(issue_ref: str) -> IssueReference:
+    """Parse an issue reference string like 'owner/repo#number'."""
+    if "#" not in issue_ref:
+        raise ValueError(f"Invalid issue reference format: {issue_ref}")
+    repo_part, number_part = issue_ref.rsplit("#", 1)
+    if "/" not in repo_part:
+        raise ValueError(f"Invalid issue reference format: {issue_ref}")
+    owner, repo = repo_part.rsplit("/", 1)
+    try:
+        number = int(number_part)
+    except ValueError:
+        raise ValueError(f"Invalid issue number: {number_part}")
+    return IssueReference(owner=owner, repo=repo, number=number)
+
+
+def apply_post_review_automation(
+    run_id: str,
+    approved: bool,
+    *,
+    token_env: str = "GITHUB_TOKEN",
+) -> PostReviewAutomationResult:
+    """Apply GitHub automation after post-publish review approval or rejection.
+
+    On approval: marks PR ready, merges it, and closes the linked issue.
+    On rejection: emits info log and returns early (rejection handled by post_publish_review.py).
+
+    Args:
+        run_id: The run ID to operate on.
+        approved: Whether the review was approved.
+        token_env: Environment variable name containing the GitHub token.
+
+    Returns:
+        PostReviewAutomationResult with status, summary, operations completed, and optional error.
+    """
+    if not approved:
+        logger.info(
+            "Post-review automation skipped: review was not approved. "
+            "Rejection side-effects are handled by post_publish_review.py."
+        )
+        return PostReviewAutomationResult(
+            status="skipped",
+            summary="Automation skipped: review was not approved.",
+            operations_completed=(),
+            error=None,
+        )
+
+    store = RunStore(Path())
+    try:
+        run_record = store.load_run(run_id)
+    except ValueError as exc:
+        return PostReviewAutomationResult(
+            status="failed",
+            summary=f"Failed to load run record: {exc}",
+            operations_completed=(),
+            error=str(exc),
+        )
+
+    run_dir = Path(run_record.run_dir)
+    review_result = _load_post_publish_review_result(run_dir)
+
+    if review_result is None:
+        return PostReviewAutomationResult(
+            status="failed",
+            summary="Post-publish review result not found.",
+            operations_completed=(),
+            error="post-publish-review-result.json not found in run directory.",
+        )
+
+    if review_result.pull_number is None or review_result.pull_request_url is None:
+        return PostReviewAutomationResult(
+            status="failed",
+            summary="Post-publish review result is missing PR information.",
+            operations_completed=(),
+            error="pull_number or pull_request_url is None in review result.",
+        )
+
+    issue_ref = run_record.issue_ref
+    try:
+        issue_reference = _parse_issue_reference(issue_ref)
+    except ValueError as exc:
+        return PostReviewAutomationResult(
+            status="failed",
+            summary=f"Failed to parse issue reference: {exc}",
+            operations_completed=(),
+            error=str(exc),
+        )
+
+    owner = issue_reference.owner
+    repo = issue_reference.repo
+    pull_number = review_result.pull_number
+
+    operations: list[str] = []
+
+    def _execute_with_retry(operation_name: str, func) -> None:
+        """Execute a GitHub operation with one retry on network timeout."""
+        try:
+            func()
+            operations.append(operation_name)
+        except GitHubClientError as exc:
+            error_msg = str(exc)
+            if "timed out" in error_msg.lower() or "urlopen" in error_msg.lower():
+                logger.warning(f"{operation_name} timed out, retrying after 5 seconds...")
+                time.sleep(5)
+                try:
+                    func()
+                    operations.append(operation_name)
+                    return
+                except GitHubClientError as retry_exc:
+                    raise retry_exc
+            raise
+
+    def _mark_ready():
+        client.mark_pull_request_ready(owner, repo, pull_number)
+
+    def _merge():
+        client.merge_pull_request(owner, repo, pull_number)
+
+    def _close_issue():
+        client.close_issue(issue_reference)
+
+    client = GitHubWriteClient.from_env(token_env=token_env)
+
+    try:
+        _execute_with_retry("mark_pull_request_ready", _mark_ready)
+        _execute_with_retry("merge_pull_request", _merge)
+        _execute_with_retry("close_issue", _close_issue)
+    except GitHubClientError as exc:
+        return PostReviewAutomationResult(
+            status="failed",
+            summary=f"Automation failed: {exc}",
+            operations_completed=tuple(operations),
+            error=str(exc),
+        )
+
+    return PostReviewAutomationResult(
+        status="success",
+        summary="Post-review automation completed successfully.",
+        operations_completed=tuple(operations),
+        error=None,
+    )
