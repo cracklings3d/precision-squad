@@ -492,6 +492,27 @@ class RunCoordinator:
             record = record.with_attempt(attempt)
             store.write_run_record(record)
 
+        # Handle blocked intake: apply governance and publish directly without review stages
+        if intake.assessment.status == "blocked":
+            verdict = apply_governance(intake, execution_result=None, evaluation_result=None)
+            publish_plan = build_publish_plan(intake, record, verdict)
+            store.write_governance_verdict(run_dir, verdict)
+            store.write_publish_plan(run_dir, publish_plan)
+            publish_result = dependencies.execute_publish_plan(
+                intake,
+                publish_plan,
+                publish=params.publish,
+            )
+            store.write_publish_result(run_dir, publish_result)
+            return RepairIssueReport(
+                intake=intake,
+                run_record=record,
+                governance_verdict=verdict,
+                publish_plan=publish_plan,
+                publish_result=publish_result,
+                exit_code=3,
+            )
+
         issue_review_report = self.review_issue(
             params=ReviewIssueParams(
                 run_id=record.run_id,
@@ -506,19 +527,15 @@ class RunCoordinator:
                 exit_code=issue_review_report.exit_code,
             )
 
-        if effective_approved_plan is None:
-            raise ValueError(
-                "repair issue requires an approved plan after issue review approval; "
-                "provide --approved-plan-path or retry from a run with approved-plan.json."
+        # Persist the approved plan only if provided
+        if effective_approved_plan is not None:
+            self.persist_approved_plan_for_planning(
+                params=PersistApprovedPlanParams(
+                    run_id=record.run_id,
+                    runs_dir=params.runs_dir,
+                    approved_plan=effective_approved_plan,
+                )
             )
-
-        self.persist_approved_plan_for_planning(
-            params=PersistApprovedPlanParams(
-                run_id=record.run_id,
-                runs_dir=params.runs_dir,
-                approved_plan=effective_approved_plan,
-            )
-        )
         plan_review_report = self.review_plan(
             params=ReviewPlanParams(
                 run_id=record.run_id,
