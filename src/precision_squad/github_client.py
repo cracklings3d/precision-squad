@@ -467,6 +467,161 @@ class GitHubWriteClient:
             payload={"state": "open"},
         )
 
+    def close_issue(self, reference: IssueReference) -> None:
+        gh_success = self._close_issue_via_gh(reference)
+        if gh_success:
+            return
+
+        self._request_json(
+            method="PATCH",
+            url=(
+                f"https://api.github.com/repos/{reference.owner}/"
+                f"{reference.repo}/issues/{reference.number}"
+            ),
+            payload={"state": "closed"},
+        )
+
+    def merge_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        gh_success = self._merge_pull_request_via_gh(owner, repo, pull_number)
+        if gh_success:
+            return
+
+        try:
+            self._request_json(
+                method="PUT",
+                url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/merge",
+                payload={},
+            )
+        except GitHubClientError as exc:
+            if "409" in str(exc):
+                return
+            raise
+
+    def close_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        gh_success = self._close_pull_request_via_gh(owner, repo, pull_number)
+        if gh_success:
+            return
+
+        try:
+            self._request_json(
+                method="PATCH",
+                url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
+                payload={"state": "closed"},
+            )
+        except GitHubClientError as exc:
+            if "405" in str(exc):
+                return
+            raise
+
+    def update_pull_request_branch(
+        self, owner: str, repo: str, pull_number: int
+    ) -> None:
+        gh_success = self._update_pull_request_branch_via_gh(owner, repo, pull_number)
+        if gh_success:
+            return
+
+        self._request_json(
+            method="PUT",
+            url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/updateBranch",
+            payload={},
+        )
+
+    def _close_issue_via_gh(self, reference: IssueReference) -> bool:
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}",
+                    "--method",
+                    "PATCH",
+                    "-f",
+                    "state=closed",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+
+        return completed.returncode == 0
+
+    def _merge_pull_request_via_gh(
+        self, owner: str, repo: str, pull_number: int
+    ) -> bool:
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/pulls/{pull_number}/merge",
+                    "--method",
+                    "PUT",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+
+        if completed.returncode != 0:
+            if "409" in completed.stderr or "already been merged" in completed.stderr.lower():
+                return True
+            return False
+
+        return True
+
+    def _close_pull_request_via_gh(
+        self, owner: str, repo: str, pull_number: int
+    ) -> bool:
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/pulls/{pull_number}",
+                    "--method",
+                    "PATCH",
+                    "-f",
+                    "state=closed",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+
+        if completed.returncode != 0:
+            if "405" in completed.stderr or "Cannot change" in completed.stderr:
+                return True
+            return False
+
+        return True
+
+    def _update_pull_request_branch_via_gh(
+        self, owner: str, repo: str, pull_number: int
+    ) -> bool:
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/pulls/{pull_number}/updateBranch",
+                    "--method",
+                    "PUT",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+
+        return completed.returncode == 0
+
     def _reopen_issue_via_gh(self, reference: IssueReference) -> bool:
         try:
             completed = subprocess.run(

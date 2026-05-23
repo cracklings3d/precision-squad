@@ -15,12 +15,15 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
+    PostPublishReviewResult,
     RepairResult,
     RunRecord,
     SideIssue,
 )
 from precision_squad.publishing import (
+    PostReviewAutomationResult,
     RequiredDecisionLogArtifactMissingError,
+    apply_post_review_automation,
     build_publish_plan,
 )
 from precision_squad.run_store import RunStore
@@ -438,3 +441,253 @@ def test_build_publish_plan_returns_issue_comment_when_no_side_issues() -> None:
     plan = build_publish_plan(intake, run_record, verdict, repair_result)
 
     assert plan.status == "issue_comment"
+
+
+# --- Tests for PostReviewAutomationResult dataclass ---
+
+import pytest
+from precision_squad.publishing import PostReviewAutomationResult
+
+
+def test_post_review_automation_result_success() -> None:
+    result = PostReviewAutomationResult(
+        status="success",
+        summary="All operations completed.",
+        operations_completed=("mark_pull_request_ready", "merge_pull_request", "close_issue"),
+    )
+    assert result.status == "success"
+    assert result.summary == "All operations completed."
+    assert result.operations_completed == (
+        "mark_pull_request_ready",
+        "merge_pull_request",
+        "close_issue",
+    )
+    assert result.error is None
+
+
+def test_post_review_automation_result_skipped() -> None:
+    result = PostReviewAutomationResult(
+        status="skipped",
+        summary="Automation skipped: review was not approved.",
+        operations_completed=(),
+    )
+    assert result.status == "skipped"
+    assert result.operations_completed == ()
+
+
+def test_post_review_automation_result_failed() -> None:
+    result = PostReviewAutomationResult(
+        status="failed",
+        summary="Automation failed: merge conflict.",
+        operations_completed=("mark_pull_request_ready",),
+        error="Merge conflict detected",
+    )
+    assert result.status == "failed"
+    assert result.error == "Merge conflict detected"
+
+
+def test_post_review_automation_result_frozen() -> None:
+    result = PostReviewAutomationResult(
+        status="success",
+        summary="Done.",
+        operations_completed=("merge_pull_request",),
+    )
+    with pytest.raises(AttributeError):
+        result.status = "failed"  # type: ignore[f_assignment]
+
+
+# --- Tests for apply_post_review_automation ---
+
+
+def test_apply_post_review_automation_skipped_when_not_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When approved=False, the function returns a skipped result without doing any GitHub operations."""
+    result = apply_post_review_automation(run_id="run-123", approved=False)
+    assert result.status == "skipped"
+    assert "not approved" in result.summary
+    assert result.operations_completed == ()
+    assert result.error is None
+
+
+def test_apply_post_review_automation_full_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When approved=True, all three operations complete successfully."""
+    from unittest.mock import MagicMock
+
+    run_id = "run-success-123"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "post-publish-review-result.json").write_text(
+        json.dumps(
+            {
+                "status": "approved",
+                "summary": "PR approved by both reviewers.",
+                "pull_request_url": "https://github.com/owner/repo/pull/5",
+                "pull_number": 5,
+                "reviewer_status": "approved",
+                "reviewer_summary": "LGTM",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
+
+    # Create a mock client with the required methods
+    mock_client = MagicMock()
+
+    monkeypatch.setattr(
+        "precision_squad.publishing.GitHubWriteClient.from_env",
+        lambda token_env: mock_client,
+    )
+    monkeypatch.setattr(
+        "precision_squad.publishing.RunStore.load_run",
+        lambda self, run_id: RunRecord(
+            run_id=run_id,
+            issue_ref="owner/repo#9",
+            status="runnable",
+            created_at="2026-04-28T00:00:00Z",
+            updated_at="2026-04-28T00:00:00Z",
+            run_dir=str(run_dir),
+        ),
+    )
+
+    result = apply_post_review_automation(run_id=run_id, approved=True)
+
+    assert result.status == "success"
+    assert result.operations_completed == (
+        "mark_pull_request_ready",
+        "merge_pull_request",
+        "close_issue",
+    )
+    assert result.error is None
+    # Verify the mock client methods were called
+    assert mock_client.mark_pull_request_ready.called
+    assert mock_client.merge_pull_request.called
+    assert mock_client.close_issue.called
+
+
+def test_apply_post_review_automation_failure_on_merge(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When merge fails, operations_completed contains the operations that ran before the failure."""
+    from unittest.mock import MagicMock
+
+    run_id = "run-merge-fail-123"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "post-publish-review-result.json").write_text(
+        json.dumps(
+            {
+                "status": "approved",
+                "summary": "PR approved.",
+                "pull_request_url": "https://github.com/owner/repo/pull/5",
+                "pull_number": 5,
+                "reviewer_status": "approved",
+                "reviewer_summary": "LGTM",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
+
+    from precision_squad.github_client import GitHubClientError
+
+    mock_client = MagicMock()
+    # make mark_pull_request_ready succeed, merge_pull_request fail
+    mock_client.mark_pull_request_ready.return_value = None
+    mock_client.merge_pull_request.side_effect = GitHubClientError(
+        "Merge failed: branch is out-of-date"
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.publishing.GitHubWriteClient.from_env",
+        lambda token_env: mock_client,
+    )
+    monkeypatch.setattr(
+        "precision_squad.publishing.RunStore.load_run",
+        lambda self, run_id: RunRecord(
+            run_id=run_id,
+            issue_ref="owner/repo#9",
+            status="runnable",
+            created_at="2026-04-28T00:00:00Z",
+            updated_at="2026-04-28T00:00:00Z",
+            run_dir=str(run_dir),
+        ),
+    )
+
+    result = apply_post_review_automation(run_id=run_id, approved=True)
+
+    assert result.status == "failed"
+    assert "merge" in result.summary.lower() or "failed" in result.summary.lower()
+    assert "mark_pull_request_ready" in result.operations_completed
+    assert "merge_pull_request" not in result.operations_completed
+    assert "close_issue" not in result.operations_completed
+    assert result.error is not None
+
+
+def test_apply_post_review_automation_failure_on_close_issue(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When close_issue fails, operations_completed contains mark and merge but not close."""
+    from unittest.mock import MagicMock
+
+    run_id = "run-close-fail-123"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "post-publish-review-result.json").write_text(
+        json.dumps(
+            {
+                "status": "approved",
+                "summary": "PR approved.",
+                "pull_request_url": "https://github.com/owner/repo/pull/5",
+                "pull_number": 5,
+                "reviewer_status": "approved",
+                "reviewer_summary": "LGTM",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
+
+    from precision_squad.github_client import GitHubClientError
+
+    mock_client = MagicMock()
+    # make mark_pull_request_ready and merge_pull_request succeed, close_issue fail
+    mock_client.mark_pull_request_ready.return_value = None
+    mock_client.merge_pull_request.return_value = None
+    mock_client.close_issue.side_effect = GitHubClientError(
+        "Issue close failed: state transition not allowed"
+    )
+
+    monkeypatch.setattr(
+        "precision_squad.publishing.GitHubWriteClient.from_env",
+        lambda token_env: mock_client,
+    )
+    monkeypatch.setattr(
+        "precision_squad.publishing.RunStore.load_run",
+        lambda self, run_id: RunRecord(
+            run_id=run_id,
+            issue_ref="owner/repo#9",
+            status="runnable",
+            created_at="2026-04-28T00:00:00Z",
+            updated_at="2026-04-28T00:00:00Z",
+            run_dir=str(run_dir),
+        ),
+    )
+
+    result = apply_post_review_automation(run_id=run_id, approved=True)
+
+    assert result.status == "failed"
+    assert "close" in result.summary.lower() or "failed" in result.summary.lower()
+    assert "mark_pull_request_ready" in result.operations_completed
+    assert "merge_pull_request" in result.operations_completed
+    assert "close_issue" not in result.operations_completed
+    assert result.error is not None
