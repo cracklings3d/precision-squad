@@ -122,8 +122,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_parser.add_argument(
         "--repo-path",
-        default=argparse.SUPPRESS,
-        help="Local filesystem path to the target repository checkout.",
+        type=str,
+        default=None,
+        help="Path to local checkout of the target repository [required for fresh runs]",
     )
     issue_parser.add_argument(
         "--repair-agent",
@@ -1220,8 +1221,12 @@ def _validate_install_skill_args(args: dict[str, Any]) -> None:
 
 
 def _repair_issue_config_root(args: argparse.Namespace) -> Path:
-    repo_path = getattr(args, "repo_path", argparse.SUPPRESS)
-    if repo_path is argparse.SUPPRESS:
+    import sys
+    repo_path = getattr(args, "repo_path", None)
+    if repo_path is None:
+        if not sys.stdin.isatty():
+            print("Error: --repo-path is required when running in non-interactive mode (no TTY detected).", file=sys.stderr)
+            sys.exit(1)
         return Path.cwd()
     return Path(repo_path)
 
