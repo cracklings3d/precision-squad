@@ -1,8 +1,33 @@
+---
+name: precision-squad
+description: Use `precision-squad` when asked to fix this issue, repair issue-driven work, run precision-squad, or create, review, plan, implement, and publish issue-scoped work in this repository.
+triggers:
+  - fix this issue
+  - repair issue
+  - run precision-squad
+  - create issue
+  - review issue
+  - review plan
+  - review impl
+  - publish run
+  - plan this issue
+  - implement this issue
+---
+
 # Precision Squad
 
 Use `precision-squad` as the control plane for issue-driven work in this repository.
 
-## Primary Commands
+## Command Reference
+
+- `repair issue` — Repair a GitHub issue from the local checkout and optionally publish the result.
+- `create issue` — Create a GitHub issue from a problem statement or follow-up task.
+- `review issue` — Review whether an issue is actionable, scoped correctly, and ready for planning.
+- `review plan` — Review a proposed plan before implementation starts.
+- `review impl` — Review an implementation result against the approved plan and evidence.
+- `publish run` — Publish a stored run outcome without rerunning repair.
+- `plan` — Generate or select the canonical implementation plan for an issue-driven task.
+- `implement` — Execute an approved plan in a scoped workspace for one issue.
 
 Repair a GitHub issue from the local checkout:
 
@@ -15,6 +40,12 @@ Publish a stored run without rerunning repair:
 ```bash
 python -m precision_squad.cli publish run <run-id>
 ```
+
+## Issue-Driven Workflow
+
+- Work is defined and tracked through GitHub issues.
+- Each implementation PR should stay scoped to one issue.
+- Keep the branch, commits, and file changes limited to that issue.
 
 ## Workflow Rules
 
@@ -45,3 +76,7 @@ When that happens:
 - Publish outcomes so later reruns inherit GitHub feedback.
 - Trust structured target findings more than high-level prose summaries.
 - If multiple reruns keep failing on the same target findings, stop blindly retrying and reassess the prompt, policy, or underlying dependency.
+
+## Slash Commands
+
+Slash-command support is documentation-only here; follow issue `#122` for that separate work.
