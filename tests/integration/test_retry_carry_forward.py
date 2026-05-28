@@ -26,7 +26,7 @@ from precision_squad.models import (
 )
 from precision_squad.run_store import RunStore
 from tests.integration.conftest import StubRepairAdapter
-from tests.integration.support import _ApprovedTestDependencies, approved_plan_for
+from tests.integration.support import _ApprovedTestDependencies
 
 
 def _runnable_intake(issue_ref: str = "cracklings3d/markdown-pdf-renderer#9") -> IssueIntake:
@@ -207,8 +207,6 @@ def test_retry_does_not_overwrite_decision_log(
     # Capture original approved-plan.json content
     original_plan_path = previous_run_dir / "approved-plan.json"
     original_plan_content = original_plan_path.read_text(encoding="utf-8")
-    original_plan_data = json.loads(original_plan_content)
-
     # Capture original decision-log.attempt-1.json content
     original_decision_log_path = previous_run_dir / "decision-log.attempt-1.json"
     original_decision_log_content = original_decision_log_path.read_text(encoding="utf-8")
