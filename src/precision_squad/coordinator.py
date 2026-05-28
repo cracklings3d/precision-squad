@@ -177,6 +177,9 @@ class PublishDependencies(Protocol):
     ) -> ImplReviewResult: ...
 
 
+ReviewStagesOverride = Literal["plan", "all"]
+
+
 @dataclass(frozen=True, slots=True)
 class RepairIssueParams:
     issue_ref: str
@@ -186,6 +189,7 @@ class RepairIssueParams:
     repair_agent: str
     repair_model: str | None
     review_model: str | None
+    review_stages: ReviewStagesOverride | None = None
     retry_from: str | None = None
     approved_plan: ApprovedPlan | None = None
 

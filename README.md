@@ -208,8 +208,8 @@ Run selection for `repair issue`:
 - if no prior local runs exist for the issue, the command proceeds as a fresh run without prompting
 - if prior local runs exist and neither flag is supplied, the CLI prompts only when both stdin and stdout are TTYs
 - in non-interactive mode with prior local runs and no explicit selection, the CLI fails and tells the operator to pass `--fresh` or `--retry-from <run-id>`
-- fresh runs still require `--approved-plan-path`
-- retry remains the only path that may omit `--approved-plan-path`, and only by carrying forward the previously persisted approved plan
+- fresh runs may omit `--approved-plan-path`; when supplied, the CLI still validates and forwards it as compatibility ingress input
+- retry may also omit `--approved-plan-path` by carrying forward the previously persisted approved plan
 
 Legacy alias still supported:
 
