@@ -531,13 +531,23 @@ class RunCoordinator:
                 exit_code=issue_review_report.exit_code,
             )
 
-        # Persist the approved plan only if provided
-        if effective_approved_plan is not None:
+        compatibility_approved_plan = _build_compatibility_approved_plan(
+            store=store,
+            record=record,
+            attempt=attempt,
+            previous_run_dir=previous_run_dir,
+            effective_approved_plan=effective_approved_plan,
+            review_stages=params.review_stages,
+        )
+
+        # Persist the approved plan only if provided or synthesized for compatibility.
+        approved_plan_to_persist = effective_approved_plan or compatibility_approved_plan
+        if approved_plan_to_persist is not None:
             self.persist_approved_plan_for_planning(
                 params=PersistApprovedPlanParams(
                     run_id=record.run_id,
                     runs_dir=params.runs_dir,
-                    approved_plan=effective_approved_plan,
+                    approved_plan=approved_plan_to_persist,
                 )
             )
         plan_review_report = self.review_plan(
@@ -1726,6 +1736,67 @@ def _blocked_retry_report(*, intake: IssueIntake, issue_ref: str) -> RepairIssue
         ),
         exit_code=3,
     )
+
+
+def _build_compatibility_approved_plan(
+    *,
+    store: RunStore,
+    record: RunRecord,
+    attempt: int,
+    previous_run_dir: Path | None,
+    effective_approved_plan: ApprovedPlan | None,
+    review_stages: ReviewStagesOverride | None,
+) -> ApprovedPlan | None:
+    if not _should_auto_approve_compatibility_plan(
+        attempt=attempt,
+        previous_run_dir=previous_run_dir,
+        effective_approved_plan=effective_approved_plan,
+        review_stages=review_stages,
+    ):
+        return None
+
+    issue_draft = store.load_issue_draft(record.run_id)
+    return ApprovedPlan(
+        issue_ref=record.issue_ref,
+        plan_summary=issue_draft.summary,
+        implementation_steps=_derive_compatibility_implementation_steps(issue_draft),
+        named_references=(),
+        retrieval_surface_summary=(
+            "Compatibility auto-approved from same-run reviewed issue scope "
+            "(issue-draft.json summary and problem_statement); named_references omitted."
+        ),
+        approved=True,
+    )
+
+
+def _should_auto_approve_compatibility_plan(
+    *,
+    attempt: int,
+    previous_run_dir: Path | None,
+    effective_approved_plan: ApprovedPlan | None,
+    review_stages: ReviewStagesOverride | None,
+) -> bool:
+    return (
+        attempt == 1
+        and previous_run_dir is None
+        and effective_approved_plan is None
+        and review_stages is None
+    )
+
+
+def _derive_compatibility_implementation_steps(issue_draft: IssueDraft) -> tuple[str, ...]:
+    return (
+        f"Implement the reviewed issue scope: {_ensure_terminal_period(issue_draft.summary)}",
+        "Validate the change resolves the reviewed problem statement: "
+        f"{_ensure_terminal_period(issue_draft.problem_statement)}",
+    )
+
+
+def _ensure_terminal_period(value: str) -> str:
+    text = value.strip()
+    if text.endswith((".", "!", "?")):
+        return text
+    return f"{text}."
 
 
 def _load_issue_intake_artifact(run_dir: Path, *, expected_issue_ref: str) -> IssueIntake:

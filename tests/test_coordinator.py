@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -217,6 +218,130 @@ def test_repair_issue_stops_after_failed_plan_review(tmp_path: Path, monkeypatch
     assert not (run_dir / "execution-result.json").exists()
     assert not (run_dir / "publish-plan.json").exists()
     dependencies.execute_publish_plan.assert_not_called()
+
+
+def test_repair_issue_auto_approves_fresh_attempt_one_without_explicit_plan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    dependencies = MagicMock()
+    dependencies.synthesis_artifacts_ready.return_value = False
+    dependencies.execute_publish_plan.return_value = PublishResult(
+        status="dry_run",
+        target="draft_pr",
+        summary="Dry run only.",
+        url=None,
+    )
+    dependencies.run_post_publish_review_if_needed.return_value = None
+
+    import precision_squad.coordinator as coord_module
+
+    monkeypatch.setattr(
+        coord_module.DocsFirstExecutor,
+        "execute",
+        lambda self, intake, run_record, run_dir: ExecutionResult(
+            status="completed",
+            executor_name="docs",
+            summary="Execution completed.",
+            detail_codes=(),
+        ),
+    )
+
+    report = RunCoordinator().repair_issue(
+        params=RepairIssueParams(
+            issue_ref="owner/repo#1",
+            runs_dir=tmp_path / "runs",
+            repo_path=tmp_path / "repo",
+            publish=False,
+            repair_agent="none",
+            repair_model=None,
+            review_model=None,
+            approved_plan=None,
+        ),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    approved_plan = RunStore.load_approved_plan(run_dir, issue_ref="owner/repo#1")
+    plan_review = RunStore.load_plan_review(
+        run_dir,
+        issue_ref="owner/repo#1",
+        expected_run_id=report.run_record.run_id,
+    )
+
+    assert report.exit_code == 0
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "approved"
+    assert approved_plan.plan_summary == "Test issue"
+    assert approved_plan.implementation_steps == (
+        "Implement the reviewed issue scope: Test issue.",
+        "Validate the change resolves the reviewed problem statement: Fix the bug.",
+    )
+    assert "same-run reviewed issue scope" in approved_plan.retrieval_surface_summary
+    assert approved_plan.named_references == ()
+    assert plan_review.review_status == "approved"
+    assert plan_review.provenance.run_id == report.run_record.run_id
+    assert plan_review.provenance.issue_ref == "owner/repo#1"
+
+
+@pytest.mark.parametrize("review_stages", ["plan", "all"])
+def test_repair_issue_respects_explicit_review_stage_gating_without_plan(
+    tmp_path: Path, review_stages: str
+) -> None:
+    review_stages_value = cast(Literal["plan", "all"], review_stages)
+    dependencies = MagicMock()
+
+    report = RunCoordinator().repair_issue(
+        params=RepairIssueParams(
+            issue_ref="owner/repo#1",
+            runs_dir=tmp_path / "runs",
+            repo_path=tmp_path / "repo",
+            publish=False,
+            repair_agent="none",
+            repair_model=None,
+            review_model=None,
+            review_stages=review_stages_value,
+            approved_plan=None,
+        ),
+        intake=_make_intake(),
+        dependencies=dependencies,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    assert report.exit_code == 3
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "blocked"
+    assert not (run_dir / "approved-plan.json").exists()
+    assert not (run_dir / "execution-result.json").exists()
+    dependencies.execute_publish_plan.assert_not_called()
+
+
+def test_repair_issue_retry_without_prior_approved_plan_still_fails_before_compatibility_path(
+    tmp_path: Path,
+) -> None:
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    previous_record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)),
+        _make_intake(),
+    )
+
+    with pytest.raises(ValueError, match="Retry requires a prior approved-plan.json"):
+        RunCoordinator().repair_issue(
+            params=RepairIssueParams(
+                issue_ref="owner/repo#1",
+                runs_dir=runs_dir,
+                repo_path=tmp_path / "repo",
+                publish=False,
+                repair_agent="none",
+                repair_model=None,
+                review_model=None,
+                retry_from=previous_record.run_id,
+                approved_plan=None,
+            ),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
 
 
 def test_repair_issue_stops_before_publish_when_governance_blocked(
