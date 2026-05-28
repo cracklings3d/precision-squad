@@ -14,7 +14,6 @@ import pytest
 
 from precision_squad.coordinator import (
     CreateIssueParams,
-    ImplementRunParams,
     PersistApprovedPlanParams,
     RepairIssueParams,
     ReviewImplParams,
@@ -28,10 +27,8 @@ from precision_squad.models import (
     IssueAssessment,
     IssueIntake,
     IssueReference,
-    NamedReference,
 )
 from precision_squad.run_store import RunStore
-from tests.integration.conftest import StubRepairAdapter
 from tests.integration.support import _ApprovedTestDependencies, approved_plan_for
 
 
@@ -111,7 +108,7 @@ def test_issue_review_persists(
         intake=_runnable_intake(),
     )
 
-    review_report = coordinator.review_issue(
+    coordinator.review_issue(
         params=ReviewIssueParams(
             run_id=create_report.run_record.run_id,
             runs_dir=runs_dir,
@@ -257,7 +254,7 @@ def test_plan_review_persists(
     store.write_approved_plan(run_dir, plan)
 
     # Run review plan
-    review_plan_report = coordinator.review_plan(
+    coordinator.review_plan(
         params=ReviewPlanParams(
             run_id=create_report.run_record.run_id,
             runs_dir=runs_dir,
@@ -371,7 +368,7 @@ def test_impl_review_persists(
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
 
-    review_impl_report = RunCoordinator().review_impl(
+    RunCoordinator().review_impl(
         params=ReviewImplParams(
             run_id=record.run_id,
             runs_dir=runs_dir,
@@ -487,7 +484,7 @@ def test_post_publish_review_result_persists(
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
 
-    review_impl_report = RunCoordinator().review_impl(
+    RunCoordinator().review_impl(
         params=ReviewImplParams(
             run_id=record.run_id,
             runs_dir=runs_dir,
@@ -576,8 +573,6 @@ def test_issue_draft_consumable_by_review_stage(
     )
 
     run_dir = Path(create_report.run_record.run_dir)
-    artifact_path = run_dir / "issue-draft.json"
-
     # Load via RunStore to verify consumability
     loaded = RunStore.load_issue_draft_from_dir(run_dir)
     assert loaded.title == "[Enhancement] Add --version flag to CLI"
@@ -603,7 +598,7 @@ def test_issue_review_consumable_by_plan_stage(
         intake=_runnable_intake(),
     )
 
-    review_report = coordinator.review_issue(
+    coordinator.review_issue(
         params=ReviewIssueParams(
             run_id=create_report.run_record.run_id,
             runs_dir=runs_dir,
@@ -733,7 +728,7 @@ def test_plan_review_consumable_by_implement_stage(
     )
     store.write_approved_plan(run_dir, plan)
 
-    review_plan_report = coordinator.review_plan(
+    coordinator.review_plan(
         params=ReviewPlanParams(
             run_id=create_report.run_record.run_id,
             runs_dir=runs_dir,
