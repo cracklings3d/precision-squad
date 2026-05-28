@@ -1113,7 +1113,7 @@ def test_run_issue_placeholder_returns_nonzero(
 
     captured = capsys.readouterr()
     assert status == 1
-    assert "approved-plan-path" in captured.err.lower()
+    assert "missing github token" in captured.err.lower()
 
 
 def test_run_issue_prints_runnable_intake(
