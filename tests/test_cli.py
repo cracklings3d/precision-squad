@@ -4054,6 +4054,27 @@ def test_repair_issue_review_stages_rejects_unsupported_value(capsys, tmp_path: 
     assert "invalid choice" in captured.err
 
 
+def test_repair_issue_review_stages_rejects_repeated_flag(capsys, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "repair",
+                "issue",
+                "owner/repo#1",
+                "--repo-path",
+                str(tmp_path / "repo"),
+                "--review-stages",
+                "plan",
+                "--review-stages",
+                "all",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "may not be specified more than once" in captured.err
+
+
 def test_repair_issue_parser_rejects_fresh_with_retry_from(capsys, tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(
