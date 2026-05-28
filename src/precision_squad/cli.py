@@ -1171,7 +1171,7 @@ class _CommandConfigSpec:
 
 
 def _validate_repair_issue_args(args: dict[str, Any]) -> None:
-    _require_config_value(args, "repo_path")
+    _require_repair_issue_repo_path(args)
     args["runs_dir"] = _config_str(args.get("runs_dir"), key="runs_dir")
     args["repo_path"] = _config_str(args.get("repo_path"), key="repo_path")
     args["publish"] = _coerce_bool(args.get("publish"), key="publish")
@@ -1418,6 +1418,24 @@ def _require_config_value(args: dict[str, Any], key: str) -> None:
             f"Missing required value for {_arg_reference(key)}. "
             f"Provide --{key.replace('_', '-')} or set it in a precision-squad config file "
             f"at {format_config_search_locations()} under the active command's discovery root."
+        )
+
+
+def _require_repair_issue_repo_path(args: dict[str, Any]) -> None:
+    value = args.get("repo_path", argparse.SUPPRESS)
+    if value is argparse.SUPPRESS or value is None:
+        raise ValueError(
+            "repair issue could not resolve the target repository local checkout path from "
+            f"{_arg_reference('repo_path')} or [repair.issue].repo_path in a precision-squad "
+            f"config file at {format_config_search_locations()} under the active command's "
+            "discovery root."
+        )
+    if isinstance(value, str) and not value.strip():
+        raise ValueError(
+            "repair issue could not resolve the target repository local checkout path from "
+            f"{_arg_reference('repo_path')} or [repair.issue].repo_path in a precision-squad "
+            f"config file at {format_config_search_locations()} under the active command's "
+            "discovery root."
         )
 
 

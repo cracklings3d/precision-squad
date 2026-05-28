@@ -1006,6 +1006,9 @@ def test_repair_issue_help_shows_current_choices_and_legacy_note(capsys) -> None
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 0
+    assert "--repo-path REPO_PATH" in captured.out
+    assert "Local filesystem path to the target repository" in captured.out
+    assert "checkout." in captured.out
     assert "--repair-agent {opencode,none}" in captured.out
     assert "Defaults to opencode" in captured.out
     assert "when omitted. Normal choices: opencode, none." in captured.out
@@ -2609,11 +2612,18 @@ def test_missing_repo_path_error_lists_supported_config_locations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "precision_squad.cli._prompt_for_run_selection",
+        lambda prior_runs: (_ for _ in ()).throw(AssertionError("prompt should not run")),
+    )
 
     status = main(["repair", "issue", "owner/repo#1"])
 
     captured = capsys.readouterr()
     assert status == 1
+    assert "repair issue could not resolve the target repository local checkout path" in captured.err
+    assert "'repo_path' (--repo-path)" in captured.err
+    assert "[repair.issue].repo_path" in captured.err
     assert "./.precision-squad.toml" in captured.err
     assert "./.precision-squad/precision-squad.toml" in captured.err
     assert "active command's discovery root" in captured.err
