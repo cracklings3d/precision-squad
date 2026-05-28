@@ -15,7 +15,6 @@ import pytest
 
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
-    ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
     IssueAssessment,
@@ -35,7 +34,7 @@ def _runnable_intake(
             title="[Enhancement] Add --version flag to CLI",
             body="## Description\nAdd a version flag.",
             labels=("enhancement",),
-            html_url=f"https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
+            html_url="https://github.com/cracklings3d/markdown-pdf-renderer/issues/9",
         ),
         summary="Add --version flag to CLI",
         problem_statement="Add a version flag.",
