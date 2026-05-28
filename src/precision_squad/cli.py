@@ -73,6 +73,23 @@ _REPAIR_AGENT_CHOICES = ("opencode", "none", "vercel-ai")
 _DISPLAYED_REPAIR_AGENT_CHOICES = ("opencode", "none")
 
 
+class _StoreOnceAction(argparse.Action):
+    """Reject repeated uses of single-value flags."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str,
+        option_string: str | None = None,
+    ) -> None:
+        existing = getattr(namespace, self.dest, argparse.SUPPRESS)
+        if existing is not argparse.SUPPRESS:
+            repeated_option = option_string or f"--{self.dest.replace('_', '-')}"
+            parser.error(f"argument {repeated_option}: may not be specified more than once")
+        setattr(namespace, self.dest, values)
+
+
 def _build_repair_adapter(*, repair_agent: str, repair_model: str | None) -> RepairAdapter | None:
     """Construct a seam-compatible repair adapter for the configured agent."""
     if repair_agent == "none":
@@ -168,6 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_parser.add_argument(
         "--review-stages",
+        action=_StoreOnceAction,
         choices=("plan", "all"),
         default=argparse.SUPPRESS,
         help="Optional review-stage override for repair issue compatibility ingress: plan or all.",
