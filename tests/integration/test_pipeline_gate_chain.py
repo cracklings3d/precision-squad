@@ -1,7 +1,7 @@
-"""Integration tests: gate stop behavior and happy-path chain through RunCoordinator.
+"""Integration tests: plan gate behavior and happy-path chain through RunCoordinator.
 
 Verifies that chained execution:
-1. Stops at review gate (no approved_plan → blocked at review_plan)
+1. Auto-approves a fresh compatibility run with no approved_plan override
 2. Stops at governance gate (blocked verdict → no publish)
 3. Completes full happy path with all stages invoked
 4. Only invokes publish when governance verdict is approved
@@ -10,6 +10,7 @@ Verifies that chained execution:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 
@@ -43,22 +44,16 @@ def _runnable_intake(
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Chain stops at review gate (no approved plan → exit_code 3)
+# Test 1: Fresh compatibility run auto-approves and continues
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
-def test_chain_stops_at_review_gate_rejected(
+def test_chain_auto_approves_fresh_run_without_explicit_plan(
     make_clean_repo,
     stub_repair_adapter,
     tmp_path: Path,
 ) -> None:
-    """When no approved_plan is provided, review_plan returns blocked with exit_code 3.
-
-    Without approved_plan, persist_approved_plan_for_planning is not called,
-    so approved-plan.json is never written. When review_plan runs, it finds
-    approved_plan_path.exists() is False and returns review_status="blocked"
-    with exit_code=3. The chain stops at review_plan and implement is never invoked.
-    """
+    """Fresh attempt-1 compatibility runs synthesize canonical plan artifacts."""
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -70,7 +65,7 @@ def test_chain_stops_at_review_gate_rejected(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
-        # NOTE: approved_plan is intentionally omitted to trigger blocked review_plan
+        # NOTE: approved_plan is intentionally omitted to exercise compatibility auto-approval
     )
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
@@ -81,13 +76,57 @@ def test_chain_stops_at_review_gate_rejected(
         dependencies=deps,
     )
 
-    assert report.exit_code != 0, "chain should stop at review gate"
-    assert report.execution_result is None, "implement should not be invoked"
+    run_dir = Path(report.run_record.run_dir)
+
+    assert report.exit_code == 0, "fresh run should continue past review_plan"
+    assert (run_dir / "approved-plan.json").exists()
+    assert (run_dir / "plan-review.json").exists()
     assert report.plan_review is not None, "review_plan should run"
-    assert report.plan_review.review_status == "blocked", "review_plan should be blocked"
-    assert report.governance_verdict is None, "governance should not run"
-    assert report.publish_plan is None, "publish_plan should not run"
-    assert report.publish_result is None, "publish_result should not run"
+    assert report.plan_review.review_status == "approved", "review_plan should be approved"
+    assert report.execution_result is not None, "implement should run after compatibility approval"
+    assert report.governance_verdict is not None, "governance should run"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("review_stages", ["plan", "all"])
+def test_chain_preserves_explicit_plan_gating_without_approved_plan(
+    make_clean_repo,
+    stub_repair_adapter,
+    tmp_path: Path,
+    review_stages: str,
+) -> None:
+    """Explicit review-stage gating must still stop runs lacking an approved plan."""
+    review_stages_value = cast(Literal["plan", "all"], review_stages)
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+
+    params = RepairIssueParams(
+        issue_ref="cracklings3d/markdown-pdf-renderer#9",
+        runs_dir=runs_dir,
+        repo_path=make_clean_repo,
+        publish=False,
+        repair_agent="opencode",
+        repair_model=None,
+        review_model=None,
+        review_stages=review_stages_value,
+    )
+
+    deps = _ApprovedTestDependencies(stub_repair_adapter)
+
+    report = RunCoordinator().repair_issue(
+        params=params,
+        intake=_runnable_intake(),
+        dependencies=deps,
+    )
+
+    run_dir = Path(report.run_record.run_dir)
+    assert report.exit_code == 3
+    assert not (run_dir / "approved-plan.json").exists()
+    assert report.execution_result is None
+    assert report.plan_review is not None
+    assert report.plan_review.review_status == "blocked"
+    assert report.publish_plan is None
+    assert report.publish_result is None
 
 
 # ---------------------------------------------------------------------------
