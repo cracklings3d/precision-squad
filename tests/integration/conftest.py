@@ -236,6 +236,15 @@ class StubRepairAdapter:
         self.qa_feedback: str | None = None
         self._file_content = file_content
 
+    def with_qa_feedback(self, feedback: str) -> StubRepairAdapter:
+        """Return an equivalent stub adapter carrying QA feedback."""
+        adapter = StubRepairAdapter(file_content=self._file_content)
+        adapter.binary = self.binary
+        adapter.agent = self.agent
+        adapter.model = self.model
+        adapter.qa_feedback = feedback
+        return adapter
+
     def repair(
         self,
         *,
