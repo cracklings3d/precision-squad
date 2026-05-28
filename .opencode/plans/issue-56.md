@@ -92,13 +92,13 @@ Issue 56 should not leave separate partial validators in CLI and run-store codep
    - The structured coordinator handoff boundary must be explicit: coordinator execution receives a fully validated `ApprovedPlan` object, not an unvalidated path or partially checked payload.
 
 2. **Make approved-plan input mandatory for fresh `repair issue` runs**
-   - A fresh run without `--approved-plan-path` must fail immediately.
+   - Superseded by issue #118 for compatibility ingress: fresh `repair issue` runs may omit `--approved-plan-path`, while explicit compatibility-ingress paths must still validate immediately when supplied.
    - A fresh run with a malformed, mismatched, missing-field, malformed `named_references`, invalid `retrieval_surface_summary`, or `approved: false` artifact must fail immediately.
    - This failure surface must be the command-input validation boundary, not a handled coordinator result: the command exits non-zero through the existing CLI command error path, emits an operator-facing approved-plan error message, and occurs before coordinator run creation so no new run record or run directory is created.
    - This issue does not need to suppress issue intake/network lookup; it only requires that coordinator run artifacts are not created for invalid fresh-run ingress.
 
 3. **Define and enforce one precedence rule for fresh runs, retries, and persisted loads**
-   - Fresh run: the CLI-supplied approved plan is required and authoritative.
+   - Fresh run: when the CLI supplies an approved plan, that explicit compatibility-ingress artifact is authoritative.
    - Retry with explicit `--approved-plan-path`: the explicitly supplied artifact is authoritative after validation.
    - Retry without explicit path: load the previous run's `approved-plan.json` through the same canonical validator/helper after the previous run record is located.
    - All three paths must reuse the same validation rules and produce the same rejected cases.
@@ -131,10 +131,10 @@ Issue 56 should not leave separate partial validators in CLI and run-store codep
    - Review must stop relying on rendered-text presence as the effective validation seam; successful rendering is only allowed after structural and issue-match validation succeed.
 
 8. **Keep the operator boundary discoverable**
-   - Because this issue makes `--approved-plan-path` mandatory for fresh runs, the command help/usage surface must say so explicitly.
+   - Superseded by issue #118 for compatibility ingress: the command help/usage surface must no longer say fresh runs require `--approved-plan-path`, while retry carry-forward wording remains explicit.
    - At minimum, the narrow operator-facing seam for `repair issue` must cover both of these surfaces:
-    - `repair issue --help` / argparse help text for `--approved-plan-path`, explicitly stating that fresh runs require it and that retry carry-forward is the only no-path exception.
-    - the fresh-run missing-flag error surface, with wording that tells the operator the run requires `--approved-plan-path` rather than failing generically.
+    - `repair issue --help` / argparse help text for `--approved-plan-path`, explicitly describing it as a compatibility ingress while keeping retry carry-forward behavior discoverable.
+    - any fresh-run operator messaging must not contradict the compatibility-ingress behavior adopted by issue #118.
      - the retry carry-forward rejection surface, with wording that distinguishes `missing prior approved-plan.json` from `prior approved-plan.json failed structural validation`.
    - This issue does not require a broad docs rewrite.
 
@@ -154,11 +154,10 @@ Issue 56 should not leave separate partial validators in CLI and run-store codep
 
 - **Fresh-run CLI ingress tests**
   - fresh run succeeds when a valid `--approved-plan-path` artifact is supplied
-  - fresh run without `--approved-plan-path` fails
+  - superseded by issue #118: fresh run without `--approved-plan-path` may proceed past CLI ingress
   - fresh run with top-level non-object JSON, malformed JSON, missing required fields, empty `plan_summary`, empty/whitespace-only/non-string `implementation_steps`, malformed `named_references`, invalid `retrieval_surface_summary`, mismatched `issue_ref`, or `approved: false` fails
   - each of those failures occurs before coordinator run creation and leaves no new run directory artifacts
-  - the CLI help surface explicitly states the fresh-run requirement and the retry exception
-  - the missing-flag error path explicitly tells the operator to supply `--approved-plan-path`
+  - the CLI help surface describes `--approved-plan-path` as compatibility ingress input and still documents retry carry-forward behavior
 
 - **Retry precedence and carry-forward tests**
    - retry without explicit replacement carries forward a valid previous `approved-plan.json`

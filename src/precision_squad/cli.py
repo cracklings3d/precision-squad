@@ -23,6 +23,7 @@ from .coordinator import (
     PersistApprovedPlanParams,
     PublishRunParams,
     RepairIssueParams,
+    ReviewStagesOverride,
     ReviewImplParams,
     ReviewIssueParams,
     ReviewPlanParams,
@@ -161,9 +162,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--approved-plan-path",
         default=None,
         help=(
-            "Path to an approved-plan.json file. Required for fresh runs; retries may omit it "
-            "only to carry forward the prior run's approved-plan.json."
+            "Path to an approved-plan.json file. Supported as a compatibility ingress; retries "
+            "may omit it to carry forward the prior run's approved-plan.json."
         ),
+    )
+    issue_parser.add_argument(
+        "--review-stages",
+        choices=("plan", "all"),
+        default=argparse.SUPPRESS,
+        help="Optional review-stage override for repair issue compatibility ingress: plan or all.",
     )
     issue_parser.set_defaults(handler=_repair_issue)
 
@@ -329,11 +336,6 @@ def _repair_issue(args: argparse.Namespace) -> int:
     approved_plan: ApprovedPlan | None = None
     if args.approved_plan_path:
         approved_plan = _load_approved_plan(Path(args.approved_plan_path), args.issue_ref)
-    if retry_from is None and approved_plan is None:
-        raise ValueError(
-            "Fresh repair issue runs require --approved-plan-path; retries may omit it only "
-            "when carrying forward the prior approved-plan.json."
-        )
 
     intake = load_issue_intake(args.issue_ref)
     report = RunCoordinator().repair_issue(
@@ -345,6 +347,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
             repair_agent=args.repair_agent,
             repair_model=args.repair_model,
             review_model=args.review_model,
+            review_stages=cast(ReviewStagesOverride | None, getattr(args, "review_stages", None)),
             retry_from=retry_from,
             approved_plan=approved_plan,
         ),
