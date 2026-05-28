@@ -17,8 +17,8 @@ from precision_squad.cli import (
     _repair_issue_prompt_is_interactive,
     main,
 )
-from precision_squad.intake import canonicalize_local_issue_ref
 from precision_squad.coordinator import RepairIssueReport
+from precision_squad.intake import canonicalize_local_issue_ref
 from precision_squad.models import (
     ApprovedPlan,
     EvaluationResult,
