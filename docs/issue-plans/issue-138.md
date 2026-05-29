@@ -1,16 +1,16 @@
 ---
 issue: github.com/cracklings3d/precision-squad#138
 title: refactor: Decouple fresh-run gating from retry/resume restoration
-status: draft
-plan_status: proposed
-review_status: pending
+status: approved
+plan_status: approved
+review_status: approved
 source: issue
 owner: cracklings3d
 created_at: 2026-05-29
 updated_at: 2026-05-29
-approved_by: null
-approved_at: null
-review_artifact: null
+approved_by: "canonical-issue-resolver stage-D review"
+approved_at: 2026-05-29T17:56:00Z
+review_artifact: 'C:\Users\The_u\.opencode\projects\github-com-cracklings3d-precision-squad\runs\canonical-issue-resolver-parallel\cirp-20260529T173000-template-recovery\reviews\issue-138\loop-1-stage-D.json'
 related_branch: issue/138
 related_pr: null
 replaces: null
@@ -98,3 +98,5 @@ Refactor coordinator orchestration so fresh-run plan gating and retry/restoratio
 # Approval Notes
 
 This tracked plan translates the prior home-root draft into the repository's canonical `docs/issue-plans/issue-138.md` format. It governs only the narrow coordinator seam and focused validation needed for issue #138, with issue #116 explicitly treated as the blocked follow-on dependency rather than part of this implementation scope.
+
+Formal approval was recorded by the canonical issue resolver stage-D pass at `C:\Users\The_u\.opencode\projects\github-com-cracklings3d-precision-squad\runs\canonical-issue-resolver-parallel\cirp-20260529T173000-template-recovery\reviews\issue-138\loop-1-stage-D.json` on `2026-05-29T17:56:00Z`.
