@@ -220,9 +220,14 @@ def test_repair_issue_stops_after_failed_plan_review(tmp_path: Path, monkeypatch
     dependencies.execute_publish_plan.assert_not_called()
 
 
-def test_repair_issue_auto_approves_fresh_attempt_one_without_explicit_plan(
+def test_repair_issue_blocks_fresh_attempt_one_without_explicit_plan(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Fresh attempt-1 without explicit approved_plan must block at review plan.
+
+    The compatibility auto-approval path has been removed. Fresh runs must
+    have a current-run approved plan artifact to proceed past review plan.
+    """
     dependencies = MagicMock()
     dependencies.synthesis_artifacts_ready.return_value = False
     dependencies.execute_publish_plan.return_value = PublishResult(
@@ -255,33 +260,20 @@ def test_repair_issue_auto_approves_fresh_attempt_one_without_explicit_plan(
             repair_agent="none",
             repair_model=None,
             review_model=None,
-            approved_plan=None,
+            approved_plan=None,  # Fresh run without explicit plan
         ),
         intake=_make_intake(),
         dependencies=dependencies,
     )
 
     run_dir = Path(report.run_record.run_dir)
-    approved_plan = RunStore.load_approved_plan(run_dir, issue_ref="owner/repo#1")
-    plan_review = RunStore.load_plan_review(
-        run_dir,
-        issue_ref="owner/repo#1",
-        expected_run_id=report.run_record.run_id,
-    )
 
-    assert report.exit_code == 0
+    # Fresh run without approved plan must block
+    assert report.exit_code == 3, "fresh run should block at review plan"
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
-    assert approved_plan.plan_summary == "Test issue"
-    assert approved_plan.implementation_steps == (
-        "Implement the reviewed issue scope: Test issue.",
-        "Validate the change resolves the reviewed problem statement: Fix the bug.",
-    )
-    assert "same-run reviewed issue scope" in approved_plan.retrieval_surface_summary
-    assert approved_plan.named_references == ()
-    assert plan_review.review_status == "approved"
-    assert plan_review.provenance.run_id == report.run_record.run_id
-    assert plan_review.provenance.issue_ref == "owner/repo#1"
+    assert report.plan_review.review_status == "blocked"
+    assert not (run_dir / "approved-plan.json").exists()
+    assert not (run_dir / "execution-result.json").exists()
 
 
 @pytest.mark.parametrize("review_stages", ["plan", "all"])

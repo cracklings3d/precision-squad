@@ -538,6 +538,7 @@ class RunCoordinator:
             previous_run_dir=previous_run_dir,
             effective_approved_plan=effective_approved_plan,
             review_stages=params.review_stages,
+            retry_from=params.retry_from,
         )
 
         # Persist the approved plan only if provided or synthesized for compatibility.
@@ -1746,12 +1747,14 @@ def _build_compatibility_approved_plan(
     previous_run_dir: Path | None,
     effective_approved_plan: ApprovedPlan | None,
     review_stages: ReviewStagesOverride | None,
+    retry_from: str | None,
 ) -> ApprovedPlan | None:
     if not _should_auto_approve_compatibility_plan(
         attempt=attempt,
         previous_run_dir=previous_run_dir,
         effective_approved_plan=effective_approved_plan,
         review_stages=review_stages,
+        retry_from=retry_from,
     ):
         return None
 
@@ -1775,13 +1778,13 @@ def _should_auto_approve_compatibility_plan(
     previous_run_dir: Path | None,
     effective_approved_plan: ApprovedPlan | None,
     review_stages: ReviewStagesOverride | None,
+    retry_from: str | None,
 ) -> bool:
-    return (
-        attempt == 1
-        and previous_run_dir is None
-        and effective_approved_plan is None
-        and review_stages is None
-    )
+    # Fresh runs without a current-run approved plan must block at review plan.
+    # Retry carry-forward of a prior approved plan happens via the explicit
+    # retry_from path which populates effective_approved_plan directly.
+    # No implicit compatibility auto-approval for any fresh run.
+    return False
 
 
 def _derive_compatibility_implementation_steps(issue_draft: IssueDraft) -> tuple[str, ...]:
