@@ -22,6 +22,7 @@ from precision_squad.models import (
     RunRecord,
 )
 from precision_squad.repair import RepairAdapter
+from tests.integration.support import approved_plan_for
 
 # ---------------------------------------------------------------------------
 # Blocked intake: plan issue skips the executor entirely
@@ -82,7 +83,7 @@ def test_missing_docs_blocks_pipeline(
     make_empty_repo,
     tmp_path: Path,
 ) -> None:
-    """Fresh compatibility auto-approval still lets missing docs block before publish."""
+    """Missing docs block before publish even with explicit approved plan."""
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -94,6 +95,7 @@ def test_missing_docs_blocks_pipeline(
         repair_agent="none",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     from precision_squad.models import GitHubIssue, IssueAssessment, IssueReference
@@ -119,7 +121,7 @@ def test_missing_docs_blocks_pipeline(
 
     assert report.plan_review is not None
     assert report.plan_review.review_status == "approved"
-    assert report.execution_result is not None, "fresh compatibility path should continue into execution"
+    assert report.execution_result is not None, "explicit approval path should continue into execution"
     assert report.execution_result.status == "missing_docs"
     assert (Path(report.run_record.run_dir) / "approved-plan.json").exists()
     assert (Path(report.run_record.run_dir) / "plan-review.json").exists()
@@ -136,9 +138,9 @@ def test_missing_docs_persists_execution_artifacts(
     make_empty_repo,
     tmp_path: Path,
 ) -> None:
-    """Missing-docs runs persist compatibility plan and execution artifacts.
+    """Missing-docs runs persist explicit plan and execution artifacts.
 
-    Fresh compatibility runs still materialize approved-plan/plan-review before
+    With explicit approved plan, runs materialize approved-plan/plan-review before
     missing docs blocks governance.
     """
     runs_dir = tmp_path / "runs"
@@ -152,6 +154,7 @@ def test_missing_docs_persists_execution_artifacts(
         repair_agent="none",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     from precision_squad.models import GitHubIssue, IssueAssessment, IssueReference
@@ -207,9 +210,10 @@ def test_ambiguous_docs_blocks_pipeline(
     make_ambiguous_repo,
     tmp_path: Path,
 ) -> None:
-    """Fresh compatibility auto-approval still lets ambiguous docs block before publish.
+    """Ambiguous docs block before publish even with explicit approved plan.
 
-    The plan gate is auto-approved on fresh runs, so the docs executor is reached.
+    With explicit approved plan, the docs executor is reached and ambiguous docs
+    trigger a blocked governance verdict.
     """
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
@@ -222,6 +226,7 @@ def test_ambiguous_docs_blocks_pipeline(
         repair_agent="none",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     from precision_squad.models import GitHubIssue, IssueAssessment, IssueReference
@@ -257,7 +262,7 @@ def test_ambiguous_docs_blocks_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Clean docs without repair still complete after compatibility auto-approval
+# Clean docs without repair complete with explicit approved plan
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
@@ -265,7 +270,7 @@ def test_clean_docs_without_repair_completes_pipeline(
     make_clean_repo,
     tmp_path: Path,
 ) -> None:
-    """Fresh compatibility auto-approval reaches dry-run publish on clean docs."""
+    """Explicit approved plan reaches dry-run publish on clean docs."""
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -277,6 +282,7 @@ def test_clean_docs_without_repair_completes_pipeline(
         repair_agent="none",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     from precision_squad.models import GitHubIssue, IssueAssessment, IssueReference
@@ -324,9 +330,9 @@ def test_qa_failed_blocks_pipeline(
     make_clean_repo,
     tmp_path: Path,
 ) -> None:
-    """Fresh compatibility auto-approval still allows repair/QA to block governance.
+    """Explicit approved plan allows repair/QA to block governance.
 
-    Repair and QA should still execute on the fresh compatibility path.
+    Repair and QA execute with explicit approved plan and can still block governance.
     """
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
@@ -339,6 +345,7 @@ def test_qa_failed_blocks_pipeline(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
+        approved_plan=approved_plan_for(),
     )
 
     from precision_squad.models import GitHubIssue, IssueAssessment, IssueReference
@@ -366,8 +373,8 @@ def test_qa_failed_blocks_pipeline(
 
     assert report.plan_review is not None
     assert report.plan_review.review_status == "approved"
-    assert report.repair_result is not None, "repair should run after compatibility auto-approval"
-    assert report.qa_result is not None, "QA should run after compatibility auto-approval"
+    assert report.repair_result is not None, "repair should run with explicit approved plan"
+    assert report.qa_result is not None, "QA should run with explicit approved plan"
     assert report.qa_result.status == "failed"
     assert report.execution_result is not None, "implementation result should reflect the QA failure"
     assert report.execution_result.status == "blocked"

@@ -44,16 +44,20 @@ def _runnable_intake(
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Fresh compatibility run auto-approves and continues
+# Test 1: Fresh run blocks without explicit approved plan
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
-def test_chain_auto_approves_fresh_run_without_explicit_plan(
+def test_chain_blocks_fresh_run_without_explicit_plan(
     make_clean_repo,
     stub_repair_adapter,
     tmp_path: Path,
 ) -> None:
-    """Fresh attempt-1 compatibility runs synthesize canonical plan artifacts."""
+    """Fresh attempt-1 without explicit approved_plan must block at review plan.
+
+    The compatibility auto-approval path has been removed. Fresh runs without
+    a current-run approved plan artifact must stop at the review plan gate.
+    """
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -65,7 +69,7 @@ def test_chain_auto_approves_fresh_run_without_explicit_plan(
         repair_agent="opencode",
         repair_model=None,
         review_model=None,
-        # NOTE: approved_plan is intentionally omitted to exercise compatibility auto-approval
+        # NOTE: approved_plan intentionally omitted - should block at review plan
     )
 
     deps = _ApprovedTestDependencies(stub_repair_adapter)
@@ -78,13 +82,13 @@ def test_chain_auto_approves_fresh_run_without_explicit_plan(
 
     run_dir = Path(report.run_record.run_dir)
 
-    assert report.exit_code == 0, "fresh run should continue past review_plan"
-    assert (run_dir / "approved-plan.json").exists()
-    assert (run_dir / "plan-review.json").exists()
+    # Fresh run without approved plan must block
+    assert report.exit_code == 3, "fresh run should block at review_plan"
     assert report.plan_review is not None, "review_plan should run"
-    assert report.plan_review.review_status == "approved", "review_plan should be approved"
-    assert report.execution_result is not None, "implement should run after compatibility approval"
-    assert report.governance_verdict is not None, "governance should run"
+    assert report.plan_review.review_status == "blocked", "review_plan should be blocked"
+    assert not (run_dir / "approved-plan.json").exists(), \
+        "no approved-plan.json should exist for fresh run without explicit plan"
+    assert report.execution_result is None, "implement should not run when blocked"
 
 
 @pytest.mark.integration
