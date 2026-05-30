@@ -561,6 +561,16 @@ def _create_publish_resume_source_run(
     include_approved_plan: bool = True,
     include_plan_review: bool = True,
     plan_review_approved: bool = True,
+    include_execution_result: bool = True,
+    include_evaluation_result: bool = True,
+    include_governance_verdict: bool = True,
+    governance_verdict_approved: bool = True,
+    include_repair_result: bool = True,
+    repair_result_completed: bool = True,
+    include_qa_baseline_result: bool = True,
+    include_qa_result: bool = True,
+    include_decision_log: bool = True,
+    include_repair_workspace: bool = True,
 ) -> tuple[RunStore, RunRecord]:
     """Create a source run suitable for publish resume testing.
 
@@ -648,81 +658,94 @@ def _create_publish_resume_source_run(
             )
         store.write_plan_review(run_dir, review)
 
-    # Write governance-verdict.json (approved)
-    store.write_governance_verdict(
-        run_dir,
-        GovernanceVerdict(status="approved", summary="Approved", reason_codes=()),
-    )
+    # Write governance-verdict.json
+    if include_governance_verdict:
+        verdict_status = "approved" if governance_verdict_approved else "blocked"
+        store.write_governance_verdict(
+            run_dir,
+            GovernanceVerdict(status=verdict_status, summary="Reviewed", reason_codes=()),
+        )
 
     # Write execution-result.json
-    store.write_execution_result(
-        run_dir,
-        ExecutionResult(
-            status="completed",
-            executor_name="test",
-            summary="Test execution",
-            detail_codes=(),
-        ),
-    )
+    if include_execution_result:
+        store.write_execution_result(
+            run_dir,
+            ExecutionResult(
+                status="completed",
+                executor_name="test",
+                summary="Test execution",
+                detail_codes=(),
+            ),
+        )
 
     # Write evaluation-result.json
-    store.write_evaluation_result(
-        run_dir,
-        EvaluationResult(status="success", summary="Evaluation passed", detail_codes=()),
-    )
+    if include_evaluation_result:
+        store.write_evaluation_result(
+            run_dir,
+            EvaluationResult(status="success", summary="Evaluation passed", detail_codes=()),
+        )
 
-    # Write repair-result.json (completed with workspace_path)
-    repair_result = RepairResult(
-        status="completed",
-        summary="Repair completed",
-        detail_codes=(),
-        workspace_path=str(run_dir / "repair-workspace" / "repo"),
-    )
-    store.write_repair_result(run_dir, repair_result)
+    # Write repair-result.json
+    if include_repair_result:
+        workspace_path = (
+            str(run_dir / "repair-workspace" / "repo") if repair_result_completed else None
+        )
+        repair_status = "completed" if repair_result_completed else "blocked"
+        repair_result = RepairResult(
+            status=repair_status,
+            summary="Repair completed" if repair_result_completed else "Repair pending",
+            detail_codes=(),
+            workspace_path=workspace_path,
+        )
+        store.write_repair_result(run_dir, repair_result)
 
     # Write qa-baseline-result.json
-    store.write_qa_result(
-        run_dir,
-        QaResult(
-            status="passed",
-            summary="QA passed",
-            detail_codes=(),
-            phase="baseline",
-            quality="green",
-        ),
-    )
+    if include_qa_baseline_result:
+        store.write_qa_result(
+            run_dir,
+            QaResult(
+                status="passed",
+                summary="QA passed",
+                detail_codes=(),
+                phase="baseline",
+                quality="green",
+            ),
+        )
 
     # Write qa-result.json
-    store.write_qa_result(
-        run_dir,
-        QaResult(
-            status="passed",
-            summary="QA passed",
-            detail_codes=(),
-            phase="final",
-            quality="green",
-        ),
-    )
+    if include_qa_result:
+        store.write_qa_result(
+            run_dir,
+            QaResult(
+                status="passed",
+                summary="QA passed",
+                detail_codes=(),
+                phase="final",
+                quality="green",
+            ),
+        )
 
     # Write decision-log artifact
-    decision_log = DecisionLogArtifact(
-        attempt=attempt,
-        entries=(
-            DesignDecision(
-                sequence=1,
-                summary="Initial decision",
-                rationale="This is the first decision",
-                plan_steps=("Step 1",),
-                named_references=(),
-                affected_targets=(),
+    if include_decision_log:
+        decision_log = DecisionLogArtifact(
+            attempt=attempt,
+            entries=(
+                DesignDecision(
+                    sequence=1,
+                    summary="Initial decision",
+                    rationale="This is the first decision",
+                    plan_steps=("Step 1",),
+                    named_references=(),
+                    affected_targets=(),
+                ),
             ),
-        ),
-    )
-    store.write_decision_log(run_dir, decision_log)
+        )
+        store.write_decision_log(run_dir, decision_log)
 
     # Create repair-workspace/repo directory
-    workspace = run_dir / "repair-workspace" / "repo"
-    workspace.mkdir(parents=True, exist_ok=True)
+    if include_repair_workspace:
+        workspace = run_dir / "repair-workspace" / "repo"
+        workspace.mkdir(parents=True, exist_ok=True)
 
     return store, updated
 
@@ -781,14 +804,21 @@ def _create_review_impl_resume_source_run(
     return store, updated
 
 
-RetryResumeStage = str  # For type alias purposes in tests
+RetryResumeStage = Literal[
+    "review issue",
+    "plan",
+    "review plan",
+    "implement",
+    "publish",
+    "review impl",
+]
 
 
 def _make_params_for_resume(
     tmp_path: Path,
     retry_from: str,
     *,
-    resume_from: Literal["publish", "review impl"] | None = None,
+    resume_from: RetryResumeStage | None = None,
 ) -> RepairIssueParams:
     """Create RepairIssueParams for a resume test."""
     return RepairIssueParams(
@@ -912,6 +942,267 @@ def test_retry_from_publish_with_non_approved_plan_review_fails(tmp_path: Path) 
             intake=_make_intake(),
             dependencies=MagicMock(),
         )
+
+
+def test_retry_from_publish_without_execution_result_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when execution-result.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_execution_result=False,  # Missing execution-result.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume requires execution-result.json at"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_evaluation_result_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when evaluation-result.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_evaluation_result=False,  # Missing evaluation-result.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume requires evaluation-result.json at"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_governance_verdict_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when governance-verdict.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_governance_verdict=False,  # Missing governance-verdict.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume requires governance-verdict.json at"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_with_non_approved_governance_verdict_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when governance-verdict.json is not approved."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        governance_verdict_approved=False,  # Not approved
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="Retry resume to publish requires approved governance-verdict.json"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_repair_result_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when repair-result.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_repair_result=False,  # Missing repair-result.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume requires repair-result.json at"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_with_incomplete_repair_result_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when repair-result.json has status != completed."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        repair_result_completed=False,  # Status is "blocked" instead of "completed"
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="Retry resume to publish requires completed repair-result.json with workspace_path"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_qa_baseline_result_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when qa-baseline-result.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_qa_baseline_result=False,  # Missing qa-baseline-result.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume requires qa-baseline-result.json at"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_qa_result_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when qa-result.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_qa_result=False,  # Missing qa-result.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume requires qa-result.json at"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_decision_log_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when decision-log.attempt-{attempt}.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_decision_log=False,  # Missing decision-log artifact
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume to publish requires decision-log.attempt-1.json at"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_repair_workspace_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when repair-workspace/repo is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_repair_workspace=False,  # Missing repair-workspace/repo
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="Retry resume to publish requires preserved repair-workspace/repo"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests for successful later-stage resume regression
+# ---------------------------------------------------------------------------
+
+
+def test_retry_from_review_plan_succeeds_with_correct_ingress(tmp_path: Path) -> None:
+    """Test that --from review plan succeeds with correct ingress artifacts.
+
+    This is a regression test for successful later-stage resume (minimum happy path).
+    """
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        # All required artifacts for review plan resume are included by default
+        # - issue-draft.json
+        # - issue-review.json (approved)
+        # - approved-plan.json
+    )
+
+    coordinator = RunCoordinator()
+
+    # Mock dependencies needed for plan review
+    mock_dependencies = MagicMock()
+    mock_dependencies.run_plan_review.return_value = PlanReview(
+        run_id=previous.run_id,
+        issue_ref="owner/repo#1",
+        review_status="approved",
+        summary="Plan looks good",
+        feedback=(),
+        provenance=PlanReviewProvenance(
+            source_artifact="approved-plan.json",
+            run_id=previous.run_id,
+            issue_ref="owner/repo#1",
+        ),
+    )
+
+    # This should succeed with the correct ingress artifacts
+    report = coordinator.repair_issue(
+        params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="review plan"),
+        intake=_make_intake(),
+        dependencies=mock_dependencies,
+    )
+
+    # Verify the new attempt was created
+    assert report.run_record.attempt == 2
+
+    # Verify plan-review.json was written to the new attempt directory
+    new_run_dir = Path(report.run_record.run_dir)
+    assert (new_run_dir / "plan-review.json").exists(), (
+        "review plan resume must write plan-review.json to new attempt"
+    )
 
 
 # ---------------------------------------------------------------------------
