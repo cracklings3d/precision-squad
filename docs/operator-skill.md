@@ -12,6 +12,23 @@ This skill teaches an operator how to:
 - follow docs-remediation issues without creating duplicate work
 - know when the control plane is behaving correctly versus when the repair agent is weak
 
+## Bootstrap
+
+To use `precision-squad` in a consuming project, run the bootstrap command once:
+
+```powershell
+precision-squad-bootstrap-skill --project-root .
+```
+
+This creates the managed bootstrap surface:
+- `SKILL.md` — project-local skill with commands and rules
+- `.precision-squad/precision-squad.toml` — config defaults for the opencode path
+- `.precision-squad/bootstrap/` — bootstrap metadata
+
+Bootstrap validates prerequisites (Windows, accessible project root, opencode, precision-squad CLI, GitHub credentials) before writing any files. It is idempotent: rerunning reports per-file outcomes without re-creating unchanged content.
+
+To remove bootstrap state: delete `./SKILL.md` and the `.precision-squad/` directory.
+
 ## Primary Workflows
 
 There are two top-level commands:

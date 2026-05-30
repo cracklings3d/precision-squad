@@ -255,21 +255,21 @@ Publish a stored run without rerunning repair:
 python -m precision_squad.cli publish run <run-id>
 ```
 
-Install a project-local `SKILL.md` into the current repository:
-
-```bash
-python -m precision_squad.cli install-skill --project-root .
-```
-
-Interactive bootstrap for consuming projects:
+Bootstrap a consuming project:
 
 ```bash
 precision-squad-bootstrap-skill --project-root .
 ```
 
-The bootstrap script explains what it will do and asks for confirmation before writing anything.
+This is the canonical way to bootstrap agent guidance into a consuming project. It validates prerequisites, writes a project-local `SKILL.md`, creates the `.precision-squad/` managed boundary with config defaults, and tracks bootstrap metadata.
 
-This is the recommended way to bootstrap agent guidance into a consuming project. Do not rely on hidden dependency-install hooks for this.
+The bootstrap command:
+- Validates Windows-only execution, accessible project root, usable `precision-squad` CLI, `opencode` availability, and GitHub credentials
+- Writes `SKILL.md` and `.precision-squad/precision-squad.toml` with the command-shaped defaults
+- Is idempotent: reruns report created/updated/reused/already satisfied per file
+- Stops with actionable remediation if existing files would conflict
+
+To remove bootstrap state, delete `./SKILL.md` and the `.precision-squad/` directory.
 
 If you use the `skills` ecosystem directly, this repo also exposes a skill package under `skills/precision-squad/` so a project can install it with `npx skills add <repo> ...`.
 
