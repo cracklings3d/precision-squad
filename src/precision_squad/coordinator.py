@@ -649,7 +649,7 @@ class RunCoordinator:
             state = _replace_retry_state(state, issue_review=issue_review_report.issue_review)
             if issue_review_report.exit_code != 0:
                 return state
-        else:
+        elif resume_from != "review impl":
             state = _replace_retry_state(
                 state,
                 issue_review=RunStore.load_issue_review(
@@ -659,7 +659,10 @@ class RunCoordinator:
                 ),
             )
 
-        if resume_from is None or _RETRY_STAGE_ORDER[resume_from] <= _RETRY_STAGE_ORDER["plan"]:
+        if (
+            resume_from is None
+            or _RETRY_STAGE_ORDER[resume_from] <= _RETRY_STAGE_ORDER["plan"]
+        ):
             planning_ingress_plan = effective_approved_plan
             if resume_from == "review issue" and params.approved_plan is None:
                 planning_ingress_plan = None
@@ -682,7 +685,7 @@ class RunCoordinator:
             state = _replace_retry_state(state, plan_review=plan_review_report.plan_review)
             if plan_review_report.exit_code != 0:
                 return state
-        else:
+        elif resume_from != "review impl":
             state = _replace_retry_state(
                 state,
                 plan_review=RunStore.load_plan_review(
@@ -1532,10 +1535,6 @@ def _validate_resume_prerequisites(
         return
     if resume_from == "review impl":
         RunStore.load_approved_plan(previous_run_dir, issue_ref=issue_ref)
-        try:
-            RunStore.require_plan_review_for_implement(previous_run_dir, issue_ref=issue_ref)
-        except PlanReviewError as exc:
-            raise ValueError(str(exc)) from exc
         _load_issue_intake_artifact(previous_run_dir, expected_issue_ref=issue_ref)
         publish_plan = _load_publish_plan_artifact(previous_run_dir)
         publish_result = _load_publish_result_artifact(previous_run_dir)

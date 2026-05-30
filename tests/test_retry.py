@@ -27,6 +27,7 @@ from precision_squad.models import (
     IssueReviewProvenance,
     PlanReview,
     PlanReviewProvenance,
+    PublishPlan,
     PublishResult,
     QaResult,
     RepairResult,
@@ -726,6 +727,60 @@ def _create_publish_resume_source_run(
     return store, updated
 
 
+def _create_review_impl_resume_source_run(
+    store: RunStore,
+    attempt: int = 1,
+) -> tuple[RunStore, RunRecord]:
+    """Create a source run suitable for review impl resume testing.
+
+    Creates a run with the correct ingress artifacts for review impl resume:
+    - issue-intake.json (written by create_run)
+    - approved-plan.json
+    - publish-plan.json with status: draft_pr
+    - publish-result.json with status: published, target: draft_pr, URL, and PR number
+    """
+    intake = _make_intake()
+    issue_ref = "owner/repo#1"
+    request = RunRequest(issue_ref=issue_ref, runs_dir=str(store.root))
+    record = store.create_run(request, intake)
+
+    updated = RunRecord(
+        run_id=record.run_id,
+        issue_ref=record.issue_ref,
+        status=record.status,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        run_dir=record.run_dir,
+        attempt=attempt,
+    )
+    store.write_run_record(updated)
+    run_dir = Path(updated.run_dir)
+
+    # Write approved-plan.json
+    store.write_approved_plan(run_dir, _approved_plan(issue_ref))
+
+    # Write publish-plan.json with draft_pr status
+    publish_plan = PublishPlan(
+        status="draft_pr",
+        title="Test PR",
+        body="Test body",
+        reason_codes=(),
+    )
+    store.write_publish_plan(run_dir, publish_plan)
+
+    # Write publish-result.json with published status and PR metadata
+    publish_result = PublishResult(
+        status="published",
+        target="draft_pr",
+        summary="Published",
+        url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+    )
+    store.write_publish_result(run_dir, publish_result)
+
+    return store, updated
+
+
 RetryResumeStage = str  # For type alias purposes in tests
 
 
@@ -864,26 +919,63 @@ def test_retry_from_publish_with_non_approved_plan_review_fails(tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
-def test_retry_from_review_impl_with_non_approved_plan_review_fails(tmp_path: Path) -> None:
-    """Test that --from review impl fails when plan-review.json is not approved."""
+def test_retry_from_review_impl_succeeds_with_correct_ingress_and_writes_both_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Test that review impl resume succeeds with correct ingress and writes both artifacts.
+
+    Per the governing plan (lines 76 and 121-123), review impl resume requires:
+    - approved-plan.json
+    - issue-intake.json
+    - publish-plan.json with status: draft_pr
+    - publish-result.json with status: published, target: draft_pr, URL, and PR number
+    - NO prior impl-review.json or plan-review.json requirement
+
+    The resumed review impl stage must write both impl-review.json and
+    post-publish-review-result.json to the new attempt directory.
+    """
+    from precision_squad.models import ImplReviewResult
+
     store = RunStore(tmp_path / "runs")
     store.root.mkdir(parents=True, exist_ok=True)
 
-    # Create a basic source run with an unapproved plan-review
-    _, previous = _create_publish_resume_source_run(
-        store,
-        attempt=1,
-        plan_review_approved=False,  # Not approved
+    # Create a source run with the correct review impl resume ingress
+    _, previous = _create_review_impl_resume_source_run(store, attempt=1)
+
+    # Mock the dependency to return a successful impl review result
+    mock_dependencies = MagicMock()
+    # Explicitly set run_impl_review to None so the compatibility path uses
+    # run_post_publish_review_if_needed instead. A bare MagicMock() exposes a
+    # callable run_impl_review attribute by default, which would cause
+    # _run_impl_review_with_compatibility to call the mock and return a non-dataclass
+    # result that fails later with asdict() errors.
+    mock_dependencies.run_impl_review = None
+    mock_dependencies.run_post_publish_review_if_needed.return_value = ImplReviewResult(
+        review_status="approved",
+        summary="Implementation looks good",
+        pull_request_url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+        pull_head_sha="abc123",
     )
 
     coordinator = RunCoordinator()
 
-    with pytest.raises(
-        ValueError, match="Implement ingress requires plan-review.json.review_status to be 'approved'"
-    ):
-        coordinator.repair_issue(
-            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="review impl"),
-            intake=_make_intake(),
-            dependencies=MagicMock(),
-        )
+    # This should succeed with the correct ingress artifacts
+    report = coordinator.repair_issue(
+        params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="review impl"),
+        intake=_make_intake(),
+        dependencies=mock_dependencies,
+    )
+
+    # Verify the new attempt was created
+    assert report.run_record.attempt == 2
+
+    # Verify both impl-review.json and post-publish-review-result.json were written
+    new_run_dir = Path(report.run_record.run_dir)
+    assert (new_run_dir / "impl-review.json").exists(), (
+        "review impl resume must write impl-review.json to new attempt"
+    )
+    assert (new_run_dir / "post-publish-review-result.json").exists(), (
+        "review impl resume must write post-publish-review-result.json to new attempt"
+    )
 
