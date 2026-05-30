@@ -93,7 +93,12 @@ create issue → review issue → plan → review plan → implement → publish
 
 **Inputs:**
 - `governance-verdict.json` — must contain `verdict: approved`
-- Implementation artifacts from `implement`
+- `execution-result.json`
+- `repair-result.json`
+- `qa-baseline-result.json`
+- `qa-result.json`
+- `evaluation-result.json`
+- `decision-log.attempt-{attempt}.json`
 
 **Outputs:**
 - `publish-plan.json`
