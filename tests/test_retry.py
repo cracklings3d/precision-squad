@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,13 +12,24 @@ import pytest
 from precision_squad.coordinator import RepairIssueParams, RunCoordinator
 from precision_squad.models import (
     ApprovedPlan,
+    DecisionLogArtifact,
+    DesignDecision,
+    EvaluationResult,
     ExecutionResult,
     GitHubIssue,
     GovernanceVerdict,
     IssueAssessment,
+    IssueDraft,
+    IssueDraftProvenance,
     IssueIntake,
     IssueReference,
+    IssueReview,
+    IssueReviewProvenance,
+    PlanReview,
+    PlanReviewProvenance,
     PublishResult,
+    QaResult,
+    RepairResult,
     RunRecord,
     RunRequest,
 )
@@ -481,3 +493,397 @@ def test_retry_escalation_persists_approved_plan_into_new_run_directory(tmp_path
 
     persisted_plan = RunStore.load_approved_plan(escalated_run_dir, issue_ref="owner/repo#1")
     assert persisted_plan == _approved_plan()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for publish/resume preflight tests
+# ---------------------------------------------------------------------------
+
+
+def _make_issue_review_approved(run_id: str, issue_ref: str) -> IssueReview:
+    return IssueReview(
+        run_id=run_id,
+        issue_ref=issue_ref,
+        review_status="approved",
+        summary="Issue review approved",
+        feedback=(),
+        provenance=IssueReviewProvenance(
+            source_artifact="issue-draft.json",
+            run_id=run_id,
+            issue_ref=issue_ref,
+        ),
+    )
+
+
+def _make_plan_review_approved(run_id: str, issue_ref: str) -> PlanReview:
+    return PlanReview(
+        run_id=run_id,
+        issue_ref=issue_ref,
+        review_status="approved",
+        summary="Plan review approved",
+        feedback=(),
+        provenance=PlanReviewProvenance(
+            source_artifact="approved-plan.json",
+            run_id=run_id,
+            issue_ref=issue_ref,
+        ),
+    )
+
+
+def _make_issue_draft(issue_ref: str) -> IssueDraft:
+    return IssueDraft(
+        owner="owner",
+        repo="repo",
+        number=1,
+        issue_ref=issue_ref,
+        issue_url=f"https://github.com/{issue_ref.replace('#', '/issues/')}",
+        title="Test issue",
+        summary="Test issue summary",
+        problem_statement="Fix the bug.",
+        labels=(),
+        intake_status="runnable",
+        intake_reason_codes=(),
+        provenance=IssueDraftProvenance(
+            source_artifacts=("issue-intake.json",),
+            requested_issue_ref=issue_ref,
+        ),
+    )
+
+
+def _create_publish_resume_source_run(
+    store: RunStore,
+    attempt: int = 1,
+    *,
+    include_issue_draft: bool = True,
+    include_issue_review: bool = True,
+    issue_review_approved: bool = True,
+    include_approved_plan: bool = True,
+    include_plan_review: bool = True,
+    plan_review_approved: bool = True,
+) -> tuple[RunStore, RunRecord]:
+    """Create a source run suitable for publish resume testing.
+
+    Creates a run with all implement-stage artifacts. Individual artifacts
+    can be excluded or modified via parameters.
+    """
+    intake = _make_intake()
+    issue_ref = "owner/repo#1"
+    request = RunRequest(issue_ref=issue_ref, runs_dir=str(store.root))
+    record = store.create_run(request, intake)
+
+    updated = RunRecord(
+        run_id=record.run_id,
+        issue_ref=record.issue_ref,
+        status=record.status,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        run_dir=record.run_dir,
+        attempt=attempt,
+    )
+    store.write_run_record(updated)
+    run_dir = Path(updated.run_dir)
+
+    # create_run() always writes issue-draft.json, so remove it if not included
+    if not include_issue_draft:
+        (run_dir / "issue-draft.json").unlink(missing_ok=True)
+
+    # Write issue-draft.json directly
+    if include_issue_draft:
+        draft = _make_issue_draft(issue_ref)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "issue-draft.json").write_text(
+            json.dumps(
+                {
+                    "owner": draft.owner,
+                    "repo": draft.repo,
+                    "number": draft.number,
+                    "issue_ref": draft.issue_ref,
+                    "issue_url": draft.issue_url,
+                    "title": draft.title,
+                    "summary": draft.summary,
+                    "problem_statement": draft.problem_statement,
+                    "labels": list(draft.labels),
+                    "intake_status": draft.intake_status,
+                    "intake_reason_codes": list(draft.intake_reason_codes),
+                    "provenance": {
+                        "source_artifacts": list(draft.provenance.source_artifacts),
+                        "requested_issue_ref": draft.provenance.requested_issue_ref,
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    # Write issue-review.json
+    if include_issue_review:
+        review = _make_issue_review_approved(record.run_id, issue_ref)
+        if not issue_review_approved:
+            review = IssueReview(
+                run_id=review.run_id,
+                issue_ref=review.issue_ref,
+                review_status="changes_requested",
+                summary=review.summary,
+                feedback=review.feedback,
+                provenance=review.provenance,
+            )
+        store.write_issue_review(run_dir, review)
+
+    # Write approved-plan.json
+    if include_approved_plan:
+        store.write_approved_plan(run_dir, _approved_plan(issue_ref))
+
+    # Write plan-review.json
+    if include_plan_review:
+        review = _make_plan_review_approved(record.run_id, issue_ref)
+        if not plan_review_approved:
+            review = PlanReview(
+                run_id=review.run_id,
+                issue_ref=review.issue_ref,
+                review_status="changes_requested",
+                summary=review.summary,
+                feedback=review.feedback,
+                provenance=review.provenance,
+            )
+        store.write_plan_review(run_dir, review)
+
+    # Write governance-verdict.json (approved)
+    store.write_governance_verdict(
+        run_dir,
+        GovernanceVerdict(status="approved", summary="Approved", reason_codes=()),
+    )
+
+    # Write execution-result.json
+    store.write_execution_result(
+        run_dir,
+        ExecutionResult(
+            status="completed",
+            executor_name="test",
+            summary="Test execution",
+            detail_codes=(),
+        ),
+    )
+
+    # Write evaluation-result.json
+    store.write_evaluation_result(
+        run_dir,
+        EvaluationResult(status="success", summary="Evaluation passed", detail_codes=()),
+    )
+
+    # Write repair-result.json (completed with workspace_path)
+    repair_result = RepairResult(
+        status="completed",
+        summary="Repair completed",
+        detail_codes=(),
+        workspace_path=str(run_dir / "repair-workspace" / "repo"),
+    )
+    store.write_repair_result(run_dir, repair_result)
+
+    # Write qa-baseline-result.json
+    store.write_qa_result(
+        run_dir,
+        QaResult(
+            status="passed",
+            summary="QA passed",
+            detail_codes=(),
+            phase="baseline",
+            quality="green",
+        ),
+    )
+
+    # Write qa-result.json
+    store.write_qa_result(
+        run_dir,
+        QaResult(
+            status="passed",
+            summary="QA passed",
+            detail_codes=(),
+            phase="final",
+            quality="green",
+        ),
+    )
+
+    # Write decision-log artifact
+    decision_log = DecisionLogArtifact(
+        attempt=attempt,
+        entries=(
+            DesignDecision(
+                sequence=1,
+                summary="Initial decision",
+                rationale="This is the first decision",
+                plan_steps=("Step 1",),
+                named_references=(),
+                affected_targets=(),
+            ),
+        ),
+    )
+    store.write_decision_log(run_dir, decision_log)
+
+    # Create repair-workspace/repo directory
+    workspace = run_dir / "repair-workspace" / "repo"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    return store, updated
+
+
+RetryResumeStage = str  # For type alias purposes in tests
+
+
+def _make_params_for_resume(
+    tmp_path: Path,
+    retry_from: str,
+    *,
+    resume_from: Literal["publish", "review impl"] | None = None,
+) -> RepairIssueParams:
+    """Create RepairIssueParams for a resume test."""
+    return RepairIssueParams(
+        issue_ref="owner/repo#1",
+        runs_dir=tmp_path / "runs",
+        repo_path=tmp_path / "repo",
+        publish=False,
+        repair_agent="none",
+        repair_model=None,
+        review_model=None,
+        retry_from=retry_from,
+        resume_from=resume_from,
+        approved_plan=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests for publish resume preflight validation
+# ---------------------------------------------------------------------------
+
+
+def test_retry_from_publish_without_issue_draft_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when issue-draft.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_issue_draft=False,  # Missing issue-draft.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume requires issue-draft.json"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_issue_review_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when issue-review.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_issue_review=False,  # Missing issue-review.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume to publish requires issue-review.json"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_with_non_approved_issue_review_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when issue-review.json is not approved."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        issue_review_approved=False,  # Not approved
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="Retry resume to publish requires approved issue-review.json"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_without_plan_review_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when plan-review.json is missing."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        include_plan_review=False,  # Missing plan-review.json
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(ValueError, match="Retry resume to publish requires plan-review.json"):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_with_non_approved_plan_review_fails(tmp_path: Path) -> None:
+    """Test that --from publish fails when plan-review.json is not approved."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        plan_review_approved=False,  # Not approved
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="Retry resume to publish requires approved plan-review.json"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests for review impl resume preflight validation
+# ---------------------------------------------------------------------------
+
+
+def test_retry_from_review_impl_with_non_approved_plan_review_fails(tmp_path: Path) -> None:
+    """Test that --from review impl fails when plan-review.json is not approved."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+
+    # Create a basic source run with an unapproved plan-review
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        plan_review_approved=False,  # Not approved
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="Implement ingress requires plan-review.json.review_status to be 'approved'"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="review impl"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+

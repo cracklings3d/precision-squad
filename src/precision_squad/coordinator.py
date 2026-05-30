@@ -47,6 +47,8 @@ from .run_store import (
     IssueReviewNotFoundError,
     IssueReviewValidationError,
     PlanReviewError,
+    PlanReviewNotFoundError,
+    PlanReviewValidationError,
     RunStore,
 )
 
@@ -1462,6 +1464,29 @@ def _validate_resume_prerequisites(
             )
         return review
 
+    def _require_approved_plan_review_for_resume(stage_name: str) -> PlanReview:
+        try:
+            review = RunStore.load_plan_review(
+                previous_run_dir,
+                issue_ref=issue_ref,
+                expected_run_id=previous_record.run_id,
+            )
+        except PlanReviewNotFoundError as exc:
+            raise ValueError(
+                f"Retry resume to {stage_name} requires plan-review.json for the same run."
+            ) from exc
+        except PlanReviewValidationError as exc:
+            raise ValueError(
+                "Retry carry-forward failed because the prior plan-review.json failed "
+                f"structural validation: {exc}"
+            ) from exc
+        if review.review_status != "approved":
+            raise ValueError(
+                "Retry resume to "
+                f"{stage_name} requires approved plan-review.json for the same run."
+            )
+        return review
+
     if resume_from == "review issue":
         _require_file(
             previous_run_dir / "issue-draft.json",
@@ -1483,6 +1508,13 @@ def _validate_resume_prerequisites(
             raise ValueError(str(exc)) from exc
         return
     if resume_from == "publish":
+        _require_file(
+            previous_run_dir / "issue-draft.json",
+            "Retry resume requires issue-draft.json",
+        )
+        _require_approved_issue_review_for_resume("publish")
+        RunStore.load_approved_plan(previous_run_dir, issue_ref=issue_ref)
+        _require_approved_plan_review_for_resume("publish")
         _load_preserved_implement_stage(
             previous_run_dir,
             record=previous_record,
@@ -1500,6 +1532,10 @@ def _validate_resume_prerequisites(
         return
     if resume_from == "review impl":
         RunStore.load_approved_plan(previous_run_dir, issue_ref=issue_ref)
+        try:
+            RunStore.require_plan_review_for_implement(previous_run_dir, issue_ref=issue_ref)
+        except PlanReviewError as exc:
+            raise ValueError(str(exc)) from exc
         _load_issue_intake_artifact(previous_run_dir, expected_issue_ref=issue_ref)
         publish_plan = _load_publish_plan_artifact(previous_run_dir)
         publish_result = _load_publish_result_artifact(previous_run_dir)
