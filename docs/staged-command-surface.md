@@ -1,6 +1,38 @@
 # Staged Command Surface
 
-Operator reference for the seven-stage command chain that processes issues through review, planning, implementation, and publishing.
+Operator reference for the seven-stage command chain that processes issues through review, planning, implementation, and publishing, plus the canonical bootstrap command for new consuming projects.
+
+## Bootstrap Command
+
+### Canonical One-Command Bootstrap
+
+To bootstrap a consuming project with precision-squad skill and config on Windows with opencode:
+
+```powershell
+precision-squad-bootstrap-skill --project-root .
+```
+
+**Supported environment:** Windows only + opencode. This command is not supported on Linux or macOS.
+
+**What bootstrap validates before writing files:**
+- Windows-only execution
+- Accessible project root for managed writes
+- Usable precision-squad CLI entrypoint
+- opencode availability
+- GitHub credentials (GITHUB_TOKEN or OpenCode_Github_Token)
+
+**Managed surface (bounded, easy to remove):**
+- `./SKILL.md` — project-local skill with commands and rules
+- `./.precision-squad/precision-squad.toml` — config defaults for the opencode path
+- `./.precision-squad/bootstrap/**` — bootstrap metadata for rerun reporting
+
+**Removal:** To remove all bootstrap state, delete `./SKILL.md` and the `.precision-squad/` directory.
+
+**Idempotency:** Rerunning bootstrap reports per-file outcomes (created/updated/reused/already satisfied) without re-creating unchanged content.
+
+**Blocking conflict:** If `./.precision-squad.toml` exists at the project root, bootstrap stops before writing files, because the root file would shadow the managed `.precision-squad/` boundary.
+
+---
 
 ## Stage Chain Overview
 
