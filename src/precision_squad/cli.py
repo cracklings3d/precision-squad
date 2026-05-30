@@ -373,9 +373,10 @@ def _repair_issue(args: argparse.Namespace) -> int:
     if args.approved_plan_path:
         approved_plan = _load_approved_plan(Path(args.approved_plan_path), args.issue_ref)
 
-    # Only load fresh issue intake when not in a retry resume path.
-    # Retry resume paths carry forward the prior run's intake via the coordinator.
-    if retry_from is None:
+    # Only skip intake loading for stage-resume retries (--retry-from with --from).
+    # Plain retries (--retry-from without --from) still need the fresh intake
+    # because the coordinator's non-resume path calls create_issue() which requires intake.
+    if retry_from is None or getattr(args, 'resume_from', None) is None:
         intake = load_issue_intake(args.issue_ref)
     else:
         intake = None

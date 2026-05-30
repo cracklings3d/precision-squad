@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -4612,6 +4613,106 @@ def test_repair_issue_retry_from_with_from_review_impl_forwards_resume_target_to
     assert status == 0
     assert captured["retry_from"] == record.run_id
     assert captured["resume_from"] == "review impl"
+
+
+def test_repair_issue_retry_from_without_from_loads_intake_and_forwards_to_coordinator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test that --retry-from without --from still loads intake and forwards to coordinator.
+
+    This is a regression test for the bug where plain retry
+    (--retry-from without --from) incorrectly skipped intake loading,
+    causing the coordinator to receive intake=None and fail when calling create_issue().
+    """
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    intake_payload = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)), intake_payload
+    )
+    # intake_load_call_tracker lets us verify load_issue_intake was actually called
+    intake_load_call_tracker = {"called": False, "loaded_intake": None}
+
+    def tracking_load_intake(issue_ref):
+        intake_load_call_tracker["called"] = True
+        intake_load_call_tracker["loaded_intake"] = intake_payload
+        return intake_payload
+
+    monkeypatch.setattr("precision_squad.cli.load_issue_intake", tracking_load_intake)
+
+    captured: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured["resume_from"] = params.resume_from
+        captured["retry_from"] = params.retry_from
+        captured["intake"] = intake
+        return RepairIssueReport(
+            intake=intake,
+            run_record=RunRecord(
+                run_id="run-next",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(runs_dir / "run-next"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="done",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
+            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
+            publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    # Call with --retry-from but WITHOUT --from
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+            "--retry-from",
+            record.run_id,
+            # Note: NO --from argument here - this is the plain retry case
+        ]
+    )
+
+    assert status == 0, f"Expected status 0 but got {status}"
+    assert intake_load_call_tracker["called"], (
+        "load_issue_intake must be called for plain retry (--retry-from without --from)"
+    )
+    assert captured["retry_from"] == record.run_id
+    assert captured["resume_from"] is None, (
+        "resume_from should be None for plain retry without --from"
+    )
+    assert captured["intake"] is not None, (
+        "intake must not be None for plain retry - coordinator needs it for create_issue()"
+    )
+    # Cast to IssueIntake to satisfy type checker
+    received_intake = cast(IssueIntake, captured["intake"])
+    assert received_intake.issue.reference == intake_payload.issue.reference
 
 
 def test_repair_issue_from_without_retry_from_fails(capsys, tmp_path: Path) -> None:
