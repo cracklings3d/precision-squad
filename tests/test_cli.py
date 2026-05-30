@@ -1245,6 +1245,34 @@ def test_bootstrap_blocks_existing_root_config_even_when_exactly_equivalent(
     assert not (tmp_path / ".precision-squad" / "precision-squad.toml").exists()
 
 
+def test_bootstrap_blocks_empty_unmanaged_config(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bootstrap blocks an existing empty unmanaged .precision-squad/precision-squad.toml.
+
+    Even an empty file is considered unmanaged content that must not be silently replaced.
+    Bootstrap must stop with actionable conflict remediation instead of overwriting it.
+    """
+    monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
+    # Create the .precision-squad directory and an empty config file
+    config_dir = tmp_path / ".precision-squad"
+    config_dir.mkdir()
+    (config_dir / "precision-squad.toml").write_text("", encoding="utf-8")
+
+    status = bootstrap_main(["--project-root", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "not managed by bootstrap" in captured.err
+    # Verify bootstrap did not modify the existing unmanaged file
+    assert (config_dir / "precision-squad.toml").read_text(encoding="utf-8") == ""
+    assert not (tmp_path / "SKILL.md").exists()
+
+
 def test_bootstrap_prerequisite_fails_on_non_windows(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
