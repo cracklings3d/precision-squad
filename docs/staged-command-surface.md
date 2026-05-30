@@ -75,11 +75,13 @@ create issue → review issue → plan → review plan → implement → publish
 - `plan-review.json`
 
 **Outputs:**
-- `impl-review.json`
+- `execution-result.json`
 - `repair-result.json`
+- `qa-baseline-result.json`
 - `qa-result.json`
 - `evaluation-result.json`
 - `governance-verdict.json`
+- `decision-log.attempt-{attempt}.json`
 
 **Gate Behavior:** Governance check after implement. If `governance-verdict.json` does not contain `verdict: approved`, `publish` is not invoked.
 
@@ -107,10 +109,13 @@ create issue → review issue → plan → review plan → implement → publish
 **Purpose:** Final review of the draft PR prior to merge automation.
 
 **Inputs:**
-- Draft PR URL/number and head SHA
-- `impl-review.json`
+- `approved-plan.json`
+- `issue-intake.json`
+- `publish-plan.json`
+- `publish-result.json` for a published draft PR with URL / PR number metadata
 
 **Outputs:**
+- `impl-review.json`
 - `post-publish-review-result.json` — consumed by GitHub automation
 
 **Gate Behavior:** n/a (final review stage; outcomes handled by GitHub automation).
@@ -125,11 +130,52 @@ create issue → review issue → plan → review plan → implement → publish
 | `issue-review.json` | review issue |
 | `approved-plan.json` | plan |
 | `plan-review.json` | review plan |
-| `impl-review.json` | implement |
+| `execution-result.json` | implement |
 | `governance-verdict.json` | implement |
 | `repair-result.json` | implement |
+| `qa-baseline-result.json` | implement |
 | `qa-result.json` | implement |
 | `evaluation-result.json` | implement |
+| `decision-log.attempt-{attempt}.json` | implement |
 | `publish-plan.json` | publish |
 | `publish-result.json` | publish |
+| `impl-review.json` | review impl |
 | `post-publish-review-result.json` | review impl |
+
+---
+
+## `repair issue` manual retry resume contract
+
+`repair issue --retry-from <run-id> --from "<stage>"` supports exactly these resume targets:
+
+- `review issue`
+- `plan`
+- `review plan`
+- `implement`
+- `publish`
+- `review impl`
+
+`--from` is valid only with `--retry-from`. It is not supported on standalone stage commands.
+
+### Non-stage context artifacts on resumed retries
+
+Every resumed retry attempt materializes a complete same-run context pack before the selected stage runs:
+
+- `run-request.json` — recreated for the new attempt from the current invocation
+- `issue-intake.json` — copied forward from the source attempt
+- `issue.md` — regenerated from the preserved intake for the new attempt
+
+Earlier-stage history is preserved by copying only the artifacts before the selected resume point into the new attempt directory. Prior run directories remain unchanged.
+
+### Resume matrix
+
+| Resume target | Required in source run | Preserved into new attempt | Regenerated in new attempt |
+|---|---|---|---|
+| `review issue` | `issue-draft.json` | `issue-draft.json` | `issue-review.json` and later artifacts |
+| `plan` | approved `issue-review.json` | `issue-draft.json`, `issue-review.json` | `approved-plan.json` and later artifacts |
+| `review plan` | valid `approved-plan.json` | `issue-draft.json`, `issue-review.json`, `approved-plan.json` | `plan-review.json` and later artifacts |
+| `implement` | valid `approved-plan.json`, approved `plan-review.json` | issue/planning artifacts through `plan-review.json` | implement-stage artifacts and later artifacts |
+| `publish` | approved implement-stage artifacts, preserved decision log, preserved `repair-workspace/repo` | planning + implement artifacts required for publish | `publish-plan.json`, `publish-result.json`, review-impl outputs |
+| `review impl` | `approved-plan.json`, `issue-intake.json`, `publish-plan.json`, published-draft-PR `publish-result.json` | earlier artifacts plus publish artifacts | `impl-review.json`, `post-publish-review-result.json` |
+
+`impl-review.json` is produced by `review impl`. It is not an input to `review impl` resume.
