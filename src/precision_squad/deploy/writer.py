@@ -52,8 +52,9 @@ def _is_bootstrap_managed(path: Path, content: str) -> bool:
     """Detect if a file was previously written by bootstrap.
 
     A file is considered bootstrap-managed if:
-    - It exists and contains the bootstrap marker comment, OR
-    - Its path is within the .precision-squad/bootstrap/ directory
+    - Its path is within the .precision-squad/bootstrap/ directory, OR
+    - It contains the explicit bootstrap marker for SKILL.md, OR
+    - It contains the explicit managed config marker for precision-squad.toml
     """
     if not path.exists():
         return False
@@ -62,7 +63,7 @@ def _is_bootstrap_managed(path: Path, content: str) -> bool:
     existing = path.read_text(encoding="utf-8")
     if "# precision-squad managed config" in existing:
         return True
-    if "# Precision Squad" in existing and "control plane" in existing:
+    if "<!-- precision-squad bootstrap managed skill -->" in existing:
         return True
     return False
 

@@ -35,7 +35,8 @@ runs_dir = ".precision-squad/runs"
 project_root = "."
 """
 
-SKILL_TEMPLATE = """# Precision Squad
+SKILL_TEMPLATE = """<!-- precision-squad bootstrap managed skill -->
+# Precision Squad
 
 Use `precision-squad` as the control plane for issue-driven work in this repository.
 
