@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict
 from datetime import UTC, datetime
 from json import JSONDecodeError
@@ -140,6 +141,102 @@ class RunStore:
         self._write_issue_context(run_dir / "issue.md", intake)
         self._write_json(run_dir / "run-record.json", record)
         return record
+
+    def create_retry_run(
+        self,
+        request: RunRequest,
+        *,
+        source_run_dir: Path,
+        preserved_intake: IssueIntake,
+        attempt: int,
+    ) -> RunRecord:
+        created_at = _utc_now()
+        run_id = _build_run_id(created_at)
+        run_dir = self.root / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+
+        status = "blocked" if preserved_intake.assessment.status == "blocked" else "runnable"
+        record = RunRecord(
+            run_id=run_id,
+            issue_ref=request.issue_ref,
+            status=status,
+            created_at=created_at,
+            updated_at=created_at,
+            run_dir=str(run_dir),
+            attempt=attempt,
+        )
+
+        shutil.copy2(source_run_dir / "issue-intake.json", run_dir / "issue-intake.json")
+        self._write_json(run_dir / "run-request.json", request)
+        self._write_issue_context(run_dir / "issue.md", preserved_intake)
+        self._write_json(run_dir / "run-record.json", record)
+        return record
+
+    def copy_retry_artifacts(
+        self,
+        *,
+        source_run_dir: Path,
+        target_run_dir: Path,
+        artifact_names: tuple[str, ...],
+        target_run_id: str | None = None,
+        source_attempt: int | None = None,
+        target_attempt: int | None = None,
+        copy_repair_workspace: bool = False,
+    ) -> None:
+        for artifact_name in artifact_names:
+            source_path = source_run_dir / artifact_name
+            target_path = target_run_dir / artifact_name
+            if not source_path.exists():
+                continue
+            shutil.copy2(source_path, target_path)
+            if (
+                target_run_id is not None
+                and artifact_name in {ISSUE_REVIEW_FILENAME, PLAN_REVIEW_FILENAME}
+            ):
+                self._rewrite_review_run_id(target_path, target_run_id)
+
+        if source_attempt is not None and target_attempt is not None:
+            source_decision_log = source_run_dir / _decision_log_filename(source_attempt)
+            if source_decision_log.exists():
+                target_decision_log = target_run_dir / _decision_log_filename(target_attempt)
+                shutil.copy2(source_decision_log, target_decision_log)
+                self._rewrite_decision_log_attempt(target_decision_log, target_attempt)
+
+        if copy_repair_workspace:
+            source_workspace = source_run_dir / "repair-workspace"
+            target_workspace = target_run_dir / "repair-workspace"
+            if source_workspace.is_dir():
+                shutil.copytree(source_workspace, target_workspace)
+                repair_result_path = target_run_dir / "repair-result.json"
+                if repair_result_path.exists():
+                    self._rewrite_repair_result_workspace_path(
+                        repair_result_path,
+                        workspace_path=str(target_workspace.resolve()),
+                    )
+
+    @staticmethod
+    def _rewrite_review_run_id(path: Path, run_id: str) -> None:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            payload["run_id"] = run_id
+            provenance = payload.get("provenance")
+            if isinstance(provenance, dict):
+                provenance["run_id"] = run_id
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _rewrite_decision_log_attempt(path: Path, attempt: int) -> None:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            payload["attempt"] = attempt
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _rewrite_repair_result_workspace_path(path: Path, workspace_path: str) -> None:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            payload["workspace_path"] = workspace_path
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def load_issue_draft(self, run_id: str) -> IssueDraft:
         """Load the normalized issue handoff artifact for a run."""
