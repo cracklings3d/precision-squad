@@ -1204,13 +1204,14 @@ def test_bootstrap_fails_with_missing_github_token(
     - GITHUB_TOKEN or OpenCode_Github_Token must be set
     - Missing token alone should block bootstrap, regardless of opencode GitHub App status
     """
-    from precision_squad.deploy import BootstrapPrerequisiteError, check_bootstrap_prerequisites
+    from precision_squad.deploy import BootstrapPrerequisiteError, PrerequisiteChecker
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("OpenCode_Github_Token", raising=False)
 
+    checker = PrerequisiteChecker(project_root=tmp_path)
     with pytest.raises(BootstrapPrerequisiteError) as exc_info:
-        check_bootstrap_prerequisites(tmp_path)
+        checker._check_github_credentials()
 
     error_message = str(exc_info.value)
     assert "GitHub credentials" in error_message or "GITHUB_TOKEN" in error_message
