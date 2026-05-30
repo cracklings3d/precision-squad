@@ -1270,3 +1270,164 @@ def test_retry_from_review_impl_succeeds_with_correct_ingress_and_writes_both_ar
         "review impl resume must write post-publish-review-result.json to new attempt"
     )
 
+
+# ---------------------------------------------------------------------------
+# Regression tests for context-pack materialization and repair-workspace carry-forward
+# ---------------------------------------------------------------------------
+
+
+def test_retry_context_pack_materialization(tmp_path: Path) -> None:
+    """Test that resumed attempt contains new run-request.json, preserved issue-intake.json, and regenerated issue.md.
+
+    Regression test for the governing plan (issue #116) which requires:
+    - New retry attempt must materialize a new run-request.json
+    - Preserved issue-intake.json from source attempt
+    - Regenerated issue.md derived from preserved intake
+
+    This tests the create_retry_run() contract in run_store.py.
+    """
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        # Include all artifacts needed for a review plan resume
+    )
+    previous_run_dir = Path(previous.run_dir)
+
+    coordinator = RunCoordinator()
+
+    # Mock dependencies needed for plan review
+    mock_dependencies = MagicMock()
+    mock_dependencies.run_plan_review.return_value = PlanReview(
+        run_id=previous.run_id,
+        issue_ref="owner/repo#1",
+        review_status="approved",
+        summary="Plan looks good",
+        feedback=(),
+        provenance=PlanReviewProvenance(
+            source_artifact="approved-plan.json",
+            run_id=previous.run_id,
+            issue_ref="owner/repo#1",
+        ),
+    )
+
+    report = coordinator.repair_issue(
+        params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="review plan"),
+        intake=_make_intake(),
+        dependencies=mock_dependencies,
+    )
+
+    new_run_dir = Path(report.run_record.run_dir)
+
+    # Verify new run-request.json was created (not copied from source)
+    assert (new_run_dir / "run-request.json").exists(), (
+        "resumed attempt must contain new run-request.json"
+    )
+    run_request = json.loads((new_run_dir / "run-request.json").read_text(encoding="utf-8"))
+    assert run_request["issue_ref"] == "owner/repo#1", (
+        "run-request.json should reflect current invocation"
+    )
+
+    # Verify issue-intake.json was preserved from source
+    assert (new_run_dir / "issue-intake.json").exists(), (
+        "resumed attempt must preserve issue-intake.json from source"
+    )
+    # The preserved intake should match the source's intake
+    source_intake_path = previous_run_dir / "issue-intake.json"
+    new_intake_path = new_run_dir / "issue-intake.json"
+    assert source_intake_path.read_text(encoding="utf-8") == new_intake_path.read_text(
+        encoding="utf-8"
+    ), "issue-intake.json content should be preserved from source"
+
+    # Verify issue.md was regenerated from preserved intake
+    assert (new_run_dir / "issue.md").exists(), (
+        "resumed attempt must contain regenerated issue.md"
+    )
+    issue_md_content = (new_run_dir / "issue.md").read_text(encoding="utf-8")
+    assert "Test issue" in issue_md_content, (
+        "issue.md should contain content derived from preserved intake"
+    )
+
+
+def test_retry_publish_resume_carries_forward_repair_workspace(tmp_path: Path) -> None:
+    """Test that publish resume copies repair-workspace and rewrites repair-result.json.workspace_path.
+
+    Regression test for the governing plan (issue #116) which requires for publish resume:
+    - repair-workspace/repo must be copied into the new attempt
+    - repair-result.json.workspace_path must be rewritten to the new attempt-local repair-workspace path
+
+    This tests the copy_retry_artifacts() contract in run_store.py with copy_repair_workspace=True.
+    """
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        # Include all required artifacts for publish resume
+        include_repair_workspace=True,
+        repair_result_completed=True,
+    )
+    previous_run_dir = Path(previous.run_dir)
+
+    # Verify source has the repair workspace before testing
+    source_workspace = previous_run_dir / "repair-workspace" / "repo"
+    assert source_workspace.exists(), "source run must have repair-workspace/repo"
+
+    coordinator = RunCoordinator()
+
+    # Mock dependencies needed for publish
+    mock_dependencies = MagicMock()
+    mock_dependencies.execute_publish_plan.return_value = PublishResult(
+        status="published",
+        target="draft_pr",
+        summary="Published",
+        url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+    )
+    mock_dependencies.run_impl_review = None
+    # review_impl is called after publish when conditions are met, so we need
+    # run_post_publish_review_if_needed to return a valid ImplReviewResult
+    from precision_squad.models import ImplReviewResult
+    mock_dependencies.run_post_publish_review_if_needed.return_value = ImplReviewResult(
+        review_status="approved",
+        summary="Implementation looks good",
+        pull_request_url="https://github.com/owner/repo/pull/1",
+        pull_number=1,
+        pull_head_sha="abc123",
+    )
+
+    report = coordinator.repair_issue(
+        params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+        intake=_make_intake(),
+        dependencies=mock_dependencies,
+    )
+
+    new_run_dir = Path(report.run_record.run_dir)
+
+    # Verify repair-workspace/repo was copied into the new attempt
+    new_workspace = new_run_dir / "repair-workspace" / "repo"
+    assert new_workspace.exists(), (
+        "publish resume must copy repair-workspace/repo into new attempt"
+    )
+
+    # Verify repair-result.json.workspace_path was rewritten to new attempt-local path
+    repair_result_path = new_run_dir / "repair-result.json"
+    assert repair_result_path.exists(), (
+        "publish resume must have repair-result.json in new attempt"
+    )
+    repair_result = json.loads(repair_result_path.read_text(encoding="utf-8"))
+    workspace_path = repair_result.get("workspace_path")
+    assert workspace_path is not None, "repair-result.json must have workspace_path"
+    # workspace_path must be the repair-workspace ROOT, with repo at workspace_path / "repo"
+    expected_workspace_root = str((new_run_dir / "repair-workspace").resolve())
+    assert workspace_path == expected_workspace_root, (
+        f"repair-result.json.workspace_path must point to new attempt-local repair-workspace root; "
+        f"expected {expected_workspace_root}, got {workspace_path}"
+    )
+    # Also verify that repo lives at workspace_path / "repo"
+    assert new_workspace.exists(), "repo must exist at workspace_path / 'repo'"
+
+    # Verify source repair-workspace is unchanged (no destructive mutation)
+    assert source_workspace.exists(), "source repair-workspace must remain intact"
+
