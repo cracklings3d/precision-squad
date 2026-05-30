@@ -4440,3 +4440,219 @@ class TestLoadApprovedPlanValidation:
         assert tuple(ref.name for ref in plan.named_references) == ("src/main.py",)
         assert plan.retrieval_surface_summary == "src/"
         assert plan.approved is True
+
+
+def test_repair_issue_retry_from_with_from_publish_forwards_resume_target_to_coordinator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test that --from publish is forwarded correctly to the coordinator."""
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    intake_payload = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)), intake_payload
+    )
+    store.write_approved_plan(Path(record.run_dir), ApprovedPlan(
+        issue_ref="owner/repo#1",
+        plan_summary="Plan",
+        implementation_steps=("Step",),
+        named_references=(),
+        retrieval_surface_summary="src/",
+        approved=True,
+    ))
+    monkeypatch.setattr(
+        "precision_squad.cli.load_issue_intake",
+        lambda _: (_ for _ in ()).throw(AssertionError("intake should not run")),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured["resume_from"] = params.resume_from
+        captured["retry_from"] = params.retry_from
+        return RepairIssueReport(
+            intake=intake_payload,
+            run_record=RunRecord(
+                run_id="run-next",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(runs_dir / "run-next"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="done",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
+            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
+            publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+            "--retry-from",
+            record.run_id,
+            "--from",
+            "publish",
+        ]
+    )
+
+    assert status == 0
+    assert captured["retry_from"] == record.run_id
+    assert captured["resume_from"] == "publish"
+
+
+def test_repair_issue_retry_from_with_from_review_impl_forwards_resume_target_to_coordinator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test that --from 'review impl' is forwarded correctly to the coordinator."""
+    runs_dir = tmp_path / "runs"
+    store = RunStore(runs_dir)
+    runs_dir.mkdir(parents=True)
+    intake_payload = IssueIntake(
+        issue=GitHubIssue(
+            reference=IssueReference("owner", "repo", 1),
+            title="Issue",
+            body="Body",
+            labels=(),
+            html_url="https://github.com/owner/repo/issues/1",
+        ),
+        summary="Issue",
+        problem_statement="Body",
+        assessment=IssueAssessment(status="runnable", reason_codes=()),
+    )
+    record = store.create_run(
+        RunRequest(issue_ref="owner/repo#1", runs_dir=str(runs_dir)), intake_payload
+    )
+    store.write_approved_plan(Path(record.run_dir), ApprovedPlan(
+        issue_ref="owner/repo#1",
+        plan_summary="Plan",
+        implementation_steps=("Step",),
+        named_references=(),
+        retrieval_surface_summary="src/",
+        approved=True,
+    ))
+    monkeypatch.setattr(
+        "precision_squad.cli.load_issue_intake",
+        lambda _: (_ for _ in ()).throw(AssertionError("intake should not run")),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_repair_issue(self, *, params, intake, dependencies):
+        del self, dependencies
+        captured["resume_from"] = params.resume_from
+        captured["retry_from"] = params.retry_from
+        return RepairIssueReport(
+            intake=intake_payload,
+            run_record=RunRecord(
+                run_id="run-next",
+                issue_ref="owner/repo#1",
+                status="runnable",
+                created_at="2026-05-01T00:00:00Z",
+                updated_at="2026-05-01T00:00:00Z",
+                run_dir=str(runs_dir / "run-next"),
+            ),
+            execution_result=ExecutionResult(
+                status="completed",
+                executor_name="docs",
+                summary="done",
+                detail_codes=(),
+            ),
+            evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
+            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
+            publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
+        )
+
+    monkeypatch.setattr("precision_squad.cli.RunCoordinator.repair_issue", fake_repair_issue)
+
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(runs_dir),
+            "--retry-from",
+            record.run_id,
+            "--from",
+            "review impl",
+        ]
+    )
+
+    assert status == 0
+    assert captured["retry_from"] == record.run_id
+    assert captured["resume_from"] == "review impl"
+
+
+def test_repair_issue_from_without_retry_from_fails(capsys, tmp_path: Path) -> None:
+    """Test that --from without --retry-from fails with an error."""
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--from",
+            "publish",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "--from requires --retry-from" in captured.err
+
+
+def test_repair_issue_from_with_unsupported_stage_fails(capsys, tmp_path: Path) -> None:
+    """Test that an unsupported --from value fails with a descriptive error."""
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path / "repo"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--retry-from",
+            "some-run-id",
+            "--from",
+            "create issue",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Supported resume stages" in captured.err
