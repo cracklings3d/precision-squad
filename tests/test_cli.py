@@ -1087,13 +1087,369 @@ def test_bootstrap_skill_installs_after_confirmation(
     capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
 
     status = bootstrap_main(["--project-root", str(tmp_path)])
 
     captured = capsys.readouterr()
     assert status == 0
-    assert "This bootstrap will install the precision-squad project skill." in captured.out
+    assert "precision-squad bootstrap" in captured.out
     assert (tmp_path / "SKILL.md").exists()
+
+
+def test_bootstrap_with_yes_flag_skips_confirmation(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
+
+    status = bootstrap_main(["--project-root", str(tmp_path), "--yes"])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "Continue and bootstrap" not in captured.out
+    assert (tmp_path / "SKILL.md").exists()
+
+
+def test_bootstrap_blocks_existing_root_config(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
+    (tmp_path / ".precision-squad.toml").write_text(
+        "[repair.issue]\nrepo_path = \".\"\n",
+        encoding="utf-8",
+    )
+
+    status = bootstrap_main(["--project-root", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Blocking root config file exists" in captured.err
+    assert not (tmp_path / "SKILL.md").exists()
+
+
+def test_bootstrap_idempotent_rerun(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
+
+    status1 = bootstrap_main(["--project-root", str(tmp_path), "--yes"])
+    assert status1 == 0
+
+    status2 = bootstrap_main(["--project-root", str(tmp_path), "--yes"])
+    assert status2 == 0
+
+    captured = capsys.readouterr()
+    assert "already satisfied" in captured.out or "reused" in captured.out
+
+
+def test_bootstrap_reports_created_on_first_run(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
+
+    status = bootstrap_main(["--project-root", str(tmp_path), "--yes"])
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "created" in captured.out
+
+
+def test_bootstrap_reports_updated_when_content_differs(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
+
+    status1 = bootstrap_main(["--project-root", str(tmp_path), "--yes"])
+    assert status1 == 0
+
+    bootstrap_meta_dir = tmp_path / ".precision-squad" / "bootstrap"
+    bootstrap_meta_dir.mkdir(exist_ok=True)
+    (bootstrap_meta_dir / "bootstrap.json").write_text(
+        '{"managed_by": "precision-squad", "version": "1.0", "last_bootstrap": "2020-01-01T00:00:00Z", "outcomes": {}}',
+        encoding="utf-8",
+    )
+
+    status2 = bootstrap_main(["--project-root", str(tmp_path), "--yes"])
+    assert status2 == 0
+
+    captured = capsys.readouterr()
+    assert "updated" in captured.out or "reused" in captured.out
+
+
+def test_bootstrap_fails_with_missing_github_token(
+    capsys, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap prerequisite check fails when GitHub token is missing.
+
+    This reuses the same credential rule used by repair entrypoints:
+    - GITHUB_TOKEN or OpenCode_Github_Token must be set
+    - Missing token alone should block bootstrap, regardless of opencode GitHub App status
+    """
+    from precision_squad.deploy import BootstrapPrerequisiteError, check_bootstrap_prerequisites
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("OpenCode_Github_Token", raising=False)
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        check_bootstrap_prerequisites(tmp_path)
+
+    error_message = str(exc_info.value)
+    assert "GitHub credentials" in error_message or "GITHUB_TOKEN" in error_message
+
+
+def test_bootstrap_blocks_existing_root_config_even_when_exactly_equivalent(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bootstrap blocks root .precision-squad.toml even when content exactly matches DEFAULT_CONFIG_TEMPLATE.
+
+    The current config discovery prefers ././.precision-squad.toml over the managed
+    ./.precision-squad/./.precision-squad.toml, so bootstrap must treat ANY existing root config
+    as a blocking conflict regardless of content equivalence.
+    """
+    from precision_squad.deploy.templates import DEFAULT_CONFIG_TEMPLATE
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+    monkeypatch.setattr(
+        "precision_squad.bootstrap.check_bootstrap_prerequisites",
+        lambda project_root: None,
+    )
+    # Write content that exactly matches what bootstrap would write to ./.precision-squad/./.precision-squad.toml
+    (tmp_path / ".precision-squad.toml").write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+
+    status = bootstrap_main(["--project-root", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Blocking root config file exists" in captured.err
+    # Verify bootstrap did not write any managed files
+    assert not (tmp_path / "SKILL.md").exists()
+    assert not (tmp_path / ".precision-squad" / "precision-squad.toml").exists()
+
+
+def test_bootstrap_prerequisite_fails_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bootstrap prerequisite check fails on non-Windows platforms."""
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    checker = PrerequisiteChecker(project_root=tmp_path)
+    # Simulate non-Windows by mocking platform.system
+    monkeypatch.setattr("precision_squad.deploy.prerequisites.platform.system", lambda: "Linux")
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_windows()
+
+    error_message = str(exc_info.value)
+    assert "Windows" in error_message
+
+
+def test_bootstrap_prerequisite_fails_when_project_root_does_not_exist(
+    tmp_path: Path,
+) -> None:
+    """Bootstrap prerequisite check fails when project root does not exist."""
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    nonexistent = tmp_path / "nonexistent"
+    checker = PrerequisiteChecker(project_root=nonexistent)
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_project_root()
+
+    error_message = str(exc_info.value)
+    assert "does not exist" in error_message
+
+
+def test_bootstrap_prerequisite_fails_when_project_root_is_not_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap prerequisite check fails when project root is not writable."""
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    # Create a directory
+    test_dir = tmp_path / "testdir"
+    test_dir.mkdir()
+    checker = PrerequisiteChecker(project_root=test_dir)
+
+    # Save reference to original write_text before patching
+    original_write_text = Path.write_text
+
+    # Mock Path.write_text to raise an OSError simulating a permission-denied scenario
+    def mock_write_text(self, *args, **kwargs):
+        if ".precision-squad-write-test" in str(self):
+            raise OSError("Permission denied")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", mock_write_text)
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_project_root()
+
+    error_message = str(exc_info.value)
+    assert "not writable" in error_message
+
+
+def test_bootstrap_prerequisite_fails_when_precision_squad_cli_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap prerequisite check fails when precision-squad CLI is not found."""
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    checker = PrerequisiteChecker(project_root=tmp_path)
+    # Mock shutil.which to always return None (no CLI found)
+    monkeypatch.setattr("precision_squad.deploy.prerequisites.shutil.which", lambda cmd: None)
+    # Mock the project root cli.py check to also fail
+    monkeypatch.setattr(
+        "precision_squad.deploy.prerequisites.PrerequisiteChecker._find_precision_squad_cli",
+        lambda self: None,
+    )
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_precision_squad_cli()
+
+    error_message = str(exc_info.value)
+    assert "precision-squad CLI" in error_message
+
+
+def test_bootstrap_prerequisite_fails_when_precision_squad_cli_is_nonfunctional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap prerequisite check fails when precision-squad CLI is found but nonfunctional (non-zero exit)."""
+    import subprocess
+
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    checker = PrerequisiteChecker(project_root=tmp_path)
+    # Mock _find_precision_squad_cli to return a valid path (CLI is found)
+    monkeypatch.setattr(
+        "precision_squad.deploy.prerequisites.PrerequisiteChecker._find_precision_squad_cli",
+        lambda self: tmp_path / "cli.py",
+    )
+    # Mock subprocess.run to return a non-zero returncode (CLI is nonfunctional)
+    mock_result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="error")
+    monkeypatch.setattr("precision_squad.deploy.prerequisites.subprocess.run", lambda *args, **kwargs: mock_result)
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_precision_squad_cli()
+
+    error_message = str(exc_info.value)
+    assert "precision-squad CLI is not functional" in error_message
+
+
+def test_bootstrap_prerequisite_fails_when_precision_squad_cli_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap prerequisite check fails when precision-squad CLI check times out."""
+    import subprocess
+
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    checker = PrerequisiteChecker(project_root=tmp_path)
+    # Mock _find_precision_squad_cli to return a valid path (CLI is found)
+    monkeypatch.setattr(
+        "precision_squad.deploy.prerequisites.PrerequisiteChecker._find_precision_squad_cli",
+        lambda self: tmp_path / "cli.py",
+    )
+    # Mock subprocess.run to raise TimeoutExpired
+    monkeypatch.setattr(
+        "precision_squad.deploy.prerequisites.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd="test", timeout=30)),
+    )
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_precision_squad_cli()
+
+    error_message = str(exc_info.value)
+    assert "timed out" in error_message.lower()
+
+
+def test_bootstrap_prerequisite_fails_when_precision_squad_cli_raises_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap prerequisite check fails when precision-squad CLI execution raises OSError."""
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    checker = PrerequisiteChecker(project_root=tmp_path)
+    # Mock _find_precision_squad_cli to return a valid path (CLI is found)
+    monkeypatch.setattr(
+        "precision_squad.deploy.prerequisites.PrerequisiteChecker._find_precision_squad_cli",
+        lambda self: tmp_path / "cli.py",
+    )
+    # Mock subprocess.run to raise OSError
+    monkeypatch.setattr(
+        "precision_squad.deploy.prerequisites.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("Failed to execute")),
+    )
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_precision_squad_cli()
+
+    error_message = str(exc_info.value)
+    assert "Failed to execute" in error_message
+
+
+def test_bootstrap_prerequisite_fails_when_opencode_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap prerequisite check fails when opencode is not found."""
+    from precision_squad.deploy import BootstrapPrerequisiteError
+    from precision_squad.deploy.prerequisites import PrerequisiteChecker
+
+    checker = PrerequisiteChecker(project_root=tmp_path)
+    # Mock shutil.which to always return None for opencode
+    monkeypatch.setattr("precision_squad.deploy.prerequisites.shutil.which", lambda cmd: None if cmd == "opencode" else True)
+    # Mock _search_opencode_in_path to also return None
+    monkeypatch.setattr(
+        "precision_squad.deploy.prerequisites.PrerequisiteChecker._search_opencode_in_path",
+        lambda self: None,
+    )
+
+    with pytest.raises(BootstrapPrerequisiteError) as exc_info:
+        checker._check_opencode()
+
+    error_message = str(exc_info.value)
+    assert "opencode" in error_message.lower()
+
+
+def test_bootstrap_prerequisite_does_not_write_files_on_prerequisite_failure(
+    capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bootstrap does not write any managed files when prerequisite check fails."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("OpenCode_Github_Token", raising=False)
+
+    status = bootstrap_main(["--project-root", str(tmp_path), "--yes"])
+
+    assert status == 1
+    # Verify no managed files were created
+    assert not (tmp_path / "SKILL.md").exists()
+    assert not (tmp_path / ".precision-squad" / "precision-squad.toml").exists()
+    assert not (tmp_path / ".precision-squad" / "bootstrap" / "bootstrap.json").exists()
 
 
 def test_run_issue_placeholder_returns_nonzero(

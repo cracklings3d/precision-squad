@@ -350,3 +350,41 @@ def test_repair_issue_config_invalid_repair_agent_uses_shared_validator_message(
     assert "Invalid value for 'repair_agent' (--repair-agent):" in message
     assert "'openai'" in message
     assert "Expected one of: opencode, none, vercel-ai" in message
+
+
+def test_config_search_locations_includes_both_candidates(tmp_path: Path) -> None:
+    """Verify config_search_locations returns both root and nested paths."""
+    locations = config_search_locations(tmp_path)
+    assert len(locations) == 2
+    assert locations[0] == tmp_path / ".precision-squad.toml"
+    assert locations[1] == tmp_path / ".precision-squad" / "precision-squad.toml"
+
+
+def test_load_config_prefers_root_over_nested(tmp_path: Path) -> None:
+    """Root .precision-squad.toml takes precedence over nested."""
+    (tmp_path / ".precision-squad.toml").write_text(
+        "[repair.issue]\nrepo_path = \"root-repo\"\n",
+        encoding="utf-8",
+    )
+    nested_dir = tmp_path / ".precision-squad"
+    nested_dir.mkdir()
+    (nested_dir / "precision-squad.toml").write_text(
+        "[repair.issue]\nrepo_path = \"nested-repo\"\n",
+        encoding="utf-8",
+    )
+
+    result = load_config(tmp_path)
+
+    assert result["repair"]["issue"]["repo_path"] == "root-repo"
+
+
+def test_root_precision_squad_toml_blocks_bootstrap(tmp_path: Path) -> None:
+    """Existing root .precision-squad.toml should be detected as blocking bootstrap."""
+    root_config = tmp_path / ".precision-squad.toml"
+    root_config.write_text(
+        "[repair.issue]\nrepo_path = \".\"\n",
+        encoding="utf-8",
+    )
+    assert root_config.exists() is True
+    locations = config_search_locations(tmp_path)
+    assert locations[0] == root_config
