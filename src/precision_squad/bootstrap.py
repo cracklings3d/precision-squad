@@ -30,11 +30,6 @@ def build_bootstrap_parser() -> argparse.ArgumentParser:
         help="Project root where SKILL.md and .precision-squad/ should be written.",
     )
     parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite existing unmanaged SKILL.md if it differs from the managed template.",
-    )
-    parser.add_argument(
         "--yes",
         action="store_true",
         help="Skip the confirmation prompt.",
@@ -102,7 +97,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     try:
-        outcomes = write_managed_surface(project_root, force=args.force)
+        outcomes = write_managed_surface(project_root)
         save_bootstrap_metadata(project_root, outcomes)
     except ManagedFileConflict as exc:
         print(str(exc), file=sys.stderr)

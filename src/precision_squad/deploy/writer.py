@@ -76,14 +76,11 @@ def _load_existing_config(path: Path) -> str | None:
 
 def write_managed_surface(
     project_root: Path,
-    *,
-    force: bool = False,
 ) -> dict[str, WriteOutcome]:
     """Write the complete bootstrap managed surface idempotently.
 
     Args:
         project_root: The project root directory.
-        force: If True, overwrite existing unmanaged files that differ.
 
     Returns:
         A dictionary mapping file paths to their write outcomes.
@@ -111,7 +108,31 @@ def write_managed_surface(
             ),
         )
 
-    skill_outcome = _write_skill_file(skill_path, force)
+    # Check for unmanaged config before writing any files
+    if config_path.exists():
+        existing_config = _load_existing_config(config_path)
+        if existing_config is not None and not _is_bootstrap_managed(config_path, existing_config):
+            raise ManagedFileConflict(
+                path=config_path,
+                message=(
+                    f"Existing unmanaged config at {config_path} is not managed by bootstrap. "
+                    "Remove or rename it before running bootstrap."
+                ),
+            )
+
+    # Check for unmanaged SKILL.md before writing any files
+    if skill_path.exists():
+        existing_skill = skill_path.read_text(encoding="utf-8")
+        if not _is_bootstrap_managed(skill_path, existing_skill):
+            raise ManagedFileConflict(
+                path=skill_path,
+                message=(
+                    "Existing unmanaged SKILL.md is not managed by bootstrap. "
+                    "Manually remove the existing file before running bootstrap."
+                ),
+            )
+
+    skill_outcome = _write_skill_file(skill_path)
     results[str(skill_path)] = _WriteResult(path=skill_path, outcome=skill_outcome)
 
     config_dir.mkdir(exist_ok=True)
@@ -125,25 +146,16 @@ def write_managed_surface(
     return {path: result.outcome for path, result in results.items()}
 
 
-def _write_skill_file(skill_path: Path, force: bool) -> WriteOutcome:
-    """Write the SKILL.md file idempotently."""
+def _write_skill_file(skill_path: Path) -> WriteOutcome:
+    """Write the SKILL.md file idempotently.
+
+    Assumes: No unmanaged SKILL.md exists (caller validates this).
+    """
     if skill_path.exists():
         existing = skill_path.read_text(encoding="utf-8")
         if existing == SKILL_TEMPLATE:
             return WriteOutcome.ALREADY_SATISFIED
-        if _is_bootstrap_managed(skill_path, existing):
-            if existing != SKILL_TEMPLATE:
-                skill_path.write_text(SKILL_TEMPLATE, encoding="utf-8")
-                return WriteOutcome.UPDATED
-            return WriteOutcome.REUSED
-        if not force:
-            raise ManagedFileConflict(
-                path=skill_path,
-                message=(
-                    "Existing SKILL.md is not managed by bootstrap. "
-                    "Use --force to overwrite, or manually remove the existing file."
-                ),
-            )
+        # File exists, is managed by bootstrap, and content differs
         skill_path.write_text(SKILL_TEMPLATE, encoding="utf-8")
         return WriteOutcome.UPDATED
 
@@ -152,7 +164,10 @@ def _write_skill_file(skill_path: Path, force: bool) -> WriteOutcome:
 
 
 def _write_config_file(config_path: Path) -> WriteOutcome:
-    """Write the precision-squad.toml config file idempotently."""
+    """Write the precision-squad.toml config file idempotently.
+
+    Assumes: No unmanaged config file exists (caller validates this).
+    """
     existing = _load_existing_config(config_path)
     if existing is None:
         config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
@@ -161,23 +176,9 @@ def _write_config_file(config_path: Path) -> WriteOutcome:
     if existing == DEFAULT_CONFIG_TEMPLATE:
         return WriteOutcome.ALREADY_SATISFIED
 
-    if _is_bootstrap_managed(config_path, existing):
-        if existing != DEFAULT_CONFIG_TEMPLATE:
-            config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
-            return WriteOutcome.UPDATED
-        return WriteOutcome.REUSED
-
-    if existing.strip() == "":
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
-        return WriteOutcome.CREATED
-
-    raise ManagedFileConflict(
-        path=config_path,
-        message=(
-            f"Existing config at {config_path} is not managed by bootstrap. "
-            "Remove or rename it before running bootstrap."
-        ),
-    )
+    # File exists and is managed by bootstrap, content differs
+    config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+    return WriteOutcome.UPDATED
 
 
 def _write_bootstrap_metadata(meta_path: Path) -> WriteOutcome:
