@@ -23,6 +23,7 @@ from .coordinator import (
     PersistApprovedPlanParams,
     PublishRunParams,
     RepairIssueParams,
+    RetryResumeStage,
     ReviewImplParams,
     ReviewIssueParams,
     ReviewPlanParams,
@@ -71,6 +72,14 @@ _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
 
 _REPAIR_AGENT_CHOICES = ("opencode", "none", "vercel-ai")
 _DISPLAYED_REPAIR_AGENT_CHOICES = ("opencode", "none")
+_RETRY_RESUME_STAGES: tuple[RetryResumeStage, ...] = (
+    "review issue",
+    "plan",
+    "review plan",
+    "implement",
+    "publish",
+    "review impl",
+)
 
 
 class _StoreOnceAction(argparse.Action):
@@ -181,6 +190,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to an approved-plan.json file. Supported as a compatibility ingress; retries "
             "may omit it to carry forward the prior run's approved-plan.json."
+        ),
+    )
+    issue_parser.add_argument(
+        "--from",
+        dest="resume_from",
+        choices=_RETRY_RESUME_STAGES,
+        default=argparse.SUPPRESS,
+        help=(
+            "Resume a retry from one later stage. Supported only with --retry-from. "
+            "Choices: review issue, plan, review plan, implement, publish, review impl."
         ),
     )
     issue_parser.add_argument(
@@ -367,6 +386,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
             review_model=args.review_model,
             review_stages=cast(ReviewStagesOverride | None, getattr(args, "review_stages", None)),
             retry_from=retry_from,
+            resume_from=cast(RetryResumeStage | None, getattr(args, "resume_from", None)),
             approved_plan=approved_plan,
         ),
         intake=intake,
@@ -1200,6 +1220,20 @@ def _validate_repair_issue_args(args: dict[str, Any]) -> None:
     _normalize_optional_path_arg(args, "approved_plan_path")
     _normalize_optional_str_arg(args, "repair_model")
     _normalize_optional_str_arg(args, "review_model")
+    _normalize_optional_str_arg(args, "resume_from")
+    resume_from = args.get("resume_from")
+    retry_from = args.get("retry_from")
+    if resume_from is not None:
+        if retry_from is None:
+            raise ValueError(
+                "--from requires --retry-from. Supported resume stages: "
+                + ", ".join(_RETRY_RESUME_STAGES)
+            )
+        if resume_from not in _RETRY_RESUME_STAGES:
+            raise ValueError(
+                "Unsupported retry resume stage. Supported resume stages: "
+                + ", ".join(_RETRY_RESUME_STAGES)
+            )
 
 
 def _validate_publish_run_args(args: dict[str, Any]) -> None:
@@ -1303,6 +1337,7 @@ _COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigS
                 "repair_model",
                 "review_model",
                 "approved_plan_path",
+                "resume_from",
             }
         ),
         defaults={
@@ -1312,6 +1347,7 @@ _COMMAND_CONFIG_SPECS: dict[Callable[[argparse.Namespace], int], _CommandConfigS
             "repair_model": None,
             "review_model": None,
             "retry_from": None,
+            "resume_from": None,
             "fresh": False,
             "approved_plan_path": None,
         },

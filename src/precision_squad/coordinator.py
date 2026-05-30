@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Callable, Literal, Protocol, cast
+from typing import Any, Callable, Literal, Protocol, cast
 
 from .executor import DocsFirstExecutor
 from .governance import apply_governance, evaluate_run
@@ -178,6 +178,31 @@ class PublishDependencies(Protocol):
 
 
 ReviewStagesOverride = Literal["plan", "all"]
+RetryResumeStage = Literal[
+    "review issue",
+    "plan",
+    "review plan",
+    "implement",
+    "publish",
+    "review impl",
+]
+
+_RETRY_RESUME_STAGES: tuple[RetryResumeStage, ...] = (
+    "review issue",
+    "plan",
+    "review plan",
+    "implement",
+    "publish",
+    "review impl",
+)
+_RETRY_STAGE_ORDER: dict[RetryResumeStage, int] = {
+    "review issue": 0,
+    "plan": 1,
+    "review plan": 2,
+    "implement": 3,
+    "publish": 4,
+    "review impl": 5,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,7 +216,32 @@ class RepairIssueParams:
     review_model: str | None
     review_stages: ReviewStagesOverride | None = None
     retry_from: str | None = None
+    resume_from: RetryResumeStage | None = None
     approved_plan: ApprovedPlan | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _RetryResumeContext:
+    previous_record: RunRecord
+    previous_run_dir: Path
+    source_intake: IssueIntake
+    resume_from: RetryResumeStage
+    plan_ingress: ApprovedPlan | None
+
+
+@dataclass(frozen=True, slots=True)
+class _RetryStageState:
+    issue_review: IssueReview | None = None
+    plan_review: PlanReview | None = None
+    execution_result: ExecutionResult | None = None
+    evaluation_result: EvaluationResult | None = None
+    governance_verdict: GovernanceVerdict | None = None
+    publish_plan: PublishPlan | None = None
+    publish_result: PublishResult | None = None
+    repair_result: RepairResult | None = None
+    baseline_qa_result: QaResult | None = None
+    qa_result: QaResult | None = None
+    post_publish_review_result: PostPublishReviewResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,9 +483,9 @@ class RunCoordinator:
     ) -> RepairIssueReport:
         store = RunStore(params.runs_dir)
 
-        # Handle retry logic
         attempt = 1
         previous_run_dir: Path | None = None
+        resume_context: _RetryResumeContext | None = None
         if params.retry_from is not None:
             try:
                 previous_record = store.load_run(params.retry_from)
@@ -445,27 +495,39 @@ class RunCoordinator:
                 previous_run_dir = Path(previous_record.run_dir).resolve()
             except ValueError:
                 return _blocked_retry_report(intake=intake, issue_ref=params.issue_ref)
+            if params.resume_from is not None:
+                resume_context = _prepare_retry_resume_context(
+                    store=store,
+                    params=params,
+                    previous_record=previous_record,
+                )
 
         effective_approved_plan = params.approved_plan
-        if effective_approved_plan is None and previous_run_dir is not None:
+        if resume_context is not None and resume_context.resume_from == "plan":
+            effective_approved_plan = resume_context.plan_ingress
+        elif (
+            effective_approved_plan is None
+            and previous_run_dir is not None
+            and (resume_context is None or resume_context.resume_from != "review issue")
+        ):
+            require_prior_plan = True
             try:
                 effective_approved_plan = RunStore.load_approved_plan(
                     previous_run_dir,
                     issue_ref=params.issue_ref,
                 )
             except ApprovedPlanNotFoundError:
-                raise ValueError(
-                    "Retry requires a prior approved-plan.json when "
-                    "--approved-plan-path is omitted; "
-                    f"missing prior approved-plan.json in {previous_run_dir}."
-                )
+                if require_prior_plan:
+                    raise ValueError(
+                        "Retry requires a prior approved-plan.json when "
+                        "--approved-plan-path is omitted; "
+                        f"missing prior approved-plan.json in {previous_run_dir}."
+                    )
             except ApprovedPlanValidationError as exc:
                 raise ValueError(
                     "Retry carry-forward failed because the prior approved-plan.json failed "
                     f"structural validation: {exc}"
                 ) from exc
-            except ValueError:
-                return _blocked_retry_report(intake=intake, issue_ref=params.issue_ref)
 
         request = RunRequest(issue_ref=params.issue_ref, runs_dir=str(params.runs_dir))
 
@@ -481,20 +543,35 @@ class RunCoordinator:
                 params=params,
             )
 
-        create_report = self.create_issue(
-            params=CreateIssueParams(
-                issue_ref=params.issue_ref,
-                runs_dir=params.runs_dir,
-            ),
-            intake=intake,
-        )
-        record = create_report.run_record
-        run_dir = Path(record.run_dir).resolve()
-
-        # Update attempt counter if retrying
-        if attempt > 1:
-            record = record.with_attempt(attempt)
-            store.write_run_record(record)
+        if resume_context is None:
+            create_report = self.create_issue(
+                params=CreateIssueParams(
+                    issue_ref=params.issue_ref,
+                    runs_dir=params.runs_dir,
+                ),
+                intake=intake,
+            )
+            record = create_report.run_record
+            run_dir = Path(record.run_dir).resolve()
+            if attempt > 1:
+                record = record.with_attempt(attempt)
+                store.write_run_record(record)
+        else:
+            record = store.create_retry_run(
+                request,
+                source_run_dir=resume_context.previous_run_dir,
+                preserved_intake=resume_context.source_intake,
+                attempt=attempt,
+            )
+            run_dir = Path(record.run_dir).resolve()
+            intake = resume_context.source_intake
+            _materialize_retry_history(
+                store=store,
+                resume_context=resume_context,
+                run_dir=run_dir,
+                run_id=record.run_id,
+                attempt=attempt,
+            )
 
         # Handle blocked intake: apply governance and publish directly without review stages
         if intake.assessment.status == "blocked":
@@ -516,189 +593,261 @@ class RunCoordinator:
                 publish_result=publish_result,
                 exit_code=3,
             )
-
-        issue_review_report = self.review_issue(
-            params=ReviewIssueParams(
-                run_id=record.run_id,
-                runs_dir=params.runs_dir,
-            )
-        )
-        if issue_review_report.exit_code != 0:
-            return RepairIssueReport(
-                intake=intake,
-                run_record=record,
-                issue_review=issue_review_report.issue_review,
-                exit_code=issue_review_report.exit_code,
-            )
-
-        compatibility_approved_plan = _build_compatibility_approved_plan(
+        stage_state = self._resume_or_run_repair_chain(
             store=store,
+            params=params,
+            intake=intake,
             record=record,
+            run_dir=run_dir,
             attempt=attempt,
-            previous_run_dir=previous_run_dir,
             effective_approved_plan=effective_approved_plan,
-            review_stages=params.review_stages,
-            retry_from=params.retry_from,
-        )
-
-        # Persist the approved plan only if provided or synthesized for compatibility.
-        approved_plan_to_persist = effective_approved_plan or compatibility_approved_plan
-        if approved_plan_to_persist is not None:
-            self.persist_approved_plan_for_planning(
-                params=PersistApprovedPlanParams(
-                    run_id=record.run_id,
-                    runs_dir=params.runs_dir,
-                    approved_plan=approved_plan_to_persist,
-                )
-            )
-        plan_review_report = self.review_plan(
-            params=ReviewPlanParams(
-                run_id=record.run_id,
-                runs_dir=params.runs_dir,
-            )
-        )
-        if plan_review_report.exit_code != 0:
-            return RepairIssueReport(
-                intake=intake,
-                run_record=record,
-                issue_review=issue_review_report.issue_review,
-                plan_review=plan_review_report.plan_review,
-                exit_code=plan_review_report.exit_code,
-            )
-
-        implementation_report = self.implement_run(
-            params=ImplementRunParams(
-                run_id=record.run_id,
-                runs_dir=params.runs_dir,
-                repo_path=params.repo_path,
-                repair_agent=params.repair_agent,
-                repair_model=params.repair_model,
-            ),
+            previous_run_dir=previous_run_dir,
+            resume_context=resume_context,
             dependencies=dependencies,
         )
-        if implementation_report.governance_verdict.status != "approved":
-            return RepairIssueReport(
-                intake=intake,
-                run_record=record,
-                issue_review=issue_review_report.issue_review,
-                plan_review=plan_review_report.plan_review,
+
+        return RepairIssueReport(
+            intake=intake,
+            run_record=record,
+            issue_review=stage_state.issue_review,
+            plan_review=stage_state.plan_review,
+            execution_result=stage_state.execution_result,
+            evaluation_result=stage_state.evaluation_result,
+            governance_verdict=stage_state.governance_verdict,
+            publish_plan=stage_state.publish_plan,
+            publish_result=stage_state.publish_result,
+            repair_result=stage_state.repair_result,
+            baseline_qa_result=stage_state.baseline_qa_result,
+            qa_result=stage_state.qa_result,
+            post_publish_review_result=stage_state.post_publish_review_result,
+            exit_code=_resume_state_exit_code(stage_state),
+        )
+
+    def _resume_or_run_repair_chain(
+        self,
+        *,
+        store: RunStore,
+        params: RepairIssueParams,
+        intake: IssueIntake,
+        record: RunRecord,
+        run_dir: Path,
+        attempt: int,
+        effective_approved_plan: ApprovedPlan | None,
+        previous_run_dir: Path | None,
+        resume_context: _RetryResumeContext | None,
+        dependencies: RepairDependencies,
+    ) -> _RetryStageState:
+        state = _RetryStageState()
+        resume_from = resume_context.resume_from if resume_context is not None else None
+
+        if resume_from in {None, "review issue"}:
+            issue_review_report = self.review_issue(
+                params=ReviewIssueParams(run_id=record.run_id, runs_dir=params.runs_dir)
+            )
+            state = _replace_retry_state(state, issue_review=issue_review_report.issue_review)
+            if issue_review_report.exit_code != 0:
+                return state
+        else:
+            state = _replace_retry_state(
+                state,
+                issue_review=RunStore.load_issue_review(
+                    run_dir,
+                    issue_ref=record.issue_ref,
+                    expected_run_id=record.run_id,
+                ),
+            )
+
+        if resume_from is None or _RETRY_STAGE_ORDER[resume_from] <= _RETRY_STAGE_ORDER["plan"]:
+            planning_ingress_plan = effective_approved_plan
+            if resume_from == "review issue" and params.approved_plan is None:
+                planning_ingress_plan = None
+            if planning_ingress_plan is not None:
+                self.persist_approved_plan_for_planning(
+                    params=PersistApprovedPlanParams(
+                        run_id=record.run_id,
+                        runs_dir=params.runs_dir,
+                        approved_plan=planning_ingress_plan,
+                    )
+                )
+        plan_review_report: ReviewPlanReport | None = None
+        if (
+            resume_from is None
+            or _RETRY_STAGE_ORDER[resume_from] <= _RETRY_STAGE_ORDER["review plan"]
+        ):
+            plan_review_report = self.review_plan(
+                params=ReviewPlanParams(run_id=record.run_id, runs_dir=params.runs_dir)
+            )
+            state = _replace_retry_state(state, plan_review=plan_review_report.plan_review)
+            if plan_review_report.exit_code != 0:
+                return state
+        else:
+            state = _replace_retry_state(
+                state,
+                plan_review=RunStore.load_plan_review(
+                    run_dir,
+                    issue_ref=record.issue_ref,
+                    expected_run_id=record.run_id,
+                ),
+            )
+
+        if (
+            resume_from is None
+            or _RETRY_STAGE_ORDER[resume_from] <= _RETRY_STAGE_ORDER["implement"]
+        ):
+            implementation_report = self.implement_run(
+                params=ImplementRunParams(
+                    run_id=record.run_id,
+                    runs_dir=params.runs_dir,
+                    repo_path=params.repo_path,
+                    repair_agent=params.repair_agent,
+                    repair_model=params.repair_model,
+                ),
+                dependencies=dependencies,
+            )
+            state = _replace_retry_state(
+                state,
                 execution_result=implementation_report.execution_result,
                 evaluation_result=implementation_report.evaluation_result,
                 governance_verdict=implementation_report.governance_verdict,
                 repair_result=implementation_report.repair_result,
                 baseline_qa_result=implementation_report.baseline_qa_result,
                 qa_result=implementation_report.qa_result,
-                exit_code=implementation_report.exit_code,
-            )
-
-        try:
-            publish_plan = build_publish_plan(
-                intake,
-                record,
-                implementation_report.governance_verdict,
-                implementation_report.repair_result,
-            )
-        except RequiredDecisionLogArtifactMissingError as exc:
-            execution_result = ExecutionResult(
-                status="failed_infra",
-                executor_name=implementation_report.execution_result.executor_name,
-                summary=str(exc),
-                detail_codes=tuple(
-                    dict.fromkeys(
-                        (
-                            *implementation_report.execution_result.detail_codes,
-                            "missing_decision_log_artifact",
-                        )
-                    )
-                ),
-                artifact_dir=implementation_report.execution_result.artifact_dir,
-                stdout_path=implementation_report.execution_result.stdout_path,
-                stderr_path=implementation_report.execution_result.stderr_path,
-                quality=implementation_report.execution_result.quality,
-            )
-            implementation_report = self._evaluate_and_persist_local(
-                store=store,
-                intake=intake,
-                record=record,
-                run_dir=run_dir,
-                execution_result=execution_result,
-                repair_result=None,
-                baseline_qa_result=implementation_report.baseline_qa_result,
-                qa_result=implementation_report.qa_result,
             )
             if implementation_report.governance_verdict.status != "approved":
-                return RepairIssueReport(
+                return state
+        elif resume_from != "review impl":
+            preserved_stage = _load_preserved_implement_stage(run_dir, record=record, intake=intake)
+            state = _replace_retry_state(
+                state,
+                execution_result=preserved_stage.execution_result,
+                evaluation_result=preserved_stage.evaluation_result,
+                governance_verdict=preserved_stage.governance_verdict,
+                repair_result=preserved_stage.repair_result,
+                baseline_qa_result=preserved_stage.baseline_qa_result,
+                qa_result=preserved_stage.qa_result,
+            )
+
+        if resume_from is None or _RETRY_STAGE_ORDER[resume_from] <= _RETRY_STAGE_ORDER["publish"]:
+            implementation_report = ImplementRunReport(
+                intake=intake,
+                run_record=record,
+                execution_result=cast(ExecutionResult, state.execution_result),
+                evaluation_result=cast(EvaluationResult, state.evaluation_result),
+                governance_verdict=cast(GovernanceVerdict, state.governance_verdict),
+                repair_result=state.repair_result,
+                baseline_qa_result=state.baseline_qa_result,
+                qa_result=state.qa_result,
+                exit_code=0,
+            )
+            try:
+                publish_plan = build_publish_plan(
+                    intake,
+                    record,
+                    implementation_report.governance_verdict,
+                    implementation_report.repair_result,
+                )
+            except RequiredDecisionLogArtifactMissingError as exc:
+                execution_result = ExecutionResult(
+                    status="failed_infra",
+                    executor_name=implementation_report.execution_result.executor_name,
+                    summary=str(exc),
+                    detail_codes=tuple(
+                        dict.fromkeys(
+                            (
+                                *implementation_report.execution_result.detail_codes,
+                                "missing_decision_log_artifact",
+                            )
+                        )
+                    ),
+                    artifact_dir=implementation_report.execution_result.artifact_dir,
+                    stdout_path=implementation_report.execution_result.stdout_path,
+                    stderr_path=implementation_report.execution_result.stderr_path,
+                    quality=implementation_report.execution_result.quality,
+                )
+                implementation_report = self._evaluate_and_persist_local(
+                    store=store,
                     intake=intake,
-                    run_record=record,
-                    issue_review=issue_review_report.issue_review,
-                    plan_review=plan_review_report.plan_review,
+                    record=record,
+                    run_dir=run_dir,
+                    execution_result=execution_result,
+                    repair_result=None,
+                    baseline_qa_result=implementation_report.baseline_qa_result,
+                    qa_result=implementation_report.qa_result,
+                )
+                state = _replace_retry_state(
+                    state,
                     execution_result=implementation_report.execution_result,
                     evaluation_result=implementation_report.evaluation_result,
                     governance_verdict=implementation_report.governance_verdict,
                     repair_result=implementation_report.repair_result,
                     baseline_qa_result=implementation_report.baseline_qa_result,
                     qa_result=implementation_report.qa_result,
-                    exit_code=implementation_report.exit_code,
                 )
-            publish_plan = build_publish_plan(
-                intake,
-                record,
-                implementation_report.governance_verdict,
-                implementation_report.repair_result,
-            )
-        store.write_publish_plan(run_dir, publish_plan)
-        publish_report = self.publish_run(
-            params=PublishRunParams(
-                run_id=record.run_id,
-                runs_dir=params.runs_dir,
-                review_model=params.review_model,
-                publish=params.publish,
-                run_post_publish_review=False,
-            ),
-            intake=intake,
-            run_record=record,
-            publish_plan=publish_plan,
-            existing_result=None,
-            existing_review_result=None,
-            dependencies=dependencies,
-        )
-
-        post_publish_review_result: PostPublishReviewResult | None = None
-        exit_code = implementation_report.exit_code
-        if (
-            publish_report.publish_result.status == "published"
-            and publish_report.publish_result.target == "draft_pr"
-            and publish_report.publish_result.url
-        ):
-            review_impl_report = self.review_impl(
-                params=ReviewImplParams(
+                if implementation_report.governance_verdict.status != "approved":
+                    return state
+                publish_plan = build_publish_plan(
+                    intake,
+                    record,
+                    implementation_report.governance_verdict,
+                    implementation_report.repair_result,
+                )
+            store.write_publish_plan(run_dir, publish_plan)
+            publish_report = self.publish_run(
+                params=PublishRunParams(
                     run_id=record.run_id,
                     runs_dir=params.runs_dir,
                     review_model=params.review_model,
+                    publish=params.publish,
+                    run_post_publish_review=False,
                 ),
+                intake=intake,
+                run_record=record,
+                publish_plan=publish_plan,
+                existing_result=None,
+                existing_review_result=None,
                 dependencies=dependencies,
             )
-            post_publish_review_result = mirror_impl_review_to_post_publish(
-                review_impl_report.impl_review
+            state = _replace_retry_state(
+                state,
+                publish_plan=publish_plan,
+                publish_result=publish_report.publish_result,
             )
-            exit_code = review_impl_report.exit_code
+        else:
+            state = _replace_retry_state(
+                state,
+                publish_plan=_load_publish_plan_artifact(run_dir),
+                publish_result=_load_publish_result_artifact(run_dir),
+            )
 
-        return RepairIssueReport(
-            intake=intake,
-            run_record=record,
-            issue_review=issue_review_report.issue_review,
-            plan_review=plan_review_report.plan_review,
-            execution_result=implementation_report.execution_result,
-            evaluation_result=implementation_report.evaluation_result,
-            governance_verdict=implementation_report.governance_verdict,
-            publish_plan=publish_plan,
-            publish_result=publish_report.publish_result,
-            repair_result=implementation_report.repair_result,
-            baseline_qa_result=implementation_report.baseline_qa_result,
-            qa_result=implementation_report.qa_result,
-            post_publish_review_result=post_publish_review_result,
-            exit_code=exit_code,
-        )
+        if (
+            resume_from is None
+            or _RETRY_STAGE_ORDER[resume_from] <= _RETRY_STAGE_ORDER["review impl"]
+        ):
+            post_publish_review_result: PostPublishReviewResult | None = None
+            review_impl_should_run = (
+                state.publish_result is not None
+                and state.publish_result.status == "published"
+                and state.publish_result.target == "draft_pr"
+                and state.publish_result.url is not None
+            )
+            if review_impl_should_run:
+                review_impl_report = self.review_impl(
+                    params=ReviewImplParams(
+                        run_id=record.run_id,
+                        runs_dir=params.runs_dir,
+                        review_model=params.review_model,
+                    ),
+                    dependencies=dependencies,
+                )
+                post_publish_review_result = mirror_impl_review_to_post_publish(
+                    review_impl_report.impl_review
+                )
+            state = _replace_retry_state(
+                state,
+                post_publish_review_result=post_publish_review_result,
+            )
+
+        return state
 
     def _run_local_implementation_flow(
         self,
@@ -1206,6 +1355,409 @@ class RunCoordinator:
             publish_result=result,
             post_publish_review_result=review_result,
         )
+
+
+def _replace_retry_state(state: _RetryStageState, /, **changes: Any) -> _RetryStageState:
+    return replace(state, **changes)
+
+
+def _resume_state_exit_code(state: _RetryStageState) -> int:
+    if state.post_publish_review_result is not None:
+        if state.post_publish_review_result.status == "approved":
+            return 0
+        if state.post_publish_review_result.status == "rejected":
+            return 2
+        return 3
+    if state.governance_verdict is not None and state.governance_verdict.status == "blocked":
+        return 4
+    if state.plan_review is not None:
+        if state.plan_review.review_status == "changes_requested":
+            return 2
+        if state.plan_review.review_status == "blocked":
+            return 3
+    if state.issue_review is not None:
+        if state.issue_review.review_status == "changes_requested":
+            return 2
+        if state.issue_review.review_status == "blocked":
+            return 3
+    return 0
+
+
+def _prepare_retry_resume_context(
+    *,
+    store: RunStore,
+    params: RepairIssueParams,
+    previous_record: RunRecord,
+) -> _RetryResumeContext:
+    if params.resume_from is None:
+        raise ValueError("Retry resume context requires an explicit resume stage.")
+    previous_run_dir = Path(previous_record.run_dir).resolve()
+    source_intake = _load_issue_intake_artifact(
+        previous_run_dir,
+        expected_issue_ref=previous_record.issue_ref,
+    )
+    plan_ingress: ApprovedPlan | None = None
+    if params.resume_from == "plan":
+        if params.approved_plan is not None:
+            plan_ingress = params.approved_plan
+        else:
+            try:
+                plan_ingress = RunStore.load_approved_plan(
+                    previous_run_dir,
+                    issue_ref=params.issue_ref,
+                )
+            except ApprovedPlanNotFoundError:
+                raise ValueError(
+                    "Retry requires a prior approved-plan.json when --approved-plan-path is "
+                    f"omitted; missing prior approved-plan.json in {previous_run_dir}."
+                )
+            except ApprovedPlanValidationError as exc:
+                raise ValueError(
+                    "Retry carry-forward failed because the prior approved-plan.json failed "
+                    f"structural validation: {exc}"
+                ) from exc
+
+    _validate_resume_prerequisites(
+        previous_run_dir=previous_run_dir,
+        previous_record=previous_record,
+        issue_ref=params.issue_ref,
+        resume_from=params.resume_from,
+    )
+    return _RetryResumeContext(
+        previous_record=previous_record,
+        previous_run_dir=previous_run_dir,
+        source_intake=source_intake,
+        resume_from=params.resume_from,
+        plan_ingress=plan_ingress,
+    )
+
+
+def _validate_resume_prerequisites(
+    *,
+    previous_run_dir: Path,
+    previous_record: RunRecord,
+    issue_ref: str,
+    resume_from: RetryResumeStage,
+) -> None:
+    def _require_approved_issue_review_for_resume(stage_name: str) -> IssueReview:
+        try:
+            review = RunStore.load_issue_review(
+                previous_run_dir,
+                issue_ref=issue_ref,
+                expected_run_id=previous_record.run_id,
+            )
+        except IssueReviewNotFoundError as exc:
+            raise ValueError(
+                f"Retry resume to {stage_name} requires issue-review.json for the same run."
+            ) from exc
+        except IssueReviewValidationError as exc:
+            raise ValueError(
+                "Retry carry-forward failed because the prior issue-review.json failed "
+                f"structural validation: {exc}"
+            ) from exc
+        if review.review_status != "approved":
+            raise ValueError(
+                "Retry resume to "
+                f"{stage_name} requires approved issue-review.json for the same run."
+            )
+        return review
+
+    if resume_from == "review issue":
+        _require_file(
+            previous_run_dir / "issue-draft.json",
+            "Retry resume requires issue-draft.json",
+        )
+        return
+    if resume_from == "plan":
+        _require_approved_issue_review_for_resume("plan")
+        return
+    if resume_from == "review plan":
+        _require_approved_issue_review_for_resume("review plan")
+        RunStore.load_approved_plan(previous_run_dir, issue_ref=issue_ref)
+        return
+    if resume_from == "implement":
+        RunStore.load_approved_plan(previous_run_dir, issue_ref=issue_ref)
+        try:
+            RunStore.require_plan_review_for_implement(previous_run_dir, issue_ref=issue_ref)
+        except PlanReviewError as exc:
+            raise ValueError(str(exc)) from exc
+        return
+    if resume_from == "publish":
+        _load_preserved_implement_stage(
+            previous_run_dir,
+            record=previous_record,
+            intake=None,
+            require_qa_results=True,
+        )
+        _require_decision_log_artifact(
+            previous_run_dir,
+            attempt=previous_record.attempt,
+            stage_name="publish",
+        )
+        workspace = previous_run_dir / "repair-workspace" / "repo"
+        if not workspace.is_dir():
+            raise ValueError("Retry resume to publish requires preserved repair-workspace/repo.")
+        return
+    if resume_from == "review impl":
+        RunStore.load_approved_plan(previous_run_dir, issue_ref=issue_ref)
+        _load_issue_intake_artifact(previous_run_dir, expected_issue_ref=issue_ref)
+        publish_plan = _load_publish_plan_artifact(previous_run_dir)
+        publish_result = _load_publish_result_artifact(previous_run_dir)
+        if publish_plan.status != "draft_pr":
+            raise ValueError(
+                "Retry resume to review impl requires publish-plan.json for a draft PR."
+            )
+        if publish_result.status != "published" or publish_result.target != "draft_pr":
+            raise ValueError("Retry resume to review impl requires published draft-PR metadata.")
+        if not publish_result.url or publish_result.pull_number is None:
+            raise ValueError(
+                "Retry resume to review impl requires publish-result.json PR metadata."
+            )
+        return
+
+
+def _materialize_retry_history(
+    *,
+    store: RunStore,
+    resume_context: _RetryResumeContext,
+    run_dir: Path,
+    run_id: str,
+    attempt: int,
+) -> None:
+    artifact_names, copy_decision_log, copy_repair_workspace = _resume_preserved_artifacts(
+        resume_context.resume_from
+    )
+    store.copy_retry_artifacts(
+        source_run_dir=resume_context.previous_run_dir,
+        target_run_dir=run_dir,
+        artifact_names=artifact_names,
+        target_run_id=run_id,
+        source_attempt=resume_context.previous_record.attempt if copy_decision_log else None,
+        target_attempt=attempt if copy_decision_log else None,
+        copy_repair_workspace=copy_repair_workspace,
+    )
+
+
+def _resume_preserved_artifacts(
+    resume_from: RetryResumeStage,
+) -> tuple[tuple[str, ...], bool, bool]:
+    if resume_from == "review issue":
+        return (("issue-draft.json",), False, False)
+    if resume_from == "plan":
+        return (("issue-draft.json", "issue-review.json"), False, False)
+    if resume_from == "review plan":
+        return (("issue-draft.json", "issue-review.json", "approved-plan.json"), False, False)
+    if resume_from == "implement":
+        return (
+            (
+                "issue-draft.json",
+                "issue-review.json",
+                "approved-plan.json",
+                "plan-review.json",
+            ),
+            False,
+            False,
+        )
+    if resume_from == "publish":
+        return (
+            (
+                "issue-draft.json",
+                "issue-review.json",
+                "approved-plan.json",
+                "plan-review.json",
+                "execution-result.json",
+                "repair-result.json",
+                "qa-baseline-result.json",
+                "qa-result.json",
+                "evaluation-result.json",
+                "governance-verdict.json",
+            ),
+            True,
+            True,
+        )
+    return (
+        (
+            "issue-draft.json",
+            "issue-review.json",
+            "approved-plan.json",
+            "plan-review.json",
+            "publish-plan.json",
+            "publish-result.json",
+        ),
+        False,
+        False,
+    )
+
+
+def _require_decision_log_artifact(run_dir: Path, *, attempt: int, stage_name: str) -> None:
+    try:
+        RunStore.load_decision_log(run_dir, attempt=attempt)
+    except FileNotFoundError as exc:
+        missing_path = exc.filename or str(run_dir / f"decision-log.attempt-{attempt}.json")
+        raise ValueError(
+            f"Retry resume to {stage_name} requires decision-log.attempt-{attempt}.json at "
+            f"{missing_path}."
+        ) from exc
+
+
+def _load_preserved_implement_stage(
+    run_dir: Path,
+    *,
+    record: RunRecord,
+    intake: IssueIntake | None,
+    require_qa_results: bool = False,
+) -> ImplementRunReport:
+    execution_result = _load_execution_result_artifact(run_dir)
+    evaluation_result = _load_evaluation_result_artifact(run_dir)
+    governance_verdict = _load_governance_verdict_artifact(run_dir)
+    if governance_verdict.status != "approved":
+        raise ValueError("Retry resume to publish requires approved governance-verdict.json.")
+    repair_result = _load_repair_result_artifact(run_dir)
+    if repair_result.status != "completed" or not repair_result.workspace_path:
+        raise ValueError(
+            "Retry resume to publish requires completed repair-result.json with workspace_path."
+        )
+    if require_qa_results:
+        baseline_qa_result = _load_required_qa_result_artifact(
+            run_dir / "qa-baseline-result.json"
+        )
+        qa_result = _load_required_qa_result_artifact(run_dir / "qa-result.json")
+    else:
+        baseline_qa_result = _load_optional_qa_result_artifact(run_dir / "qa-baseline-result.json")
+        qa_result = _load_optional_qa_result_artifact(run_dir / "qa-result.json")
+    return ImplementRunReport(
+        intake=intake or _load_issue_intake_artifact(run_dir, expected_issue_ref=record.issue_ref),
+        run_record=record,
+        execution_result=execution_result,
+        evaluation_result=evaluation_result,
+        governance_verdict=governance_verdict,
+        repair_result=repair_result,
+        baseline_qa_result=baseline_qa_result,
+        qa_result=qa_result,
+        exit_code=0,
+    )
+
+
+def _blocked_retry_report(*, intake: IssueIntake, issue_ref: str) -> RepairIssueReport:
+    return RepairIssueReport(
+        intake=intake,
+        run_record=RunRecord(
+            run_id="",
+            issue_ref=issue_ref,
+            status="blocked",
+            created_at="",
+            updated_at="",
+            run_dir="",
+        ),
+        exit_code=3,
+    )
+
+
+def _load_execution_result_artifact(run_dir: Path) -> ExecutionResult:
+    payload = _read_json_object(run_dir / "execution-result.json", label="execution-result.json")
+    return ExecutionResult(
+        status=cast(
+            Literal[
+                "pending",
+                "blocked",
+                "failed_infra",
+                "missing_docs",
+                "ambiguous_docs",
+                "completed",
+            ],
+            payload["status"],
+        ),
+        executor_name=cast(str, payload["executor_name"]),
+        summary=cast(str, payload["summary"]),
+        detail_codes=tuple(cast(list[str], payload.get("detail_codes", []))),
+        artifact_dir=cast(str | None, payload.get("artifact_dir")),
+        stdout_path=cast(str | None, payload.get("stdout_path")),
+        stderr_path=cast(str | None, payload.get("stderr_path")),
+        quality=cast(Literal["green", "improved", "degraded"] | None, payload.get("quality")),
+    )
+
+
+def _load_evaluation_result_artifact(run_dir: Path) -> EvaluationResult:
+    payload = _read_json_object(run_dir / "evaluation-result.json", label="evaluation-result.json")
+    return EvaluationResult(
+        status=cast(Literal["success", "blocked", "failed_infra"], payload["status"]),
+        summary=cast(str, payload["summary"]),
+        detail_codes=tuple(cast(list[str], payload.get("detail_codes", []))),
+    )
+
+
+def _load_governance_verdict_artifact(run_dir: Path) -> GovernanceVerdict:
+    payload = _read_json_object(
+        run_dir / "governance-verdict.json",
+        label="governance-verdict.json",
+    )
+    return GovernanceVerdict(
+        status=cast(Literal["approved", "blocked"], payload["status"]),
+        summary=cast(str, payload["summary"]),
+        reason_codes=tuple(cast(list[str], payload.get("reason_codes", []))),
+    )
+
+
+def _load_repair_result_artifact(run_dir: Path) -> RepairResult:
+    payload = _read_json_object(run_dir / "repair-result.json", label="repair-result.json")
+    return RepairResult(
+        status=cast(
+            Literal["not_configured", "blocked", "failed_infra", "completed", "escalated"],
+            payload["status"],
+        ),
+        summary=cast(str, payload["summary"]),
+        detail_codes=tuple(cast(list[str], payload.get("detail_codes", []))),
+        workspace_path=cast(str | None, payload.get("workspace_path")),
+        patch_path=cast(str | None, payload.get("patch_path")),
+        stdout_path=cast(str | None, payload.get("stdout_path")),
+        stderr_path=cast(str | None, payload.get("stderr_path")),
+    )
+
+
+def _load_optional_qa_result_artifact(path: Path) -> QaResult | None:
+    if not path.exists():
+        return None
+    payload = _read_json_object(path, label=path.name)
+    return QaResult(
+        status=cast(
+            Literal["passed", "failed", "unrunnable", "failed_infra", "not_run"],
+            payload["status"],
+        ),
+        summary=cast(str, payload["summary"]),
+        detail_codes=tuple(cast(list[str], payload.get("detail_codes", []))),
+        command=cast(str | None, payload.get("command")),
+        stdout_path=cast(str | None, payload.get("stdout_path")),
+        stderr_path=cast(str | None, payload.get("stderr_path")),
+        phase=cast(Literal["baseline", "repair", "final"], payload.get("phase", "repair")),
+        quality=cast(Literal["green", "improved", "degraded"] | None, payload.get("quality")),
+    )
+
+
+def _load_required_qa_result_artifact(path: Path) -> QaResult:
+    result = _load_optional_qa_result_artifact(path)
+    if result is None:
+        raise ValueError(f"Retry resume requires {path.name} at {path}.")
+    return result
+
+
+def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    if not path.exists():
+        raise ValueError(f"Retry resume requires {label} at {path}.")
+    try:
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+    except JSONDecodeError as exc:
+        raise ValueError(
+            f"Retry resume requires {label} at {path} to be valid JSON: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Retry resume requires {label} at {path} to be a JSON object.")
+    return cast(dict[str, Any], payload)
+
+
+def _require_file(path: Path, prefix: str) -> None:
+    if not path.is_file():
+        raise ValueError(f"{prefix} at {path}.")
 
 
 def _same_local_issue_ref(left: str, right: str) -> bool:
@@ -1721,21 +2273,6 @@ def _plan_review_summary(*, status: str, finding_count: int) -> str:
     return (
         "Implementation must stop because review plan is blocked by "
         f"{finding_count} prerequisite {noun}."
-    )
-
-
-def _blocked_retry_report(*, intake: IssueIntake, issue_ref: str) -> RepairIssueReport:
-    return RepairIssueReport(
-        intake=intake,
-        run_record=RunRecord(
-            run_id="",
-            issue_ref=issue_ref,
-            status="blocked",
-            created_at="",
-            updated_at="",
-            run_dir="",
-        ),
-        exit_code=3,
     )
 
 
