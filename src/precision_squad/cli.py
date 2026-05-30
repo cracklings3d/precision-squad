@@ -195,7 +195,6 @@ def build_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument(
         "--from",
         dest="resume_from",
-        choices=_RETRY_RESUME_STAGES,
         default=argparse.SUPPRESS,
         help=(
             "Resume a retry from one later stage. Supported only with --retry-from. "
@@ -374,7 +373,12 @@ def _repair_issue(args: argparse.Namespace) -> int:
     if args.approved_plan_path:
         approved_plan = _load_approved_plan(Path(args.approved_plan_path), args.issue_ref)
 
-    intake = load_issue_intake(args.issue_ref)
+    # Only load fresh issue intake when not in a retry resume path.
+    # Retry resume paths carry forward the prior run's intake via the coordinator.
+    if retry_from is None:
+        intake = load_issue_intake(args.issue_ref)
+    else:
+        intake = None
     report = RunCoordinator().repair_issue(
         params=RepairIssueParams(
             issue_ref=args.issue_ref,
@@ -389,10 +393,14 @@ def _repair_issue(args: argparse.Namespace) -> int:
             resume_from=cast(RetryResumeStage | None, getattr(args, "resume_from", None)),
             approved_plan=approved_plan,
         ),
-        intake=intake,
+        # Coordinator ignores this when retry_from is set (uses prior run's intake instead).
+        intake=cast(IssueIntake, intake),
         dependencies=_CliRepairDependencies(),
     )
     record = report.run_record
+    # Use the intake from the report, which is either the passed intake (fresh run)
+    # or the prior run's intake loaded by the coordinator (retry resume path).
+    intake = report.intake
 
     print(f"Issue: {intake.issue.reference}")
     print(f"Title: {intake.issue.title}")
