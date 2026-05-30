@@ -175,7 +175,7 @@ Earlier-stage history is preserved by copying only the artifacts before the sele
 | `plan` | approved `issue-review.json` | `issue-draft.json`, `issue-review.json` | `approved-plan.json` and later artifacts |
 | `review plan` | valid `approved-plan.json` | `issue-draft.json`, `issue-review.json`, `approved-plan.json` | `plan-review.json` and later artifacts |
 | `implement` | valid `approved-plan.json`, approved `plan-review.json` | issue/planning artifacts through `plan-review.json` | implement-stage artifacts and later artifacts |
-| `publish` | approved implement-stage artifacts, preserved decision log, preserved `repair-workspace/repo` | planning + implement artifacts required for publish | `publish-plan.json`, `publish-result.json`, review-impl outputs |
+| `publish` | `issue-draft.json`, approved `issue-review.json`, `approved-plan.json`, approved `plan-review.json`, `execution-result.json`, completed `repair-result.json` with `workspace_path`, `qa-baseline-result.json`, `qa-result.json`, `evaluation-result.json`, approved `governance-verdict.json`, `decision-log.attempt-{attempt}.json`, preserved `repair-workspace/repo` | planning + implement artifacts required for publish | `publish-plan.json`, `publish-result.json`, review-impl outputs |
 | `review impl` | `approved-plan.json`, `issue-intake.json`, `publish-plan.json`, published-draft-PR `publish-result.json` | earlier artifacts plus publish artifacts | `impl-review.json`, `post-publish-review-result.json` |
 
 `impl-review.json` is produced by `review impl`. It is not an input to `review impl` resume.
