@@ -697,3 +697,146 @@ def test_mcp_strategy_fails_explicitly_not_implemented(
         pass  # Expected
     except NotImplementedError:
         pytest.fail("MCP transport raised NotImplementedError instead of GitHubClientError")
+
+
+def test_mcp_transport_uses_real_github_update_pull_request_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP transport must use github_update_pull_request, not speculative github_patch_pull_request.
+
+    The GitHub MCP server does not have a 'github_patch_pull_request' tool.
+    The correct tool is 'github_update_pull_request' which supports draft state changes.
+    """
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
+
+    mcp_tool_calls: list[tuple[str, dict]] = []
+
+    class SpyMcpStrategy(GitHubMcpTransportStrategy):
+        def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
+            mcp_tool_calls.append((tool_name, arguments))
+            return {}
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: SpyMcpStrategy(),
+    )
+
+    client = GitHubWriteClient.from_env()
+    client.mark_pull_request_ready("owner", "repo", 5)
+
+    # Verify the tool name is github_update_pull_request (the real tool)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_update_pull_request" in tool_names, (
+        f"Expected 'github_update_pull_request' in tool calls, got {tool_names}"
+    )
+    # Ensure speculative 'github_patch_pull_request' was NOT used
+    assert "github_patch_pull_request" not in tool_names, (
+        "Speculative 'github_patch_pull_request' tool must not be used"
+    )
+    # Verify draft: false was passed
+    update_calls = [
+        (name, args) for name, args in mcp_tool_calls
+        if name == "github_update_pull_request"
+    ]
+    assert len(update_calls) == 1
+    _, update_args = update_calls[0]
+    assert update_args.get("draft") is False
+
+
+def test_cli_transport_mark_pull_request_ready_uses_gh_api_with_draft_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI transport mark_pull_request_ready uses 'gh api' with draft=false via patch_pull_request."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    gh_commands: list[list[str]] = []
+
+    import subprocess
+    from subprocess import CompletedProcess
+
+    def spy_run(cmd, **kwargs):
+        gh_commands.append(list(cmd))
+        # Return a fake success so the CLI transport doesn't raise GitHubClientError.
+        # This lets us verify the gh api command was constructed correctly without
+        # needing real gh credentials for a non-existent repository.
+        return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", spy_run)
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="cli",
+            selected_transport="cli",
+            mcp_available=False,
+            gh_cli_available=True,
+            decision_reason="cli_required_available",
+        ),
+    )
+
+    client = GitHubWriteClient.from_env()
+    client.mark_pull_request_ready("owner", "repo", 5)
+
+    # Verify 'gh api' was called with draft=false
+    api_calls = [cmd for cmd in gh_commands if "gh" in cmd and "api" in cmd]
+    assert len(api_calls) >= 1, f"Expected at least one 'gh api' call, got {gh_commands}"
+    # Verify draft=false was passed
+    draft_calls = [cmd for cmd in gh_commands if "draft=false" in " ".join(cmd)]
+    assert len(draft_calls) >= 1, (
+        f"Expected 'gh api' call with draft=false, got {gh_commands}"
+    )
+
+
+def test_auto_does_not_select_mcp_when_only_package_importable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto mode must NOT select MCP when only package is importable but server not configured.
+
+    This tests the complete auto-fallback semantics: MCP is only selected when BOTH
+    the mcp package is importable AND MCP_GITHUB_SERVER is set. If only the package
+    is importable (no server config), auto must fall back to CLI.
+    """
+    from importlib.machinery import ModuleSpec
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    # MCP package importable but no MCP_GITHUB_SERVER
+    monkeypatch.setattr(
+        "precision_squad.github_transport.find_spec",
+        lambda name: ModuleSpec(name, loader=None) if name == "mcp" else None,
+    )
+    monkeypatch.delenv("MCP_GITHUB_SERVER", raising=False)
+
+    transport_calls: list[str] = []
+
+    class FakeCliStrategy:
+        def __init__(self, token: str) -> None:
+            self._token = token
+
+        def create_issue(self, owner, repo, *, title, body):
+            transport_calls.append("cli")
+            return f"https://github.com/{owner}/{repo}/issues/1"
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubCliTransportStrategy",
+        lambda token: FakeCliStrategy(token),
+    )
+
+    client = GitHubWriteClient.from_env()
+    client.create_issue("owner", "repo", title="Test", body="Body")
+
+    # CLI was used, not MCP
+    assert transport_calls == ["cli"], (
+        f"Expected CLI transport to be used when MCP not runnable, got {transport_calls}"
+    )

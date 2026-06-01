@@ -190,9 +190,22 @@ def _normalize_requested_mode(
 
 
 def _probe_mcp_available() -> bool:
-    """Return whether an MCP GitHub transport is currently available."""
+    """Return whether an MCP GitHub transport is currently available and runnable.
 
-    return find_spec("mcp") is not None
+    MCP availability requires BOTH:
+    1. The mcp Python package must be importable (find_spec succeeds)
+    2. The MCP_GITHUB_SERVER environment variable must be set (server command)
+
+    Without both conditions, MCP is not a usable transport even if the package
+    is installed, so auto mode must fall back to CLI.
+    """
+
+    if find_spec("mcp") is None:
+        return False
+
+    # MCP package is present - check if runtime server is configured
+    # MCP is only runnable when MCP_GITHUB_SERVER env var is set
+    return bool(os.environ.get("MCP_GITHUB_SERVER"))
 
 
 def _probe_gh_cli_available() -> bool:

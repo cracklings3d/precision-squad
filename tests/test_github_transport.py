@@ -215,12 +215,84 @@ def test_probe_mcp_available_returns_false_when_mcp_module_is_missing(
     assert _probe_mcp_available() is False
 
 
-def test_probe_mcp_available_returns_true_when_mcp_module_is_present(
+def test_probe_mcp_available_returns_true_when_mcp_package_and_server_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """MCP is available only when BOTH mcp package AND MCP_GITHUB_SERVER are present."""
     monkeypatch.setattr(
         "precision_squad.github_transport.find_spec",
         lambda name: ModuleSpec(name, loader=None),
     )
+    monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
 
     assert _probe_mcp_available() is True
+
+
+def test_probe_mcp_available_returns_false_when_mcp_package_present_but_server_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP is NOT available if mcp package exists but MCP_GITHUB_SERVER is not set.
+
+    This is the key auto-fallback semantics: having the mcp Python package importable
+    does not mean MCP is runnable. MCP requires MCP_GITHUB_SERVER to be configured.
+    So auto mode must NOT select MCP in this case and should fall back to CLI.
+    """
+    monkeypatch.setattr(
+        "precision_squad.github_transport.find_spec",
+        lambda name: ModuleSpec(name, loader=None),
+    )
+    monkeypatch.delenv("MCP_GITHUB_SERVER", raising=False)
+
+    assert _probe_mcp_available() is False
+
+
+def test_auto_falls_back_to_cli_when_mcp_package_present_but_server_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto mode must NOT select MCP when only package importability is present.
+
+    Even if find_spec("mcp") succeeds, if MCP_GITHUB_SERVER is not set,
+    MCP is not runnable. Auto must fall back to CLI if CLI is available.
+    """
+    # MCP package importable but no MCP_GITHUB_SERVER
+    monkeypatch.setattr(
+        "precision_squad.github_transport.find_spec",
+        lambda name: ModuleSpec(name, loader=None) if name == "mcp" else None,
+    )
+    monkeypatch.delenv("MCP_GITHUB_SERVER", raising=False)
+
+    resolution = resolve_github_transport(
+        "auto",
+        probe_mcp_available=_probe_mcp_available,
+        probe_gh_cli_available=lambda: True,
+    )
+
+    assert resolution.selected_transport == "cli"
+    assert resolution.decision_reason == "auto_selected_cli"
+    assert resolution.mcp_available is False
+
+
+def test_forced_mcp_fails_explicitly_when_server_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forced mcp mode must fail explicitly when MCP_GITHUB_SERVER is not set.
+
+    Even if the mcp Python package is importable, without MCP_GITHUB_SERVER
+    being configured, MCP transport is not runnable and must raise an error.
+    """
+    # MCP package importable but no MCP_GITHUB_SERVER
+    monkeypatch.setattr(
+        "precision_squad.github_transport.find_spec",
+        lambda name: ModuleSpec(name, loader=None) if name == "mcp" else None,
+    )
+    monkeypatch.delenv("MCP_GITHUB_SERVER", raising=False)
+
+    with pytest.raises(GitHubTransportSelectionError) as exc_info:
+        resolve_github_transport(
+            "mcp",
+            probe_mcp_available=_probe_mcp_available,
+            probe_gh_cli_available=lambda: True,
+        )
+
+    assert exc_info.value.code == "github_transport_mcp_unavailable"
+    assert exc_info.value.decision_reason == "mcp_required_unavailable"
