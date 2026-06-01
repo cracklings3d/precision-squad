@@ -712,7 +712,7 @@ def test_mcp_transport_mark_pull_request_ready_uses_github_update_pull_request(
         """Fake strategy that doesn't need real MCP connection."""
         def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
             mcp_tool_calls.append((tool_name, arguments))
-            return {"html_url": f"https://github.com/{arguments.get('owner')}/{arguments.get('repo')}/pull/{arguments.get('pull_number')}"}
+            return {"html_url": f"https://github.com/{arguments.get('owner')}/{arguments.get('repo')}/pull/{arguments.get('pullNumber')}"}
 
     monkeypatch.setattr(
         "precision_squad.github_client.resolve_github_transport",
@@ -1138,3 +1138,141 @@ def test_backward_compatible_construction(
     cli_strategy_used.clear()
     write_client.create_issue("owner", "repo", title="Test", body="Body")
     assert "create_issue" in cli_strategy_used
+
+
+def test_mcp_public_client_fetch_issue_uses_pullNumber_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHubIssueClient.fetch_issue passes issue_number (not pull_number) to MCP tools."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
+
+    mcp_tool_calls: list[tuple[str, dict]] = []
+
+    class SpyMcpStrategy(GitHubMcpTransportStrategy):
+        """Spy that captures MCP tool calls to verify issue_number contract."""
+        def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
+            mcp_tool_calls.append((tool_name, arguments))
+            if tool_name == "github_issue_read":
+                if arguments.get("method") == "get":
+                    return {
+                        "title": "Test Issue",
+                        "body": "Issue body",
+                        "html_url": f"https://github.com/{arguments.get('owner')}/{arguments.get('repo')}/issues/{arguments.get('issue_number')}",
+                        "labels": [],
+                    }
+                elif arguments.get("method") == "get_comments":
+                    return [{"body": "Comment 1"}]
+            return {}
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: SpyMcpStrategy(),
+    )
+
+    client = GitHubIssueClient.from_env()
+    reference = IssueReference("owner", "repo", 1)
+
+    # fetch_issue should call github_issue_read with method='get' and method='get_comments'
+    client.fetch_issue(reference)
+
+    # Verify github_issue_read was called with issue_number (correct contract for issues)
+    assert len(mcp_tool_calls) == 2, f"Expected 2 MCP calls, got {len(mcp_tool_calls)}: {mcp_tool_calls}"
+
+    fetch_call = next(
+        (args for name, args in mcp_tool_calls if name == "github_issue_read" and args.get("method") == "get"),
+        None
+    )
+    assert fetch_call is not None, f"Expected github_issue_read call with method='get', got {mcp_tool_calls}"
+    assert "issue_number" in fetch_call, f"Expected issue_number key, got {fetch_call}"
+    assert "pull_number" not in fetch_call, f"Unexpected pull_number key in issue fetch: {fetch_call}"
+    assert "pullNumber" not in fetch_call, f"Unexpected pullNumber key in issue fetch: {fetch_call}"
+
+    comments_call = next(
+        (args for name, args in mcp_tool_calls if name == "github_issue_read" and args.get("method") == "get_comments"),
+        None
+    )
+    assert comments_call is not None, f"Expected github_issue_read (get_comments) call, got {mcp_tool_calls}"
+    assert "issue_number" in comments_call, f"Expected issue_number key in comments fetch, got {comments_call}"
+
+
+def test_mcp_public_client_pr_operations_use_pullNumber_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHubWriteClient PR operations pass pullNumber (not pull_number) to MCP tools."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
+
+    mcp_tool_calls: list[tuple[str, dict]] = []
+
+    class SpyMcpStrategy(GitHubMcpTransportStrategy):
+        """Spy that captures MCP tool calls to verify pullNumber contract."""
+        def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
+            mcp_tool_calls.append((tool_name, arguments))
+            if tool_name == "github_pull_request_read":
+                return {
+                    "html_url": f"https://github.com/{arguments.get('owner')}/{arguments.get('repo')}/pull/{arguments.get('pullNumber')}",
+                    "head": {"ref": "feature", "sha": "abc123"},
+                }
+            elif tool_name == "github_update_pull_request":
+                return {
+                    "html_url": f"https://github.com/{arguments.get('owner')}/{arguments.get('repo')}/pull/{arguments.get('pullNumber')}",
+                }
+            return {}
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: SpyMcpStrategy(),
+    )
+
+    client = GitHubWriteClient.from_env()
+
+    # Test get_pull_request uses github_pull_request_read with pullNumber
+    result = client.get_pull_request("owner", "repo", 42)
+    assert result["html_url"] == "https://github.com/owner/repo/pull/42"
+
+    pr_read_call = next(
+        (args for name, args in mcp_tool_calls if name == "github_pull_request_read"),
+        None
+    )
+    assert pr_read_call is not None, f"Expected github_pull_request_read call, got {mcp_tool_calls}"
+    assert "pullNumber" in pr_read_call, f"Expected pullNumber key, got {pr_read_call}"
+    assert pr_read_call["pullNumber"] == 42, f"Expected pullNumber=42, got {pr_read_call}"
+    assert "pull_number" not in pr_read_call, f"Unexpected pull_number key: {pr_read_call}"
+
+    mcp_tool_calls.clear()
+
+    # Test update_pull_request uses github_update_pull_request with pullNumber
+    url = client.update_pull_request("owner", "repo", 42, title="New Title", body="New Body")
+    assert url == "https://github.com/owner/repo/pull/42"
+
+    pr_update_call = next(
+        (args for name, args in mcp_tool_calls if name == "github_update_pull_request"),
+        None
+    )
+    assert pr_update_call is not None, f"Expected github_update_pull_request call, got {mcp_tool_calls}"
+    assert "pullNumber" in pr_update_call, f"Expected pullNumber key, got {pr_update_call}"
+    assert pr_update_call["pullNumber"] == 42, f"Expected pullNumber=42, got {pr_update_call}"
+    assert "pull_number" not in pr_update_call, f"Unexpected pull_number key: {pr_update_call}"
+    assert pr_update_call.get("title") == "New Title"
+    assert pr_update_call.get("body") == "New Body"

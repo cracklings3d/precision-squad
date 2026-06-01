@@ -255,7 +255,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
             "method": "get",
             "owner": owner,
             "repo": repo,
-            "pull_number": pull_number,
+            "pullNumber": pull_number,
         })
         if not isinstance(result, dict):
             raise GitHubClientError(f"Invalid response from github_pull_request_read for {owner}/{repo}/{pull_number}")
@@ -268,7 +268,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         result = self._call_mcp_tool("github_update_pull_request", {
             "owner": owner,
             "repo": repo,
-            "pull_number": pull_number,
+            "pullNumber": pull_number,
             "title": title,
             "body": body,
         })
@@ -290,7 +290,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         result = self._call_mcp_tool("github_update_pull_request", {
             "owner": owner,
             "repo": repo,
-            "pull_number": pull_number,
+            "pullNumber": pull_number,
             **payload,
         })
         # github_update_pull_request returns dict on success
@@ -325,7 +325,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
             self._call_mcp_tool("github_merge_pull_request", {
                 "owner": owner,
                 "repo": repo,
-                "pull_number": pull_number,
+                "pullNumber": pull_number,
             })
         except GitHubClientError as exc:
             if "already been merged" in str(exc).lower() or "409" in str(exc):
@@ -337,7 +337,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         self._call_mcp_tool("github_update_pull_request", {
             "owner": owner,
             "repo": repo,
-            "pull_number": pull_number,
+            "pullNumber": pull_number,
             "state": "closed",
         })
 
@@ -348,7 +348,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         self._call_mcp_tool("github_update_pull_request_branch", {
             "owner": owner,
             "repo": repo,
-            "pull_number": pull_number,
+            "pullNumber": pull_number,
         })
 
 
