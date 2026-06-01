@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 from abc import ABC, abstractmethod
+from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -95,22 +97,120 @@ class GitHubRuntimeTransport(ABC):
 
 
 class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
-    """MCP-based GitHub transport - not yet implemented."""
+    """MCP-based GitHub transport using the MCP library.
+
+    This transport uses the Model Context Protocol to call GitHub tools exposed
+    by an MCP GitHub server. The server must be running and accessible.
+    """
+
+    def __init__(self) -> None:
+        self._token = os.environ.get("GITHUB_TOKEN")
+        self._client: Any = None
+
+    def _get_client(self) -> Any:
+        """Lazily initialize the MCP client and return it."""
+        if self._client is None:
+            try:
+                from mcp import Client
+            except ImportError as exc:
+                raise GitHubClientError(
+                    "MCP library is not installed. Install it with: pip install mcp"
+                ) from exc
+
+            server_cmd = os.environ.get("MCP_GITHUB_SERVER")
+            if not server_cmd:
+                raise GitHubClientError(
+                    "MCP GitHub server not configured. Set MCP_GITHUB_SERVER environment variable."
+                )
+
+            self._client = Client(server_cmd.split() if isinstance(server_cmd, str) else server_cmd)
+
+        if not self._client.connected:
+            asyncio.run(self._client.connect())
+
+        return self._client
+
+    def _call_mcp_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+        """Call an MCP tool and return its result, raising GitHubClientError on failure."""
+        try:
+            client = self._get_client()
+            return asyncio.run(client.call_tool(tool_name, arguments))
+        except ImportError as exc:
+            raise GitHubClientError(
+                f"MCP operation '{tool_name}' failed: MCP library import error"
+            ) from exc
+        except Exception as exc:
+            raise GitHubClientError(
+                f"MCP operation '{tool_name}' failed: {exc}"
+            ) from exc
 
     def fetch_issue(self, reference: IssueReference) -> dict[str, object]:
-        raise NotImplementedError("MCP transport not implemented for fetch_issue")
+        """Fetch a single issue payload via MCP."""
+        result = self._call_mcp_tool("github_get_issue", {
+            "owner": reference.owner,
+            "repo": reference.repo,
+            "issue_number": reference.number,
+        })
+        if not isinstance(result, dict):
+            raise GitHubClientError(f"Invalid response from github_get_issue for {reference}")
+        return result
 
     def fetch_issue_comments(self, reference: IssueReference) -> list[dict[str, object]]:
-        raise NotImplementedError("MCP transport not implemented for fetch_issue_comments")
+        """Fetch comments for a single issue via MCP."""
+        result = self._call_mcp_tool("github_get_issue_comments", {
+            "owner": reference.owner,
+            "repo": reference.repo,
+            "issue_number": reference.number,
+        })
+        if not isinstance(result, list):
+            raise GitHubClientError(f"Invalid response from github_get_issue_comments for {reference}")
+        return result
 
     def create_issue_comment(self, reference: IssueReference, body: str) -> str:
-        raise NotImplementedError("MCP transport not implemented for create_issue_comment")
+        """Create an issue comment via MCP and return its HTML URL."""
+        result = self._call_mcp_tool("github_create_issue_comment", {
+            "owner": reference.owner,
+            "repo": reference.repo,
+            "issue_number": reference.number,
+            "body": body,
+        })
+        if isinstance(result, dict):
+            html_url = result.get("html_url")
+        elif isinstance(result, str):
+            html_url = result
+        else:
+            raise GitHubClientError(f"Invalid response from github_create_issue_comment for {reference}")
+        if not isinstance(html_url, str):
+            raise GitHubClientError(f"github_create_issue_comment response missing html_url for {reference}")
+        return html_url
 
     def create_issue(self, owner: str, repo: str, *, title: str, body: str) -> str:
-        raise NotImplementedError("MCP transport not implemented for create_issue")
+        """Create an issue via MCP and return its HTML URL."""
+        result = self._call_mcp_tool("github_create_issue", {
+            "owner": owner,
+            "repo": repo,
+            "title": title,
+            "body": body,
+        })
+        if isinstance(result, dict):
+            html_url = result.get("html_url")
+        elif isinstance(result, str):
+            html_url = result
+        else:
+            raise GitHubClientError(f"Invalid response from github_create_issue for {owner}/{repo}")
+        if not isinstance(html_url, str):
+            raise GitHubClientError(f"github_create_issue response missing html_url for {owner}/{repo}")
+        return html_url
 
     def list_repo_issues(self, owner: str, repo: str) -> list[dict[str, object]]:
-        raise NotImplementedError("MCP transport not implemented for list_repo_issues")
+        """List open issues for a repository via MCP."""
+        result = self._call_mcp_tool("github_list_issues", {
+            "owner": owner,
+            "repo": repo,
+        })
+        if not isinstance(result, list):
+            raise GitHubClientError(f"Invalid response from github_list_issues for {owner}/{repo}")
+        return result
 
     def create_draft_pull_request(
         self,
@@ -120,35 +220,121 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         head: str,
         base: str,
     ) -> str:
-        raise NotImplementedError("MCP transport not implemented for create_draft_pull_request")
+        """Create a draft pull request via MCP and return its HTML URL."""
+        result = self._call_mcp_tool("github_create_pull_request", {
+            "owner": reference.owner,
+            "repo": reference.repo,
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+            "draft": True,
+        })
+        if isinstance(result, dict):
+            html_url = result.get("html_url")
+        elif isinstance(result, str):
+            html_url = result
+        else:
+            raise GitHubClientError(f"Invalid response from github_create_pull_request for {reference}")
+        if not isinstance(html_url, str):
+            raise GitHubClientError(f"github_create_pull_request response missing html_url for {reference}")
+        return html_url
 
     def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict[str, object]:
-        raise NotImplementedError("MCP transport not implemented for get_pull_request")
+        """Get a pull request payload via MCP."""
+        result = self._call_mcp_tool("github_get_pull_request", {
+            "owner": owner,
+            "repo": repo,
+            "pull_number": pull_number,
+        })
+        if not isinstance(result, dict):
+            raise GitHubClientError(f"Invalid response from github_get_pull_request for {owner}/{repo}/{pull_number}")
+        return result
 
     def update_pull_request(
         self, owner: str, repo: str, pull_number: int, *, title: str, body: str
     ) -> str:
-        raise NotImplementedError("MCP transport not implemented for update_pull_request")
+        """Update a pull request title/body via MCP and return its HTML URL."""
+        result = self._call_mcp_tool("github_update_pull_request", {
+            "owner": owner,
+            "repo": repo,
+            "pull_number": pull_number,
+            "title": title,
+            "body": body,
+        })
+        if isinstance(result, dict):
+            html_url = result.get("html_url")
+        elif isinstance(result, str):
+            html_url = result
+        else:
+            raise GitHubClientError(f"Invalid response from github_update_pull_request for {owner}/{repo}/{pull_number}")
+        if not isinstance(html_url, str):
+            raise GitHubClientError(f"github_update_pull_request response missing html_url for {owner}/{repo}/{pull_number}")
+        return html_url
 
     def patch_pull_request(self, owner: str, repo: str, pull_number: int, payload: dict) -> None:
-        raise NotImplementedError("MCP transport not implemented for patch_pull_request")
+        """Patch a pull request with arbitrary payload via MCP."""
+        self._call_mcp_tool("github_patch_pull_request", {
+            "owner": owner,
+            "repo": repo,
+            "pull_number": pull_number,
+            "payload": payload,
+        })
 
     def reopen_issue(self, reference: IssueReference) -> None:
-        raise NotImplementedError("MCP transport not implemented for reopen_issue")
+        """Reopen a closed issue via MCP."""
+        self._call_mcp_tool("github_update_issue", {
+            "owner": reference.owner,
+            "repo": reference.repo,
+            "issue_number": reference.number,
+            "state": "open",
+        })
 
     def close_issue(self, reference: IssueReference) -> None:
-        raise NotImplementedError("MCP transport not implemented for close_issue")
+        """Close an open issue via MCP."""
+        self._call_mcp_tool("github_update_issue", {
+            "owner": reference.owner,
+            "repo": reference.repo,
+            "issue_number": reference.number,
+            "state": "closed",
+        })
 
     def merge_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
-        raise NotImplementedError("MCP transport not implemented for merge_pull_request")
+        """Merge an open pull request via MCP."""
+        try:
+            self._call_mcp_tool("github_merge_pull_request", {
+                "owner": owner,
+                "repo": repo,
+                "pull_number": pull_number,
+            })
+        except GitHubClientError as exc:
+            if "already been merged" in str(exc).lower() or "409" in str(exc):
+                return
+            raise
 
     def close_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
-        raise NotImplementedError("MCP transport not implemented for close_pull_request")
+        """Close an open pull request via MCP."""
+        try:
+            self._call_mcp_tool("github_update_pull_request", {
+                "owner": owner,
+                "repo": repo,
+                "pull_number": pull_number,
+                "state": "closed",
+            })
+        except GitHubClientError as exc:
+            if "405" in str(exc) or "cannot change" in str(exc).lower():
+                return
+            raise
 
     def update_pull_request_branch(
         self, owner: str, repo: str, pull_number: int
     ) -> None:
-        raise NotImplementedError("MCP transport not implemented for update_pull_request_branch")
+        """Update a pull request branch with latest base changes via MCP."""
+        self._call_mcp_tool("github_update_pull_request_branch", {
+            "owner": owner,
+            "repo": repo,
+            "pull_number": pull_number,
+        })
 
 
 class GitHubCliTransportStrategy(GitHubRuntimeTransport):
