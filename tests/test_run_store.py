@@ -60,10 +60,10 @@ def _approved_plan() -> ApprovedPlan:
 
 
 def _issue_review(
-    *, status: Literal["approved", "changes_requested", "blocked"] = "approved"
+    *, verdict: Literal["approved", "changes_requested", "blocked"] = "approved"
 ) -> IssueReview:
     feedback = ()
-    if status != "approved":
+    if verdict != "approved":
         feedback = (
             IssueReviewFeedback(
                 code="missing_summary",
@@ -75,9 +75,9 @@ def _issue_review(
     return IssueReview(
         run_id="run-123",
         issue_ref="owner/repo#1",
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], verdict),
         summary="Planning may proceed because issue-draft.json passed the local planner-safety review."
-        if status == "approved"
+        if verdict == "approved"
         else "Planning must stop because issue-draft.json has 1 planner-safety finding that require changes.",
         feedback=feedback,
         provenance=IssueReviewProvenance(
@@ -89,10 +89,10 @@ def _issue_review(
 
 
 def _plan_review(
-    *, status: Literal["approved", "changes_requested", "blocked"] = "approved"
+    *, verdict: Literal["approved", "changes_requested", "blocked"] = "approved"
 ) -> PlanReview:
     feedback = ()
-    if status != "approved":
+    if verdict != "approved":
         feedback = (
             PlanReviewFeedback(
                 code="missing_retrieval_surface_summary",
@@ -104,9 +104,9 @@ def _plan_review(
     return PlanReview(
         run_id="run-123",
         issue_ref="owner/repo#1",
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], verdict),
         summary="Implementation may proceed because approved-plan.json passed the same-run plan review gate."
-        if status == "approved"
+        if verdict == "approved"
         else "Implementation must stop because approved-plan.json has 1 implementation-ingress finding that require changes.",
         feedback=feedback,
         provenance=PlanReviewProvenance(
@@ -212,7 +212,7 @@ def test_write_and_load_issue_review_persists_same_run_artifact(tmp_path: Path) 
     loaded = store.load_issue_review(run_dir, issue_ref="owner/repo#1")
     payload = json.loads((run_dir / "issue-review.json").read_text(encoding="utf-8"))
     assert loaded == _issue_review()
-    assert payload["review_status"] == "approved"
+    assert payload["verdict"] == "approved"
     assert payload["provenance"]["source_artifact"] == "issue-draft.json"
 
 
@@ -226,7 +226,7 @@ def test_write_and_load_plan_review_persists_same_run_artifact(tmp_path: Path) -
     loaded = store.load_plan_review(run_dir, issue_ref="owner/repo#1")
     payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
     assert loaded == _plan_review()
-    assert payload["review_status"] == "approved"
+    assert payload["verdict"] == "approved"
     assert payload["provenance"]["source_artifact"] == "approved-plan.json"
 
 
@@ -235,7 +235,7 @@ def test_write_and_load_impl_review_persists_canonical_artifact(tmp_path: Path) 
     run_dir = tmp_path / "runs" / "run-123"
     run_dir.mkdir(parents=True)
     review = ImplReviewResult(
-        review_status="changes_requested",
+        verdict="changes_requested",
         summary="Published PR requires changes.",
         pull_request_url="https://github.com/owner/repo/pull/1",
         pull_number=1,
@@ -260,7 +260,7 @@ def test_write_and_load_impl_review_persists_canonical_artifact(tmp_path: Path) 
     loaded = store.load_impl_review(run_dir)
     payload = json.loads((run_dir / "impl-review.json").read_text(encoding="utf-8"))
     assert loaded == review
-    assert payload["review_status"] == "changes_requested"
+    assert payload["verdict"] == "changes_requested"
     assert payload["feedback"][0]["source"] == "reviewer"
 
 
@@ -281,7 +281,7 @@ def test_require_plan_review_for_implement_requires_run_record_and_approved_revi
 
     review = RunStore.require_plan_review_for_implement(run_dir, issue_ref="owner/repo#1")
 
-    assert review.review_status == "approved"
+    assert review.verdict == "approved"
 
 
 @pytest.mark.parametrize(
@@ -313,9 +313,9 @@ def test_require_plan_review_for_implement_rejects_non_approved_status(
     run_dir = tmp_path / "runs" / "run-123"
     run_dir.mkdir(parents=True)
     _write_run_record(run_dir)
-    store.write_plan_review(run_dir, _plan_review(status=status))
+    store.write_plan_review(run_dir, _plan_review(verdict=status))
 
-    with pytest.raises(PlanReviewNotApprovedError, match="review_status"):
+    with pytest.raises(PlanReviewNotApprovedError, match="verdict"):
         RunStore.require_plan_review_for_implement(run_dir, issue_ref="owner/repo#1")
 
 
@@ -365,9 +365,9 @@ def test_write_gated_approved_plan_rejects_non_approved_issue_review(
     store = RunStore(tmp_path / "runs")
     run_dir = tmp_path / "runs" / "run-123"
     run_dir.mkdir(parents=True)
-    store.write_issue_review(run_dir, _issue_review(status=status))
+    store.write_issue_review(run_dir, _issue_review(verdict=status))
 
-    with pytest.raises(ApprovedPlanGateError, match="review_status"):
+    with pytest.raises(ApprovedPlanGateError, match="verdict"):
         store.write_gated_approved_plan(run_dir, _approved_plan())
 
 
@@ -523,7 +523,7 @@ def test_write_follow_on_artifacts_persists_json(tmp_path: Path) -> None:
         detail_codes=("executor_not_implemented",),
     )
     verdict = GovernanceVerdict(
-        status="blocked",
+        verdict="blocked",
         summary="Execution blocked.",
         reason_codes=("executor_not_implemented",),
     )

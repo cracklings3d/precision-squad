@@ -601,7 +601,7 @@ def test_run_impl_review_returns_approved_for_same_run_same_issue_published_pr(
         architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
     )
 
-    assert result.review_status == "approved"
+    assert result.verdict == "approved"
     assert result.allows_downstream_automation is True
     assert result.pull_head_sha == "head-sha"
     assert comments == []
@@ -659,7 +659,7 @@ def test_run_impl_review_derives_live_pr_url_when_only_pull_number_is_persisted(
         architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
     )
 
-    assert result.review_status == "approved"
+    assert result.verdict == "approved"
     assert result.pull_request_url == "https://github.com/cracklings3d/markdown-pdf-renderer/pull/13"
     assert result.pull_number == 13
     assert comments == []
@@ -668,7 +668,7 @@ def test_run_impl_review_derives_live_pr_url_when_only_pull_number_is_persisted(
 @pytest.mark.parametrize("review_status", ["changes_requested", "blocked"])
 def test_mirror_impl_review_to_post_publish_maps_stage_statuses(review_status: str) -> None:
     review = ImplReviewResult(
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], review_status),
         summary="summary",
         pull_request_url="https://example/pull/1",
         pull_number=1,
@@ -728,7 +728,7 @@ def test_run_impl_review_blocks_on_provenance_mismatch_and_posts_feedback(
         architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
     )
 
-    assert result.review_status == "blocked"
+    assert result.verdict == "blocked"
     assert result.issue_reopened is True
     assert result.issue_comment_url == "comment-url"
     assert any(item.code == "pr_body_run_id_mismatch" for item in result.feedback)
@@ -794,7 +794,7 @@ def test_run_impl_review_uses_canonical_validation_before_mapping_compatibility_
         architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
     )
 
-    assert result.review_status == "blocked"
+    assert result.verdict == "blocked"
     assert result.pull_head_sha == "live-head-sha"
     assert any(item.code == "pr_body_run_id_mismatch" for item in result.feedback)
 
@@ -866,7 +866,7 @@ def test_run_impl_review_posts_non_approved_side_effects_once(
         architect=_stub_agent(_review_result(role="architect", status="approved", summary="Architect approves.")),
     )
 
-    assert result.review_status == "changes_requested"
+    assert result.verdict == "changes_requested"
     assert result.issue_comment_url == "comment-url-1"
     assert result.issue_reopened is True
     assert len(comments) == 1

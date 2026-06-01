@@ -121,7 +121,7 @@ def test_issue_review_persists(
     assert artifact_path.exists(), "issue-review.json should be written by review issue"
 
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert "review_status" in payload, "issue-review.json must contain review_status (verdict)"
+    assert "verdict" in payload, "issue-review.json must contain verdict"
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ def test_approved_plan_persists(
         IssueReview(
             run_id=create_report.run_record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -231,7 +231,7 @@ def test_plan_review_persists(
         IssueReview(
             run_id=create_report.run_record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -266,7 +266,7 @@ def test_plan_review_persists(
     assert artifact_path.exists(), "plan-review.json should be written by review plan"
 
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert "review_status" in payload, "plan-review.json must contain review_status"
+    assert "verdict" in payload, "plan-review.json must contain verdict"
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +303,7 @@ def test_impl_review_persists(
         IssueReview(
             run_id=record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -331,7 +331,7 @@ def test_impl_review_persists(
         PlanReview(
             run_id=record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Plan review approved.",
             feedback=(),
             provenance=PlanReviewProvenance(
@@ -382,7 +382,7 @@ def test_impl_review_persists(
     assert artifact_path.exists(), "impl-review.json should be written by review impl"
 
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert "review_status" in payload, "impl-review.json must contain review_status (verdict)"
+    assert "verdict" in payload, "impl-review.json must contain verdict"
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +419,7 @@ def test_post_publish_review_result_persists(
         IssueReview(
             run_id=record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -447,7 +447,7 @@ def test_post_publish_review_result_persists(
         PlanReview(
             run_id=record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Plan review approved.",
             feedback=(),
             provenance=PlanReviewProvenance(
@@ -542,9 +542,9 @@ def test_governance_verdict_persists(
     )
 
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert "status" in payload, "governance-verdict.json must contain status"
-    assert payload["status"] == "approved", (
-        "governance-verdict.json status must be approved for a passing run"
+    assert "verdict" in payload, "governance-verdict.json must contain verdict"
+    assert payload["verdict"] == "approved", (
+        "governance-verdict.json verdict must be approved for a passing run"
     )
 
 
@@ -613,7 +613,7 @@ def test_issue_review_consumable_by_plan_stage(
         issue_ref="cracklings3d/markdown-pdf-renderer#9",
         expected_run_id=create_report.run_record.run_id,
     )
-    assert loaded.review_status == "approved"
+    assert loaded.verdict == "approved"
 
 
 @pytest.mark.integration
@@ -645,7 +645,7 @@ def test_approved_plan_consumable_by_developer_stage(
         IssueReview(
             run_id=create_report.run_record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -707,7 +707,7 @@ def test_plan_review_consumable_by_implement_stage(
         IssueReview(
             run_id=create_report.run_record.run_id,
             issue_ref="cracklings3d/markdown-pdf-renderer#9",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -741,4 +741,4 @@ def test_plan_review_consumable_by_implement_stage(
         issue_ref="cracklings3d/markdown-pdf-renderer#9",
         expected_run_id=create_report.run_record.run_id,
     )
-    assert loaded.review_status == "approved"
+    assert loaded.verdict == "approved"

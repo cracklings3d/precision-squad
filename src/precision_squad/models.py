@@ -99,7 +99,7 @@ class IssueReview:
 
     run_id: str
     issue_ref: str
-    review_status: Literal["approved", "changes_requested", "blocked"]
+    verdict: Literal["approved", "changes_requested", "blocked"]
     summary: str
     feedback: tuple[IssueReviewFeedback, ...]
     provenance: IssueReviewProvenance
@@ -130,7 +130,7 @@ class PlanReview:
 
     run_id: str
     issue_ref: str
-    review_status: Literal["approved", "changes_requested", "blocked"]
+    verdict: Literal["approved", "changes_requested", "blocked"]
     summary: str
     feedback: tuple[PlanReviewFeedback, ...]
     provenance: PlanReviewProvenance
@@ -273,7 +273,7 @@ class QaResult:
 class GovernanceVerdict:
     """Deterministic governance decision for a run."""
 
-    status: Literal["approved", "blocked"]
+    verdict: Literal["approved", "blocked"]
     summary: str
     reason_codes: tuple[str, ...]
 
@@ -374,7 +374,7 @@ class ImplReviewFeedback:
 class ImplReviewResult:
     """Canonical post-publish implementation review result."""
 
-    review_status: Literal["approved", "changes_requested", "blocked"]
+    verdict: Literal["approved", "changes_requested", "blocked"]
     summary: str
     pull_request_url: str | None
     pull_number: int | None
@@ -390,7 +390,7 @@ class ImplReviewResult:
     @property
     def allows_downstream_automation(self) -> bool:
         """Return whether downstream automation may continue."""
-        return self.review_status == "approved"
+        return self.verdict == "approved"
 
 
 @dataclass(frozen=True, slots=True)

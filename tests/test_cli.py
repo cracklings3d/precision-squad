@@ -143,7 +143,7 @@ def test_review_issue_prints_approved_review_output(
     issue_review = IssueReview(
         run_id="run-123",
         issue_ref="cracklings3d/precision-squad#68",
-        review_status="approved",
+        verdict="approved",
         summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
         feedback=(),
         provenance=IssueReviewProvenance(
@@ -175,7 +175,7 @@ def test_review_issue_prints_approved_review_output(
 
     captured = capsys.readouterr()
     assert status == 0
-    assert "Review Status: approved" in captured.out
+    assert "Review Verdict: approved" in captured.out
     assert "Artifacts: issue-review.json" in captured.out
 
 
@@ -185,7 +185,7 @@ def test_review_issue_prints_feedback_for_changes_requested(
     issue_review = IssueReview(
         run_id="run-123",
         issue_ref="cracklings3d/precision-squad#68",
-        review_status="changes_requested",
+        verdict="changes_requested",
         summary="Planning must stop because issue-draft.json has 1 planner-safety finding that require changes.",
         feedback=(
             IssueReviewFeedback(
@@ -224,7 +224,7 @@ def test_review_issue_prints_feedback_for_changes_requested(
 
     captured = capsys.readouterr()
     assert status == 2
-    assert "Review Status: changes_requested" in captured.out
+    assert "Review Verdict: changes_requested" in captured.out
     assert "missing_summary" in captured.out
 
 
@@ -251,7 +251,7 @@ def test_review_issue_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.M
                 issue_review=IssueReview(
                     run_id="run-123",
                     issue_ref="owner/repo#1",
-                    review_status="blocked",
+                    verdict="blocked",
                     summary="Planning must stop because review issue is blocked by 1 blocking finding in issue-draft.json.",
                     feedback=(
                         IssueReviewFeedback(
@@ -277,7 +277,7 @@ def test_review_issue_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.M
     captured = capsys.readouterr()
     assert status == 3
     assert Path(captured_runs_dir["runs_dir"]) == (tmp_path / ".precision-squad" / "runs")
-    assert "Review Status: blocked" in captured.out
+    assert "Review Verdict: blocked" in captured.out
 
 
 def test_review_plan_prints_approved_review_output(
@@ -286,7 +286,7 @@ def test_review_plan_prints_approved_review_output(
     plan_review = PlanReview(
         run_id="run-123",
         issue_ref="cracklings3d/precision-squad#70",
-        review_status="approved",
+        verdict="approved",
         summary="Implementation may proceed because approved-plan.json passed the same-run plan review gate.",
         feedback=(),
         provenance=PlanReviewProvenance(
@@ -318,7 +318,7 @@ def test_review_plan_prints_approved_review_output(
 
     captured = capsys.readouterr()
     assert status == 0
-    assert "Review Status: approved" in captured.out
+    assert "Review Verdict: approved" in captured.out
     assert "Artifacts: plan-review.json" in captured.out
 
 
@@ -328,7 +328,7 @@ def test_review_plan_prints_feedback_for_changes_requested(
     plan_review = PlanReview(
         run_id="run-123",
         issue_ref="cracklings3d/precision-squad#70",
-        review_status="changes_requested",
+        verdict="changes_requested",
         summary="Implementation must stop because approved-plan.json has 1 implementation-ingress finding that require changes.",
         feedback=(
             PlanReviewFeedback(
@@ -367,7 +367,7 @@ def test_review_plan_prints_feedback_for_changes_requested(
 
     captured = capsys.readouterr()
     assert status == 2
-    assert "Review Status: changes_requested" in captured.out
+    assert "Review Verdict: changes_requested" in captured.out
     assert "missing_retrieval_surface_summary" in captured.out
 
 
@@ -394,7 +394,7 @@ def test_review_plan_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Mo
                 plan_review=PlanReview(
                     run_id="run-123",
                     issue_ref="owner/repo#1",
-                    review_status="blocked",
+                    verdict="blocked",
                     summary="Implementation must stop because review plan is blocked by 1 prerequisite finding.",
                     feedback=(
                         PlanReviewFeedback(
@@ -420,14 +420,14 @@ def test_review_plan_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Mo
     captured = capsys.readouterr()
     assert status == 3
     assert Path(captured_runs_dir["runs_dir"]) == (tmp_path / ".precision-squad" / "runs")
-    assert "Review Status: blocked" in captured.out
+    assert "Review Verdict: blocked" in captured.out
 
 
 def test_review_impl_prints_approved_review_output(
     capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     impl_review = ImplReviewResult(
-        review_status="approved",
+        verdict="approved",
         summary="Published PR passed implementation review.",
         pull_request_url="https://github.com/cracklings3d/precision-squad/pull/72",
         pull_number=72,
@@ -460,7 +460,7 @@ def test_review_impl_prints_approved_review_output(
 
     captured = capsys.readouterr()
     assert status == 0
-    assert "Review Status: approved" in captured.out
+    assert "Review Verdict: approved" in captured.out
     assert "Artifacts: impl-review.json" in captured.out
     assert "Downstream Automation Allowed: True" in captured.out
 
@@ -469,7 +469,7 @@ def test_review_impl_prints_feedback_for_blocked_review(
     capsys, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     impl_review = ImplReviewResult(
-        review_status="blocked",
+        verdict="blocked",
         summary="Implementation review could not validate provenance.",
         pull_request_url="https://github.com/cracklings3d/precision-squad/pull/72",
         pull_number=72,
@@ -511,7 +511,7 @@ def test_review_impl_prints_feedback_for_blocked_review(
 
     captured = capsys.readouterr()
     assert status == 3
-    assert "Review Status: blocked" in captured.out
+    assert "Review Verdict: blocked" in captured.out
     assert "pr_body_run_id_mismatch" in captured.out
     assert "Review Feedback URL: comment-url" in captured.out
 
@@ -538,7 +538,7 @@ def test_review_impl_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Mo
                     run_dir=str(tmp_path / ".precision-squad" / "runs" / "run-123"),
                 ),
                 impl_review=ImplReviewResult(
-                    review_status="approved",
+                    verdict="approved",
                     summary="ok",
                     pull_request_url="https://github.com/owner/repo/pull/1",
                     pull_number=1,
@@ -555,7 +555,7 @@ def test_review_impl_uses_config_defaults(tmp_path: Path, monkeypatch: pytest.Mo
     assert status == 0
     assert Path(captured_params["runs_dir"]) == (tmp_path / ".precision-squad" / "runs")
     assert captured_params["review_model"] == "test-model"
-    assert "Review Status: approved" in captured.out
+    assert "Review Verdict: approved" in captured.out
 
 
 def test_review_issue_end_to_end_persists_approved_issue_review(
@@ -586,9 +586,9 @@ def test_review_issue_end_to_end_persists_approved_issue_review(
     captured = capsys.readouterr()
     payload = json.loads((Path(record.run_dir) / "issue-review.json").read_text(encoding="utf-8"))
     assert status == 0
-    assert payload["review_status"] == "approved"
+    assert payload["verdict"] == "approved"
     assert payload["provenance"]["source_artifact"] == "issue-draft.json"
-    assert "Review Status: approved" in captured.out
+    assert "Review Verdict: approved" in captured.out
 
 
 def test_review_issue_end_to_end_persists_changes_requested_when_summary_missing(
@@ -639,9 +639,9 @@ def test_review_issue_end_to_end_persists_changes_requested_when_summary_missing
     captured = capsys.readouterr()
     payload = json.loads((run_dir / "issue-review.json").read_text(encoding="utf-8"))
     assert status == 2
-    assert payload["review_status"] == "changes_requested"
+    assert payload["verdict"] == "changes_requested"
     assert payload["feedback"][0]["code"] == "missing_summary"
-    assert "Review Status: changes_requested" in captured.out
+    assert "Review Verdict: changes_requested" in captured.out
 
 
 def test_review_issue_end_to_end_persists_blocked_when_issue_draft_missing(
@@ -670,9 +670,9 @@ def test_review_issue_end_to_end_persists_blocked_when_issue_draft_missing(
     captured = capsys.readouterr()
     payload = json.loads((run_dir / "issue-review.json").read_text(encoding="utf-8"))
     assert status == 3
-    assert payload["review_status"] == "blocked"
+    assert payload["verdict"] == "blocked"
     assert payload["feedback"][0]["code"] == "issue_draft_missing"
-    assert "Review Status: blocked" in captured.out
+    assert "Review Verdict: blocked" in captured.out
 
 
 def test_plan_run_prints_persisted_artifact_output(
@@ -866,7 +866,7 @@ def test_plan_run_rejects_non_approved_issue_review(
 
     captured = capsys.readouterr()
     assert status == 1
-    assert "review_status" in captured.err
+    assert "verdict" in captured.err
     assert review_status in captured.err
     assert not (run_dir / "approved-plan.json").exists()
 
@@ -932,7 +932,7 @@ def test_cli_omitted_repair_agent_defaults_to_opencode(
                 detail_codes=(),
             ),
             governance_verdict=GovernanceVerdict(
-                status="approved",
+                verdict="approved",
                 summary="Approved",
                 reason_codes=(),
             ),
@@ -1731,7 +1731,7 @@ def test_repair_issue_and_run_issue_print_same_stage_stop_output(
             issue_review=IssueReview(
                 run_id="run-1",
                 issue_ref="owner/repo#1",
-                review_status="approved",
+                verdict="approved",
                 summary="Issue review approved.",
                 feedback=(),
                 provenance=IssueReviewProvenance(
@@ -1743,7 +1743,7 @@ def test_repair_issue_and_run_issue_print_same_stage_stop_output(
             plan_review=PlanReview(
                 run_id="run-1",
                 issue_ref="owner/repo#1",
-                review_status="changes_requested",
+                verdict="changes_requested",
                 summary="Plan review needs changes.",
                 feedback=(
                     PlanReviewFeedback(
@@ -2872,7 +2872,7 @@ def test_config_file_fills_default_args(tmp_path: Path, monkeypatch: pytest.Monk
                 detail_codes=(),
             ),
             governance_verdict=GovernanceVerdict(
-                status="approved",
+                verdict="approved",
                 summary="Approved",
                 reason_codes=(),
             ),
@@ -2971,7 +2971,7 @@ def test_cli_args_override_config_file_values(tmp_path: Path, monkeypatch: pytes
                 detail_codes=(),
             ),
             governance_verdict=GovernanceVerdict(
-                status="approved",
+                verdict="approved",
                 summary="Approved",
                 reason_codes=(),
             ),
@@ -3246,7 +3246,7 @@ def test_implement_run_prints_local_only_stage_output(
                 detail_codes=(),
             ),
             governance_verdict=GovernanceVerdict(
-                status="approved",
+                verdict="approved",
                 summary="Approved",
                 reason_codes=(),
             ),
@@ -3331,7 +3331,7 @@ def test_implement_run_uses_config_defaults(
                 detail_codes=(),
             ),
             governance_verdict=GovernanceVerdict(
-                status="approved",
+                verdict="approved",
                 summary="Approved",
                 reason_codes=(),
             ),
@@ -3406,9 +3406,9 @@ def test_review_plan_end_to_end_persists_approved_plan_review(capsys, tmp_path: 
     captured = capsys.readouterr()
     payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
     assert status == 0
-    assert payload["review_status"] == "approved"
+    assert payload["verdict"] == "approved"
     assert payload["provenance"]["source_artifact"] == "approved-plan.json"
-    assert "Review Status: approved" in captured.out
+    assert "Review Verdict: approved" in captured.out
 
 
 def test_review_plan_end_to_end_persists_changes_requested_when_plan_summary_surface_missing(
@@ -3467,9 +3467,9 @@ def test_review_plan_end_to_end_persists_changes_requested_when_plan_summary_sur
     captured = capsys.readouterr()
     payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
     assert status == 2
-    assert payload["review_status"] == "changes_requested"
+    assert payload["verdict"] == "changes_requested"
     assert payload["feedback"][0]["code"] == "missing_retrieval_surface_summary"
-    assert "Review Status: changes_requested" in captured.out
+    assert "Review Verdict: changes_requested" in captured.out
 
 
 def test_review_plan_end_to_end_persists_blocked_when_approved_plan_missing(
@@ -3515,9 +3515,9 @@ def test_review_plan_end_to_end_persists_blocked_when_approved_plan_missing(
     captured = capsys.readouterr()
     payload = json.loads((run_dir / "plan-review.json").read_text(encoding="utf-8"))
     assert status == 3
-    assert payload["review_status"] == "blocked"
+    assert payload["verdict"] == "blocked"
     assert payload["feedback"][0]["code"] == "approved_plan_missing"
-    assert "Review Status: blocked" in captured.out
+    assert "Review Verdict: blocked" in captured.out
 
 
 def test_install_skill_uses_config_defaults(
@@ -3600,7 +3600,7 @@ def test_repair_issue_no_publish_cli_overrides_true_config(
                 detail_codes=(),
             ),
             governance_verdict=GovernanceVerdict(
-                status="approved",
+                verdict="approved",
                 summary="Approved",
                 reason_codes=(),
             ),
@@ -3722,7 +3722,7 @@ def test_repair_issue_uses_explicit_repo_path_as_config_discovery_root(
                 detail_codes=(),
             ),
             governance_verdict=GovernanceVerdict(
-                status="approved",
+                verdict="approved",
                 summary="Approved",
                 reason_codes=(),
             ),
@@ -3954,7 +3954,7 @@ def test_run_issue_fresh_without_approved_plan_path_reaches_coordinator(
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -4018,7 +4018,7 @@ def test_run_issue_explicit_fresh_without_approved_plan_path_loads_intake_and_re
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -4209,7 +4209,7 @@ def test_run_issue_prompt_selected_fresh_without_plan_reaches_coordinator(
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -4288,7 +4288,7 @@ def test_run_issue_prompt_selected_retry_can_continue_without_new_plan_path(
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -4355,7 +4355,7 @@ def test_run_issue_explicit_fresh_bypasses_ambiguity_and_calls_coordinator(
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -4485,7 +4485,7 @@ def test_repair_issue_review_stages_values_forward_into_params(
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -4975,7 +4975,7 @@ def test_repair_issue_retry_from_with_from_publish_forwards_resume_target_to_coo
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -5061,7 +5061,7 @@ def test_repair_issue_retry_from_with_from_review_impl_forwards_resume_target_to
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
@@ -5150,7 +5150,7 @@ def test_repair_issue_retry_from_without_from_loads_intake_and_forwards_to_coord
                 detail_codes=(),
             ),
             evaluation_result=EvaluationResult(status="success", summary="ok", detail_codes=()),
-            governance_verdict=GovernanceVerdict(status="approved", summary="ok", reason_codes=()),
+            governance_verdict=GovernanceVerdict(verdict="approved", summary="ok", reason_codes=()),
             publish_plan=PublishPlan(status="draft_pr", title="t", body="b", reason_codes=()),
             publish_result=PublishResult(status="dry_run", target="draft_pr", summary="ok", url=None),
         )
