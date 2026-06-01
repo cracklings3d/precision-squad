@@ -699,20 +699,20 @@ def test_mcp_strategy_fails_explicitly_not_implemented(
         pytest.fail("MCP transport raised NotImplementedError instead of GitHubClientError")
 
 
-def test_mcp_transport_raises_for_mark_pull_request_ready(
+def test_mcp_transport_mark_pull_request_ready_uses_github_update_pull_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MCP transport raises GitHubClientError for mark_pull_request_ready.
-
-    The MCP server does not support PR draft state changes via patch_pull_request.
-    Per issue requirements, this operation must raise an explicit error.
-    """
+    """MCP transport mark_pull_request_ready uses github_update_pull_request via patch_pull_request."""
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
 
+    mcp_tool_calls: list[tuple[str, dict]] = []
+
     class FakeMcpStrategy(GitHubMcpTransportStrategy):
-        """Fake strategy that doesn't need real MCP connection for error-case tests."""
-        pass
+        """Fake strategy that doesn't need real MCP connection."""
+        def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
+            mcp_tool_calls.append((tool_name, arguments))
+            return {"html_url": f"https://github.com/{arguments.get('owner')}/{arguments.get('repo')}/pull/{arguments.get('pull_number')}"}
 
     monkeypatch.setattr(
         "precision_squad.github_client.resolve_github_transport",
@@ -731,9 +731,14 @@ def test_mcp_transport_raises_for_mark_pull_request_ready(
 
     client = GitHubWriteClient.from_env()
 
-    # mark_pull_request_ready uses patch_pull_request which raises error for MCP
-    with pytest.raises(GitHubClientError, match="not supported via MCP"):
-        client.mark_pull_request_ready("owner", "repo", 5)
+    # mark_pull_request_ready should NOT raise - it uses github_update_pull_request via patch_pull_request
+    client.mark_pull_request_ready("owner", "repo", 5)
+
+    # Verify github_update_pull_request was called with draft=False
+    update_calls = [(name, args) for name, args in mcp_tool_calls if name == "github_update_pull_request"]
+    assert len(update_calls) >= 1, f"Expected github_update_pull_request call, got {mcp_tool_calls}"
+    call_name, call_args = update_calls[0]
+    assert call_args.get("draft") is False, f"Expected draft=False, got {call_args}"
 
 
 def test_cli_transport_mark_pull_request_ready_uses_gh_api_with_draft_false(
@@ -827,7 +832,7 @@ def test_auto_does_not_select_mcp_when_only_package_importable(
 def test_mcp_transport_uses_real_tool_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MCP transport uses real GitHub MCP tool names (not prefixed with 'github_')."""
+    """MCP transport uses real GitHub MCP tool names with 'github_' prefix."""
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
 
@@ -837,10 +842,27 @@ def test_mcp_transport_uses_real_tool_names(
         def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
             mcp_tool_calls.append((tool_name, arguments))
             # Return appropriate type based on tool
-            if tool_name in ("get_issue", "create_issue", "add_issue_comment", "create_pull_request"):
+            if tool_name == "github_issue_read":
+                if arguments.get("method") == "get":
+                    return {"html_url": "https://github.com/owner/repo/issues/1"}
+                elif arguments.get("method") == "get_comments":
+                    return []
+            elif tool_name == "github_add_issue_comment":
+                return {"html_url": "https://github.com/owner/repo/issues/1#issuecomment-1"}
+            elif tool_name == "github_issue_write":
                 return {"html_url": "https://github.com/owner/repo/issues/1"}
-            elif tool_name == "list_issues":
+            elif tool_name == "github_list_issues":
                 return [{"number": 1, "html_url": "https://github.com/owner/repo/issues/1"}]
+            elif tool_name == "github_create_pull_request":
+                return {"html_url": "https://github.com/owner/repo/pull/1"}
+            elif tool_name == "github_pull_request_read":
+                return {"html_url": "https://github.com/owner/repo/pull/1", "head": {"ref": "head", "sha": "abc123"}}
+            elif tool_name == "github_update_pull_request":
+                return {"html_url": "https://github.com/owner/repo/pull/1"}
+            elif tool_name == "github_merge_pull_request":
+                return {}
+            elif tool_name == "github_update_pull_request_branch":
+                return {}
             return {}
 
     monkeypatch.setattr(
@@ -861,55 +883,134 @@ def test_mcp_transport_uses_real_tool_names(
     client = GitHubWriteClient.from_env()
     reference = IssueReference("owner", "repo", 1)
 
-    # Test fetch_issue uses 'get_issue' (not 'github_get_issue')
+    # Test fetch_issue uses 'github_issue_read' with method='get'
     client._strategy.fetch_issue(reference)
     tool_names = [name for name, _ in mcp_tool_calls]
-    assert "get_issue" in tool_names, f"Expected 'get_issue', got {tool_names}"
-    assert "github_get_issue" not in tool_names, "Should not use 'github_' prefixed tool name"
-
+    assert "github_issue_read" in tool_names, f"Expected 'github_issue_read', got {tool_names}"
+    # Verify method='get' was passed
+    fetch_call = next((args for name, args in mcp_tool_calls if name == "github_issue_read"), None)
+    assert fetch_call is not None and fetch_call.get("method") == "get", f"Expected method='get', got {fetch_call}"
     mcp_tool_calls.clear()
 
-    # Test create_issue_comment uses 'add_issue_comment' (not 'github_create_issue_comment')
+    # Test fetch_issue_comments uses 'github_issue_read' with method='get_comments'
+    client._strategy.fetch_issue_comments(reference)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_issue_read" in tool_names, f"Expected 'github_issue_read', got {tool_names}"
+    comments_call = next((args for name, args in mcp_tool_calls if name == "github_issue_read"), None)
+    assert comments_call is not None and comments_call.get("method") == "get_comments", f"Expected method='get_comments', got {comments_call}"
+    mcp_tool_calls.clear()
+
+    # Test create_issue_comment uses 'github_add_issue_comment'
     client._strategy.create_issue_comment(reference, "body")
     tool_names = [name for name, _ in mcp_tool_calls]
-    assert "add_issue_comment" in tool_names, f"Expected 'add_issue_comment', got {tool_names}"
-    assert "github_create_issue_comment" not in tool_names, "Should not use 'github_' prefixed tool name"
-
+    assert "github_add_issue_comment" in tool_names, f"Expected 'github_add_issue_comment', got {tool_names}"
     mcp_tool_calls.clear()
 
-    # Test create_issue uses 'create_issue' (not 'github_create_issue')
+    # Test create_issue uses 'github_issue_write' with method='create'
     client._strategy.create_issue("owner", "repo", title="Title", body="Body")
     tool_names = [name for name, _ in mcp_tool_calls]
-    assert "create_issue" in tool_names, f"Expected 'create_issue', got {tool_names}"
-    assert "github_create_issue" not in tool_names, "Should not use 'github_' prefixed tool name"
-
+    assert "github_issue_write" in tool_names, f"Expected 'github_issue_write', got {tool_names}"
+    create_call = next((args for name, args in mcp_tool_calls if name == "github_issue_write"), None)
+    assert create_call is not None and create_call.get("method") == "create", f"Expected method='create', got {create_call}"
     mcp_tool_calls.clear()
 
-    # Test list_repo_issues uses 'list_issues' (not 'github_list_issues')
+    # Test list_repo_issues uses 'github_list_issues'
     client._strategy.list_repo_issues("owner", "repo")
     tool_names = [name for name, _ in mcp_tool_calls]
-    assert "list_issues" in tool_names, f"Expected 'list_issues', got {tool_names}"
-    assert "github_list_issues" not in tool_names, "Should not use 'github_' prefixed tool name"
-
+    assert "github_list_issues" in tool_names, f"Expected 'github_list_issues', got {tool_names}"
     mcp_tool_calls.clear()
 
-    # Test create_draft_pull_request uses 'create_pull_request' (not 'github_create_pull_request')
+    # Test create_draft_pull_request uses 'github_create_pull_request'
     client._strategy.create_draft_pull_request(reference, "Title", "Body", "head", "base")
     tool_names = [name for name, _ in mcp_tool_calls]
-    assert "create_pull_request" in tool_names, f"Expected 'create_pull_request', got {tool_names}"
-    assert "github_create_pull_request" not in tool_names, "Should not use 'github_' prefixed tool name"
+    assert "github_create_pull_request" in tool_names, f"Expected 'github_create_pull_request', got {tool_names}"
+    mcp_tool_calls.clear()
+
+    # Test get_pull_request uses 'github_pull_request_read' with method='get'
+    client._strategy.get_pull_request("owner", "repo", 1)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_pull_request_read" in tool_names, f"Expected 'github_pull_request_read', got {tool_names}"
+    mcp_tool_calls.clear()
+
+    # Test update_pull_request uses 'github_update_pull_request'
+    client._strategy.update_pull_request("owner", "repo", 1, title="Title", body="Body")
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_update_pull_request" in tool_names, f"Expected 'github_update_pull_request', got {tool_names}"
+    mcp_tool_calls.clear()
+
+    # Test close_issue uses 'github_issue_write' with method='update'
+    client._strategy.close_issue(reference)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_issue_write" in tool_names, f"Expected 'github_issue_write', got {tool_names}"
+    close_call = next((args for name, args in mcp_tool_calls if name == "github_issue_write"), None)
+    assert close_call is not None and close_call.get("method") == "update", f"Expected method='update', got {close_call}"
+    mcp_tool_calls.clear()
+
+    # Test reopen_issue uses 'github_issue_write' with method='update'
+    client._strategy.reopen_issue(reference)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_issue_write" in tool_names, f"Expected 'github_issue_write', got {tool_names}"
+    mcp_tool_calls.clear()
+
+    # Test merge_pull_request uses 'github_merge_pull_request'
+    client._strategy.merge_pull_request("owner", "repo", 1)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_merge_pull_request" in tool_names, f"Expected 'github_merge_pull_request', got {tool_names}"
+    mcp_tool_calls.clear()
+
+    # Test close_pull_request uses 'github_update_pull_request'
+    client._strategy.close_pull_request("owner", "repo", 1)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_update_pull_request" in tool_names, f"Expected 'github_update_pull_request', got {tool_names}"
+    mcp_tool_calls.clear()
+
+    # Test update_pull_request_branch uses 'github_update_pull_request_branch'
+    client._strategy.update_pull_request_branch("owner", "repo", 1)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "github_update_pull_request_branch" in tool_names, f"Expected 'github_update_pull_request_branch', got {tool_names}"
 
 
-def test_mcp_strategy_raises_for_unsupported_operations(
+def test_mcp_strategy_supports_all_governed_operations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MCP transport raises GitHubClientError for operations not supported by the real MCP server."""
+    """MCP transport supports all governed operations via real MCP tools."""
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
 
+    mcp_tool_calls: list[tuple[str, dict]] = []
+
     class FakeMcpStrategy(GitHubMcpTransportStrategy):
-        """Fake strategy that doesn't need real MCP connection for error-case tests."""
-        pass
+        """Fake strategy that doesn't need real MCP connection for success-case tests."""
+        def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
+            mcp_tool_calls.append((tool_name, arguments))
+            # Return appropriate responses for all governed operations
+            if tool_name == "github_issue_read":
+                if arguments.get("method") == "get":
+                    return {
+                        "title": "Test Issue",
+                        "body": "Issue body",
+                        "html_url": "https://github.com/owner/repo/issues/1",
+                        "labels": [],
+                    }
+                elif arguments.get("method") == "get_comments":
+                    return [{"body": "Comment 1"}, {"body": "Comment 2"}]
+            elif tool_name == "github_add_issue_comment":
+                return {"html_url": "https://github.com/owner/repo/issues/1#issuecomment-1"}
+            elif tool_name == "github_issue_write":
+                return {"html_url": "https://github.com/owner/repo/issues/1"}
+            elif tool_name == "github_list_issues":
+                return [{"number": 1, "html_url": "https://github.com/owner/repo/issues/1", "body": ""}]
+            elif tool_name == "github_create_pull_request":
+                return {"html_url": "https://github.com/owner/repo/pull/1"}
+            elif tool_name == "github_pull_request_read":
+                return {"html_url": "https://github.com/owner/repo/pull/1", "head": {"ref": "head", "sha": "abc123"}}
+            elif tool_name == "github_update_pull_request":
+                return {"html_url": "https://github.com/owner/repo/pull/1"}
+            elif tool_name == "github_merge_pull_request":
+                return {}
+            elif tool_name == "github_update_pull_request_branch":
+                return {}
+            return {}
 
     monkeypatch.setattr(
         "precision_squad.github_client.resolve_github_transport",
@@ -929,21 +1030,37 @@ def test_mcp_strategy_raises_for_unsupported_operations(
     client = GitHubWriteClient.from_env()
     reference = IssueReference("owner", "repo", 1)
 
-    # Test fetch_issue_comments raises GitHubClientError
-    with pytest.raises(GitHubClientError, match="not supported via MCP"):
-        client._strategy.fetch_issue_comments(reference)
+    # Test fetch_issue_comments - should NOT raise
+    result = client._strategy.fetch_issue_comments(reference)
+    assert isinstance(result, list) and len(result) == 2
 
-    # Test update_pull_request raises GitHubClientError
-    with pytest.raises(GitHubClientError, match="not supported via MCP"):
-        client._strategy.update_pull_request("owner", "repo", 1, title="Title", body="Body")
+    # Test update_pull_request - should NOT raise
+    url = client._strategy.update_pull_request("owner", "repo", 1, title="Title", body="Body")
+    assert url == "https://github.com/owner/repo/pull/1"
 
-    # Test patch_pull_request raises GitHubClientError
-    with pytest.raises(GitHubClientError, match="not supported via MCP"):
-        client._strategy.patch_pull_request("owner", "repo", 1, {"draft": False})
+    # Test patch_pull_request - should NOT raise (handles draft state changes)
+    client._strategy.patch_pull_request("owner", "repo", 1, {"draft": False})
 
-    # Test close_pull_request raises GitHubClientError
-    with pytest.raises(GitHubClientError, match="not supported via MCP"):
-        client._strategy.close_pull_request("owner", "repo", 1)
+    # Test close_pull_request - should NOT raise
+    client._strategy.close_pull_request("owner", "repo", 1)
+    # Verify close uses github_update_pull_request with state=closed
+    close_call = next(
+        (args for name, args in mcp_tool_calls if name == "github_update_pull_request" and args.get("state") == "closed"),
+        None
+    )
+    assert close_call is not None, "close_pull_request should use github_update_pull_request with state=closed"
+
+    mcp_tool_calls.clear()
+
+    # Test merge_pull_request - should NOT raise
+    client._strategy.merge_pull_request("owner", "repo", 1)
+    assert any(name == "github_merge_pull_request" for name, _ in mcp_tool_calls)
+
+    mcp_tool_calls.clear()
+
+    # Test update_pull_request_branch - should NOT raise
+    client._strategy.update_pull_request_branch("owner", "repo", 1)
+    assert any(name == "github_update_pull_request_branch" for name, _ in mcp_tool_calls)
 
 
 def test_backward_compatible_construction(
@@ -953,6 +1070,14 @@ def test_backward_compatible_construction(
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
 
     cli_strategy_used: list[str] = []
+
+    expected_resolution = GitHubTransportResolution(
+        requested_mode="cli",
+        selected_transport="cli",
+        mcp_available=False,
+        gh_cli_available=True,
+        decision_reason="cli_required_available",
+    )
 
     class FakeCliStrategy:
         def __init__(self, token: str) -> None:
@@ -985,13 +1110,7 @@ def test_backward_compatible_construction(
 
     monkeypatch.setattr(
         "precision_squad.github_client.resolve_github_transport",
-        lambda **kwargs: GitHubTransportResolution(
-            requested_mode="cli",
-            selected_transport="cli",
-            mcp_available=False,
-            gh_cli_available=True,
-            decision_reason="cli_required_available",
-        ),
+        lambda **kwargs: expected_resolution,
     )
     monkeypatch.setattr(
         "precision_squad.github_client.GitHubCliTransportStrategy",
@@ -1002,11 +1121,15 @@ def test_backward_compatible_construction(
     issue_client = GitHubIssueClient(token="test-token")
     assert issue_client._token == "test-token"
     assert issue_client._strategy is not None
+    # transport_resolution must be non-None after auto-resolution
+    assert issue_client.transport_resolution is expected_resolution
 
     # GitHubWriteClient(token="test-token") should work without strategy=
     write_client = GitHubWriteClient(token="test-token")
     assert write_client._token == "test-token"
     assert write_client._strategy is not None
+    # transport_resolution must be non-None after auto-resolution
+    assert write_client.transport_resolution is expected_resolution
 
     # Verify the auto-resolved strategy works correctly
     issue_client.fetch_issue(IssueReference("owner", "repo", 1))
