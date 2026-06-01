@@ -273,12 +273,16 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         return html_url
 
     def patch_pull_request(self, owner: str, repo: str, pull_number: int, payload: dict) -> None:
-        """Patch a pull request with arbitrary payload via MCP."""
-        self._call_mcp_tool("github_patch_pull_request", {
+        """Patch a pull request with arbitrary payload via MCP.
+
+        Uses github_update_pull_request which is the real GitHub MCP tool.
+        The tool supports: owner, repo, pull_number, title, body, draft, state.
+        """
+        self._call_mcp_tool("github_update_pull_request", {
             "owner": owner,
             "repo": repo,
             "pull_number": pull_number,
-            "payload": payload,
+            **payload,
         })
 
     def reopen_issue(self, reference: IssueReference) -> None:
