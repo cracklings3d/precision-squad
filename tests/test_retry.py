@@ -1026,6 +1026,79 @@ def test_retry_from_publish_with_non_approved_governance_verdict_fails(tmp_path:
         )
 
 
+def test_retry_from_publish_with_malformed_governance_verdict_missing_verdict_fails(
+    tmp_path: Path,
+) -> None:
+    """Test that --from publish fails when governance-verdict.json has neither verdict nor status."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        # Include a valid governance-verdict.json initially, then overwrite with malformed
+    )
+    previous_run_dir = Path(previous.run_dir)
+
+    # Overwrite with malformed governance-verdict.json: file exists but no verdict/status key
+    (previous_run_dir / "governance-verdict.json").write_text(
+        json.dumps(
+            {
+                "summary": "Malformed: missing both verdict and status keys",
+                "reason_codes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="governance-verdict.json must contain either 'verdict' or legacy 'status'"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_with_malformed_governance_verdict_invalid_value_fails(
+    tmp_path: Path,
+) -> None:
+    """Test that --from publish fails when governance-verdict.json has an invalid verdict value."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        # Include a valid governance-verdict.json initially, then overwrite with malformed
+    )
+    previous_run_dir = Path(previous.run_dir)
+
+    # Overwrite with malformed governance-verdict.json: verdict value is invalid
+    (previous_run_dir / "governance-verdict.json").write_text(
+        json.dumps(
+            {
+                "verdict": "unknown_value",
+                "summary": "Malformed: invalid verdict value",
+                "reason_codes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="governance-verdict.json verdict must be 'approved' or 'blocked', got 'unknown_value'"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
 def test_retry_from_publish_without_repair_result_fails(tmp_path: Path) -> None:
     """Test that --from publish fails when repair-result.json is missing."""
     store = RunStore(tmp_path / "runs")
