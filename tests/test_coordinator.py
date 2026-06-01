@@ -21,6 +21,7 @@ from precision_squad.models import (
     ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
+    GovernanceVerdict,
     ImplReviewResult,
     IssueAssessment,
     IssueIntake,
@@ -1310,3 +1311,73 @@ def test_review_plan_returns_blocked_when_schema_invalid_plan_also_has_change_le
     assert report.plan_review.verdict == "blocked"
     assert report.plan_review.feedback[0].code == "approved_plan_invalid"
     assert "named_references" in report.plan_review.feedback[0].message
+
+
+# ---------------------------------------------------------------------
+# Tests for _load_governance_verdict_artifact
+# ---------------------------------------------------------------------
+
+
+def _write_governance_verdict(run_dir: Path, **kwargs: object) -> None:
+    (run_dir).mkdir(parents=True, exist_ok=True)
+    (run_dir / "governance-verdict.json").write_text(
+        json.dumps(kwargs),
+        encoding="utf-8",
+    )
+
+
+def test_load_governance_verdict_artifact_canonical_verdict_key(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        verdict="approved",
+        summary="All checks passed.",
+        reason_codes=["clean-diff"],
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    result = _load_governance_verdict_artifact(tmp_path)
+    assert result == GovernanceVerdict(
+        verdict="approved",
+        summary="All checks passed.",
+        reason_codes=("clean-diff",),
+    )
+
+
+def test_load_governance_verdict_artifact_legacy_status_key(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        status="blocked",
+        summary="Governance blocked due to risk.",
+        reason_codes=["risk-detected"],
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    result = _load_governance_verdict_artifact(tmp_path)
+    assert result == GovernanceVerdict(
+        verdict="blocked",
+        summary="Governance blocked due to risk.",
+        reason_codes=("risk-detected",),
+    )
+
+
+def test_load_governance_verdict_artifact_missing_verdict_fails(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        summary="Summary only, no verdict.",
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    with pytest.raises(ValueError, match="must contain either 'verdict' or legacy 'status'"):
+        _load_governance_verdict_artifact(tmp_path)
+
+
+def test_load_governance_verdict_artifact_invalid_verdict_fails(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        verdict="unknown",
+        summary="Invalid verdict value.",
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    with pytest.raises(ValueError, match="must be 'approved' or 'blocked', got 'unknown'"):
+        _load_governance_verdict_artifact(tmp_path)
