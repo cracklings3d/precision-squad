@@ -60,6 +60,17 @@ def test_repair_package_exports_canonical_seam_first() -> None:
     assert repair.__all__[:3] == ["RepairAdapter", "OpenCodeRepairAdapter", "RepairStage"]
 
 
+def test_vercel_ai_repair_adapter_is_not_in_public_surface() -> None:
+    """Verify VercelAIRepairAdapter is absent from the public package surface."""
+    import precision_squad.repair as repair
+
+    # Not in __all__
+    assert "VercelAIRepairAdapter" not in repair.__all__
+
+    # Not accessible as a module attribute
+    assert not hasattr(repair, "VercelAIRepairAdapter")
+
+
 # ---------------------------------------------------------------------------
 # _parse_repair_json
 # ---------------------------------------------------------------------------
