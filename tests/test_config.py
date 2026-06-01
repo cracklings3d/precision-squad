@@ -329,9 +329,10 @@ def test_repair_issue_config_accepts_legacy_vercel_ai_input(
     )
     monkeypatch.chdir(tmp_path)
 
-    args = _resolve_cli_args(build_parser(), ["repair", "issue", "owner/repo#1"])
+    with pytest.raises(ValueError) as exc_info:
+        _resolve_cli_args(build_parser(), ["repair", "issue", "owner/repo#1"])
 
-    assert args.repair_agent == "vercel-ai"
+    assert "Expected one of: opencode, none" in str(exc_info.value)
 
 
 def test_repair_issue_config_invalid_repair_agent_uses_shared_validator_message(
@@ -349,7 +350,7 @@ def test_repair_issue_config_invalid_repair_agent_uses_shared_validator_message(
     message = str(exc_info.value)
     assert "Invalid value for 'repair_agent' (--repair-agent):" in message
     assert "'openai'" in message
-    assert "Expected one of: opencode, none, vercel-ai" in message
+    assert "Expected one of: opencode, none" in message
 
 
 def test_config_search_locations_includes_both_candidates(tmp_path: Path) -> None:
