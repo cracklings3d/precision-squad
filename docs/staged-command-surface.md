@@ -112,7 +112,7 @@ create issue → review issue → plan → review plan → implement → publish
 - `qa-baseline-result.json`
 - `qa-result.json`
 - `evaluation-result.json`
-- `governance-verdict.json`
+- `governance-verdict.json` — contains `verdict` field (`approved` | `blocked`)
 - `decision-log.attempt-{attempt}.json`
 
 **Gate Behavior:** Governance check after implement. If `governance-verdict.json` does not contain `verdict: approved`, `publish` is not invoked.
