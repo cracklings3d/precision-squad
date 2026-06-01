@@ -151,22 +151,31 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
 
     def fetch_issue(self, reference: IssueReference) -> dict[str, object]:
         """Fetch a single issue payload via MCP."""
-        result = self._call_mcp_tool("get_issue", {
+        result = self._call_mcp_tool("github_issue_read", {
+            "method": "get",
             "owner": reference.owner,
             "repo": reference.repo,
             "issue_number": reference.number,
         })
         if not isinstance(result, dict):
-            raise GitHubClientError(f"Invalid response from get_issue for {reference}")
+            raise GitHubClientError(f"Invalid response from github_issue_read for {reference}")
         return result
 
     def fetch_issue_comments(self, reference: IssueReference) -> list[dict[str, object]]:
         """Fetch comments for a single issue via MCP."""
-        raise GitHubClientError("Issue comments not supported via MCP transport")
+        result = self._call_mcp_tool("github_issue_read", {
+            "method": "get_comments",
+            "owner": reference.owner,
+            "repo": reference.repo,
+            "issue_number": reference.number,
+        })
+        if not isinstance(result, list):
+            raise GitHubClientError(f"Invalid response from github_issue_read (get_comments) for {reference}")
+        return result
 
     def create_issue_comment(self, reference: IssueReference, body: str) -> str:
         """Create an issue comment via MCP and return its HTML URL."""
-        result = self._call_mcp_tool("add_issue_comment", {
+        result = self._call_mcp_tool("github_add_issue_comment", {
             "owner": reference.owner,
             "repo": reference.repo,
             "issue_number": reference.number,
@@ -177,14 +186,15 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         elif isinstance(result, str):
             html_url = result
         else:
-            raise GitHubClientError(f"Invalid response from add_issue_comment for {reference}")
+            raise GitHubClientError(f"Invalid response from github_add_issue_comment for {reference}")
         if not isinstance(html_url, str):
-            raise GitHubClientError(f"add_issue_comment response missing html_url for {reference}")
+            raise GitHubClientError(f"github_add_issue_comment response missing html_url for {reference}")
         return html_url
 
     def create_issue(self, owner: str, repo: str, *, title: str, body: str) -> str:
         """Create an issue via MCP and return its HTML URL."""
-        result = self._call_mcp_tool("create_issue", {
+        result = self._call_mcp_tool("github_issue_write", {
+            "method": "create",
             "owner": owner,
             "repo": repo,
             "title": title,
@@ -195,19 +205,20 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         elif isinstance(result, str):
             html_url = result
         else:
-            raise GitHubClientError(f"Invalid response from create_issue for {owner}/{repo}")
+            raise GitHubClientError(f"Invalid response from github_issue_write for {owner}/{repo}")
         if not isinstance(html_url, str):
-            raise GitHubClientError(f"create_issue response missing html_url for {owner}/{repo}")
+            raise GitHubClientError(f"github_issue_write response missing html_url for {owner}/{repo}")
         return html_url
 
     def list_repo_issues(self, owner: str, repo: str) -> list[dict[str, object]]:
         """List open issues for a repository via MCP."""
-        result = self._call_mcp_tool("list_issues", {
+        result = self._call_mcp_tool("github_list_issues", {
             "owner": owner,
             "repo": repo,
+            "state": "OPEN",
         })
         if not isinstance(result, list):
-            raise GitHubClientError(f"Invalid response from list_issues for {owner}/{repo}")
+            raise GitHubClientError(f"Invalid response from github_list_issues for {owner}/{repo}")
         return result
 
     def create_draft_pull_request(
@@ -219,7 +230,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         base: str,
     ) -> str:
         """Create a draft pull request via MCP and return its HTML URL."""
-        result = self._call_mcp_tool("create_pull_request", {
+        result = self._call_mcp_tool("github_create_pull_request", {
             "owner": reference.owner,
             "repo": reference.repo,
             "title": title,
@@ -233,39 +244,65 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
         elif isinstance(result, str):
             html_url = result
         else:
-            raise GitHubClientError(f"Invalid response from create_pull_request for {reference}")
+            raise GitHubClientError(f"Invalid response from github_create_pull_request for {reference}")
         if not isinstance(html_url, str):
-            raise GitHubClientError(f"create_pull_request response missing html_url for {reference}")
+            raise GitHubClientError(f"github_create_pull_request response missing html_url for {reference}")
         return html_url
 
     def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict[str, object]:
         """Get a pull request payload via MCP."""
-        result = self._call_mcp_tool("get_pull_request", {
+        result = self._call_mcp_tool("github_pull_request_read", {
+            "method": "get",
             "owner": owner,
             "repo": repo,
             "pull_number": pull_number,
         })
         if not isinstance(result, dict):
-            raise GitHubClientError(f"Invalid response from get_pull_request for {owner}/{repo}/{pull_number}")
+            raise GitHubClientError(f"Invalid response from github_pull_request_read for {owner}/{repo}/{pull_number}")
         return result
 
     def update_pull_request(
         self, owner: str, repo: str, pull_number: int, *, title: str, body: str
     ) -> str:
         """Update a pull request title/body via MCP and return its HTML URL."""
-        raise GitHubClientError("PR title/body update not supported via MCP transport")
+        result = self._call_mcp_tool("github_update_pull_request", {
+            "owner": owner,
+            "repo": repo,
+            "pull_number": pull_number,
+            "title": title,
+            "body": body,
+        })
+        if isinstance(result, dict):
+            html_url = result.get("html_url")
+        elif isinstance(result, str):
+            html_url = result
+        else:
+            raise GitHubClientError(f"Invalid response from github_update_pull_request for {owner}/{repo}/{pull_number}")
+        if not isinstance(html_url, str):
+            raise GitHubClientError(f"github_update_pull_request response missing html_url for {owner}/{repo}/{pull_number}")
+        return html_url
 
     def patch_pull_request(self, owner: str, repo: str, pull_number: int, payload: dict) -> None:
         """Patch a pull request with arbitrary payload via MCP.
 
-        Raises GitHubClientError since MCP transport does not support
-        arbitrary PR patching (draft state changes not supported).
+        Handles draft state changes and state (close) via github_update_pull_request.
         """
-        raise GitHubClientError("PR draft state changes not supported via MCP transport")
+        result = self._call_mcp_tool("github_update_pull_request", {
+            "owner": owner,
+            "repo": repo,
+            "pull_number": pull_number,
+            **payload,
+        })
+        # github_update_pull_request returns dict on success
+        if isinstance(result, dict):
+            return
+        # If it returns something else, treat as success
+        return
 
     def reopen_issue(self, reference: IssueReference) -> None:
         """Reopen a closed issue via MCP."""
-        self._call_mcp_tool("update_issue", {
+        self._call_mcp_tool("github_issue_write", {
+            "method": "update",
             "owner": reference.owner,
             "repo": reference.repo,
             "issue_number": reference.number,
@@ -274,7 +311,8 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
 
     def close_issue(self, reference: IssueReference) -> None:
         """Close an open issue via MCP."""
-        self._call_mcp_tool("update_issue", {
+        self._call_mcp_tool("github_issue_write", {
+            "method": "update",
             "owner": reference.owner,
             "repo": reference.repo,
             "issue_number": reference.number,
@@ -284,7 +322,7 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
     def merge_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
         """Merge an open pull request via MCP."""
         try:
-            self._call_mcp_tool("merge_pull_request", {
+            self._call_mcp_tool("github_merge_pull_request", {
                 "owner": owner,
                 "repo": repo,
                 "pull_number": pull_number,
@@ -296,13 +334,18 @@ class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
 
     def close_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
         """Close an open pull request via MCP."""
-        raise GitHubClientError("PR close not supported via MCP transport")
+        self._call_mcp_tool("github_update_pull_request", {
+            "owner": owner,
+            "repo": repo,
+            "pull_number": pull_number,
+            "state": "closed",
+        })
 
     def update_pull_request_branch(
         self, owner: str, repo: str, pull_number: int
     ) -> None:
         """Update a pull request branch with latest base changes via MCP."""
-        self._call_mcp_tool("update_pull_request_branch", {
+        self._call_mcp_tool("github_update_pull_request_branch", {
             "owner": owner,
             "repo": repo,
             "pull_number": pull_number,
@@ -770,8 +813,10 @@ class GitHubIssueClient:
             # Auto-select strategy when not provided (backward compatibility)
             resolution = transport_resolution or resolve_github_transport()
             strategy = _build_strategy(resolution, token)
+            self.transport_resolution = resolution
+        else:
+            self.transport_resolution = transport_resolution
         self._strategy = strategy
-        self.transport_resolution = transport_resolution
 
     @classmethod
     def from_env(cls, token_env: str = "GITHUB_TOKEN") -> "GitHubIssueClient":
@@ -836,8 +881,10 @@ class GitHubWriteClient:
             # Auto-select strategy when not provided (backward compatibility)
             resolution = transport_resolution or resolve_github_transport()
             strategy = _build_strategy(resolution, token)
+            self.transport_resolution = resolution
+        else:
+            self.transport_resolution = transport_resolution
         self._strategy = strategy
-        self.transport_resolution = transport_resolution
 
     @classmethod
     def from_env(cls, token_env: str = "GITHUB_TOKEN") -> "GitHubWriteClient":
