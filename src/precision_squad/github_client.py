@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from abc import ABC, abstractmethod
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -22,6 +23,580 @@ class GitHubClientError(RuntimeError):
     """Raised when GitHub issue fetches cannot be completed."""
 
 
+class GitHubRuntimeTransport(ABC):
+    """Private runtime transport boundary selected once per client."""
+
+    @abstractmethod
+    def fetch_issue(self, reference: IssueReference) -> dict[str, object]:
+        """Fetch a single issue payload from the transport."""
+
+    @abstractmethod
+    def fetch_issue_comments(self, reference: IssueReference) -> list[dict[str, object]]:
+        """Fetch comments for a single issue from the transport."""
+
+    @abstractmethod
+    def create_issue_comment(self, reference: IssueReference, body: str) -> str:
+        """Create an issue comment and return its HTML URL."""
+
+    @abstractmethod
+    def create_issue(self, owner: str, repo: str, *, title: str, body: str) -> str:
+        """Create an issue and return its HTML URL."""
+
+    @abstractmethod
+    def list_repo_issues(self, owner: str, repo: str) -> list[dict[str, object]]:
+        """List open issues for a repository."""
+
+    @abstractmethod
+    def create_draft_pull_request(
+        self,
+        reference: IssueReference,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> str:
+        """Create a draft pull request and return its HTML URL."""
+
+    @abstractmethod
+    def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict[str, object]:
+        """Get a pull request payload."""
+
+    @abstractmethod
+    def update_pull_request(
+        self, owner: str, repo: str, pull_number: int, *, title: str, body: str
+    ) -> str:
+        """Update a pull request title/body and return its HTML URL."""
+
+    @abstractmethod
+    def patch_pull_request(self, owner: str, repo: str, pull_number: int, payload: dict) -> None:
+        """Patch a pull request with arbitrary payload."""
+
+    @abstractmethod
+    def reopen_issue(self, reference: IssueReference) -> None:
+        """Reopen a closed issue."""
+
+    @abstractmethod
+    def close_issue(self, reference: IssueReference) -> None:
+        """Close an open issue."""
+
+    @abstractmethod
+    def merge_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        """Merge an open pull request."""
+
+    @abstractmethod
+    def close_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        """Close an open pull request."""
+
+    @abstractmethod
+    def update_pull_request_branch(
+        self, owner: str, repo: str, pull_number: int
+    ) -> None:
+        """Update a pull request branch with latest base changes."""
+
+
+class GitHubMcpTransportStrategy(GitHubRuntimeTransport):
+    """MCP-based GitHub transport - not yet implemented."""
+
+    def fetch_issue(self, reference: IssueReference) -> dict[str, object]:
+        raise NotImplementedError("MCP transport not implemented for fetch_issue")
+
+    def fetch_issue_comments(self, reference: IssueReference) -> list[dict[str, object]]:
+        raise NotImplementedError("MCP transport not implemented for fetch_issue_comments")
+
+    def create_issue_comment(self, reference: IssueReference, body: str) -> str:
+        raise NotImplementedError("MCP transport not implemented for create_issue_comment")
+
+    def create_issue(self, owner: str, repo: str, *, title: str, body: str) -> str:
+        raise NotImplementedError("MCP transport not implemented for create_issue")
+
+    def list_repo_issues(self, owner: str, repo: str) -> list[dict[str, object]]:
+        raise NotImplementedError("MCP transport not implemented for list_repo_issues")
+
+    def create_draft_pull_request(
+        self,
+        reference: IssueReference,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> str:
+        raise NotImplementedError("MCP transport not implemented for create_draft_pull_request")
+
+    def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict[str, object]:
+        raise NotImplementedError("MCP transport not implemented for get_pull_request")
+
+    def update_pull_request(
+        self, owner: str, repo: str, pull_number: int, *, title: str, body: str
+    ) -> str:
+        raise NotImplementedError("MCP transport not implemented for update_pull_request")
+
+    def patch_pull_request(self, owner: str, repo: str, pull_number: int, payload: dict) -> None:
+        raise NotImplementedError("MCP transport not implemented for patch_pull_request")
+
+    def reopen_issue(self, reference: IssueReference) -> None:
+        raise NotImplementedError("MCP transport not implemented for reopen_issue")
+
+    def close_issue(self, reference: IssueReference) -> None:
+        raise NotImplementedError("MCP transport not implemented for close_issue")
+
+    def merge_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        raise NotImplementedError("MCP transport not implemented for merge_pull_request")
+
+    def close_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        raise NotImplementedError("MCP transport not implemented for close_pull_request")
+
+    def update_pull_request_branch(
+        self, owner: str, repo: str, pull_number: int
+    ) -> None:
+        raise NotImplementedError("MCP transport not implemented for update_pull_request_branch")
+
+
+class GitHubCliTransportStrategy(GitHubRuntimeTransport):
+    """gh CLI-based GitHub transport using existing _via_gh helpers."""
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def fetch_issue(self, reference: IssueReference) -> dict[str, object]:
+        """Fetch issue via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub issue fetch failed for {reference}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub issue fetch failed for {reference}: gh CLI returned {completed.returncode}"
+            )
+
+        return json.loads(completed.stdout)
+
+    def fetch_issue_comments(self, reference: IssueReference) -> list[dict[str, object]]:
+        """Fetch issue comments via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}/comments",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub issue comments fetch failed for {reference}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub issue comments fetch failed for {reference}: gh CLI returned {completed.returncode}"
+            )
+
+        payload = json.loads(completed.stdout)
+        if not isinstance(payload, list):
+            raise GitHubClientError(f"GitHub issue comments payload for {reference} is invalid.")
+        return payload
+
+    def create_issue_comment(self, reference: IssueReference, body: str) -> str:
+        """Create issue comment via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}/comments",
+                    "--method",
+                    "POST",
+                    "-f",
+                    f"body={body}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub comment create failed for {reference}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub comment create failed for {reference}: gh CLI returned {completed.returncode}"
+            )
+
+        payload = json.loads(completed.stdout)
+        html_url = payload.get("html_url")
+        if not isinstance(html_url, str):
+            raise GitHubClientError("GitHub comment response did not include html_url.")
+        return html_url
+
+    def create_issue(self, owner: str, repo: str, *, title: str, body: str) -> str:
+        """Create issue via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/issues",
+                    "--method",
+                    "POST",
+                    "-f",
+                    f"title={title}",
+                    "-f",
+                    f"body={body}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub issue create failed for {owner}/{repo}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub issue create failed for {owner}/{repo}: gh CLI returned {completed.returncode}"
+            )
+
+        payload = json.loads(completed.stdout)
+        html_url = payload.get("html_url")
+        if not isinstance(html_url, str):
+            raise GitHubClientError("GitHub issue response did not include html_url.")
+        return html_url
+
+    def list_repo_issues(self, owner: str, repo: str) -> list[dict[str, object]]:
+        """List repository issues via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/issues?state=open&per_page=100",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub issue list fetch failed for {owner}/{repo}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub issue list fetch failed for {owner}/{repo}: gh CLI returned {completed.returncode}"
+            )
+
+        payload = json.loads(completed.stdout)
+        if not isinstance(payload, list):
+            raise GitHubClientError(f"GitHub issue list payload for {owner}/{repo} is invalid.")
+        return payload
+
+    def create_draft_pull_request(
+        self,
+        reference: IssueReference,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> str:
+        """Create draft PR via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{reference.owner}/{reference.repo}/pulls",
+                    "--method",
+                    "POST",
+                    "-f",
+                    f"title={title}",
+                    "-f",
+                    f"body={body}",
+                    "-f",
+                    f"head={head}",
+                    "-f",
+                    f"base={base}",
+                    "-f",
+                    "draft=true",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub draft PR create failed for {reference}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub draft PR create failed for {reference}: gh CLI returned {completed.returncode}"
+            )
+
+        payload = json.loads(completed.stdout)
+        html_url = payload.get("html_url")
+        if not isinstance(html_url, str):
+            raise GitHubClientError("GitHub pull request response did not include html_url.")
+        return html_url
+
+    def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict[str, object]:
+        """Get pull request via gh CLI."""
+        try:
+            completed = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/pulls/{pull_number}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub PR fetch failed for {owner}/{repo}/{pull_number}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub PR fetch failed for {owner}/{repo}/{pull_number}: gh CLI returned {completed.returncode}"
+            )
+
+        payload = json.loads(completed.stdout)
+        if not isinstance(payload, dict):
+            raise GitHubClientError(f"GitHub PR payload for {owner}/{repo}/{pull_number} is invalid.")
+        return payload
+
+    def update_pull_request(
+        self, owner: str, repo: str, pull_number: int, *, title: str, body: str
+    ) -> str:
+        """Update PR title/body via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/pulls/{pull_number}",
+                    "--method",
+                    "PATCH",
+                    "-f",
+                    f"title={title}",
+                    "-f",
+                    f"body={body}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub PR update failed for {owner}/{repo}/{pull_number}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub PR update failed for {owner}/{repo}/{pull_number}: gh CLI returned {completed.returncode}"
+            )
+
+        payload = json.loads(completed.stdout)
+        html_url = payload.get("html_url")
+        if not isinstance(html_url, str):
+            raise GitHubClientError("GitHub pull request response did not include html_url.")
+        return html_url
+
+    def patch_pull_request(self, owner: str, repo: str, pull_number: int, payload: dict) -> None:
+        """Patch PR with arbitrary payload via gh CLI."""
+        state = payload.get("state")
+        draft = payload.get("draft")
+        try:
+            cmd = [
+                "gh",
+                "api",
+                f"repos/{owner}/{repo}/pulls/{pull_number}",
+                "--method",
+                "PATCH",
+            ]
+            if state is not None:
+                cmd.extend(["-f", f"state={state}"])
+            if draft is not None:
+                cmd.extend(["-f", f"draft={str(draft).lower()}"])
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub PR patch failed for {owner}/{repo}/{pull_number}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub PR patch failed for {owner}/{repo}/{pull_number}: gh CLI returned {completed.returncode}"
+            )
+
+    def reopen_issue(self, reference: IssueReference) -> None:
+        """Reopen issue via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}",
+                    "--method",
+                    "PATCH",
+                    "-f",
+                    "state=open",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub issue reopen failed for {reference}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub issue reopen failed for {reference}: gh CLI returned {completed.returncode}"
+            )
+
+    def close_issue(self, reference: IssueReference) -> None:
+        """Close issue via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}",
+                    "--method",
+                    "PATCH",
+                    "-f",
+                    "state=closed",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub issue close failed for {reference}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub issue close failed for {reference}: gh CLI returned {completed.returncode}"
+            )
+
+    def merge_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        """Merge PR via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/pulls/{pull_number}/merge",
+                    "--method",
+                    "PUT",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub PR merge failed for {owner}/{repo}/{pull_number}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            if "409" in completed.stderr or "already been merged" in completed.stderr.lower():
+                return
+            raise GitHubClientError(
+                f"GitHub PR merge failed for {owner}/{repo}/{pull_number}: gh CLI returned {completed.returncode}"
+            )
+
+    def close_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
+        """Close PR via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/pulls/{pull_number}",
+                    "--method",
+                    "PATCH",
+                    "-f",
+                    "state=closed",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub PR close failed for {owner}/{repo}/{pull_number}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            if "405" in completed.stderr or "Cannot change" in completed.stderr:
+                return
+            raise GitHubClientError(
+                f"GitHub PR close failed for {owner}/{repo}/{pull_number}: gh CLI returned {completed.returncode}"
+            )
+
+    def update_pull_request_branch(
+        self, owner: str, repo: str, pull_number: int
+    ) -> None:
+        """Update PR branch via gh CLI."""
+        try:
+            completed = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner}/{repo}/pulls/{pull_number}/updateBranch",
+                    "--method",
+                    "PUT",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise GitHubClientError(
+                f"GitHub PR branch update failed for {owner}/{repo}/{pull_number}: gh CLI unavailable"
+            ) from exc
+
+        if completed.returncode != 0:
+            raise GitHubClientError(
+                f"GitHub PR branch update failed for {owner}/{repo}/{pull_number}: gh CLI returned {completed.returncode}"
+            )
+
+
+def _build_strategy(
+    resolution: GitHubTransportResolution, token: str
+) -> GitHubRuntimeTransport:
+    """Build the appropriate strategy based on transport resolution."""
+    selected = resolution.selected_transport
+    if selected == "mcp":
+        return GitHubMcpTransportStrategy()
+    if selected == "cli":
+        return GitHubCliTransportStrategy(token)
+    raise GitHubClientError(f"Unknown transport selected: {selected}")
+
+
 class GitHubIssueClient:
     """Fetch issue data from the GitHub REST API."""
 
@@ -29,9 +604,11 @@ class GitHubIssueClient:
         self,
         token: str,
         *,
+        strategy: GitHubRuntimeTransport,
         transport_resolution: GitHubTransportResolution | None = None,
     ) -> None:
         self._token = token
+        self._strategy = strategy
         self.transport_resolution = transport_resolution
 
     @classmethod
@@ -41,15 +618,13 @@ class GitHubIssueClient:
             raise GitHubClientError(
                 f"Missing GitHub token. Set the {token_env} environment variable."
             )
-        return cls(token, transport_resolution=resolve_github_transport())
+        resolution = resolve_github_transport()
+        strategy = _build_strategy(resolution, token)
+        return cls(token, strategy=strategy, transport_resolution=resolution)
 
     def fetch_issue(self, reference: IssueReference) -> GitHubIssue:
-        payload = self._fetch_issue_via_gh(reference)
-        if payload is None:
-            payload = self._fetch_issue_via_http(reference)
-        comments_payload = self._fetch_issue_comments_via_gh(reference)
-        if comments_payload is None:
-            comments_payload = self._fetch_issue_comments_via_http(reference)
+        payload = self._strategy.fetch_issue(reference)
+        comments_payload = self._strategy.fetch_issue_comments(reference)
 
         if "pull_request" in payload:
             raise GitHubClientError(f"{reference} refers to a pull request, not an issue.")
@@ -83,107 +658,6 @@ class GitHubIssueClient:
             comments=comments,
         )
 
-    def _fetch_issue_via_gh(self, reference: IssueReference) -> dict[str, object] | None:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return None
-
-        if completed.returncode != 0:
-            return None
-
-        return json.loads(completed.stdout)
-
-    def _fetch_issue_via_http(self, reference: IssueReference) -> dict[str, object]:
-        request = urllib_request.Request(
-            url=(
-                f"https://api.github.com/repos/{reference.owner}/"
-                f"{reference.repo}/issues/{reference.number}"
-            ),
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self._token}",
-                "User-Agent": "precision-squad",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-
-        try:
-            with urllib_request.urlopen(request) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib_error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise GitHubClientError(
-                f"GitHub issue fetch failed for {reference}: HTTP {exc.code}. {detail}"
-            ) from exc
-        except urllib_error.URLError as exc:
-            raise GitHubClientError(
-                f"GitHub issue fetch failed for {reference}: {exc.reason}"
-            ) from exc
-
-    def _fetch_issue_comments_via_gh(
-        self, reference: IssueReference
-    ) -> list[dict[str, object]] | None:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}/comments",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return None
-
-        if completed.returncode != 0:
-            return None
-
-        payload = json.loads(completed.stdout)
-        return payload if isinstance(payload, list) else None
-
-    def _fetch_issue_comments_via_http(self, reference: IssueReference) -> list[dict[str, object]]:
-        request = urllib_request.Request(
-            url=(
-                f"https://api.github.com/repos/{reference.owner}/"
-                f"{reference.repo}/issues/{reference.number}/comments"
-            ),
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self._token}",
-                "User-Agent": "precision-squad",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-
-        try:
-            with urllib_request.urlopen(request) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib_error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise GitHubClientError(
-                f"GitHub issue comments fetch failed for {reference}: HTTP {exc.code}. {detail}"
-            ) from exc
-        except urllib_error.URLError as exc:
-            raise GitHubClientError(
-                f"GitHub issue comments fetch failed for {reference}: {exc.reason}"
-            ) from exc
-
-        if not isinstance(payload, list):
-            raise GitHubClientError(f"GitHub issue comments payload for {reference} is invalid.")
-        return payload
-
 
 class GitHubWriteClient:
     """Minimal PAT-backed GitHub write client."""
@@ -192,9 +666,11 @@ class GitHubWriteClient:
         self,
         token: str,
         *,
+        strategy: GitHubRuntimeTransport,
         transport_resolution: GitHubTransportResolution | None = None,
     ) -> None:
         self._token = token
+        self._strategy = strategy
         self.transport_resolution = transport_resolution
 
     @classmethod
@@ -204,40 +680,15 @@ class GitHubWriteClient:
             raise GitHubClientError(
                 f"Missing GitHub token. Set the {token_env} environment variable."
             )
-        return cls(token, transport_resolution=resolve_github_transport())
+        resolution = resolve_github_transport()
+        strategy = _build_strategy(resolution, token)
+        return cls(token, strategy=strategy, transport_resolution=resolution)
 
     def create_issue_comment(self, reference: IssueReference, body: str) -> str:
-        gh_url = self._create_issue_comment_via_gh(reference, body)
-        if gh_url is not None:
-            return gh_url
-
-        payload = self._request_json(
-            method="POST",
-            url=(
-                f"https://api.github.com/repos/{reference.owner}/"
-                f"{reference.repo}/issues/{reference.number}/comments"
-            ),
-            payload={"body": body},
-        )
-        html_url = payload.get("html_url")
-        if not isinstance(html_url, str):
-            raise GitHubClientError("GitHub comment response did not include html_url.")
-        return html_url
+        return self._strategy.create_issue_comment(reference, body)
 
     def create_issue(self, owner: str, repo: str, *, title: str, body: str) -> str:
-        gh_url = self._create_issue_via_gh(owner, repo, title=title, body=body)
-        if gh_url is not None:
-            return gh_url
-
-        payload = self._request_json(
-            method="POST",
-            url=f"https://api.github.com/repos/{owner}/{repo}/issues",
-            payload={"title": title, "body": body},
-        )
-        html_url = payload.get("html_url")
-        if not isinstance(html_url, str):
-            raise GitHubClientError("GitHub issue response did not include html_url.")
-        return html_url
+        return self._strategy.create_issue(owner, repo, title=title, body=body)
 
     def find_open_docs_remediation_issue(
         self,
@@ -248,9 +699,7 @@ class GitHubWriteClient:
         blocker_findings: list[dict[str, str]] | None = None,
         exclude_issue_number: int | None = None,
     ) -> tuple[int, str] | None:
-        payload = self._list_repo_issues_via_gh(owner, repo)
-        if payload is None:
-            payload = self._list_repo_issues_via_http(owner, repo)
+        payload = self._strategy.list_repo_issues(owner, repo)
 
         normalized_findings = normalize_docs_findings(blocker_findings or [])
         for item in payload:
@@ -275,83 +724,6 @@ class GitHubWriteClient:
             return number, html_url
         return None
 
-    def _create_issue_comment_via_gh(self, reference: IssueReference, body: str) -> str | None:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}/comments",
-                    "--method",
-                    "POST",
-                    "-f",
-                    f"body={body}",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return None
-
-        if completed.returncode != 0:
-            return None
-
-        payload = json.loads(completed.stdout)
-        html_url = payload.get("html_url")
-        return html_url if isinstance(html_url, str) else None
-
-    def _list_repo_issues_via_gh(self, owner: str, repo: str) -> list[dict[str, object]] | None:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{owner}/{repo}/issues?state=open&per_page=100",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return None
-
-        if completed.returncode != 0:
-            return None
-
-        payload = json.loads(completed.stdout)
-        return payload if isinstance(payload, list) else None
-
-    def _create_issue_via_gh(
-        self, owner: str, repo: str, *, title: str, body: str
-    ) -> str | None:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{owner}/{repo}/issues",
-                    "--method",
-                    "POST",
-                    "-f",
-                    f"title={title}",
-                    "-f",
-                    f"body={body}",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return None
-
-        if completed.returncode != 0:
-            return None
-
-        payload = json.loads(completed.stdout)
-        html_url = payload.get("html_url")
-        return html_url if isinstance(html_url, str) else None
-
     def create_draft_pull_request(
         self,
         reference: IssueReference,
@@ -360,68 +732,18 @@ class GitHubWriteClient:
         head: str,
         base: str = "main",
     ) -> str:
-        payload = self._request_json(
-            method="POST",
-            url=f"https://api.github.com/repos/{reference.owner}/{reference.repo}/pulls",
-            payload={
-                "title": title,
-                "body": body,
-                "head": head,
-                "base": base,
-                "draft": True,
-            },
-        )
-        html_url = payload.get("html_url")
-        if not isinstance(html_url, str):
-            raise GitHubClientError("GitHub pull request response did not include html_url.")
-        return html_url
+        return self._strategy.create_draft_pull_request(reference, title, body, head, base)
 
     def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict[str, object]:
-        try:
-            completed = subprocess.run(
-                ["gh", "api", f"repos/{owner}/{repo}/pulls/{pull_number}"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            completed = None
-
-        if completed is not None and completed.returncode == 0:
-            payload = json.loads(completed.stdout)
-            if isinstance(payload, dict):
-                return payload
-
-        payload = self._request_json(
-            method="GET",
-            url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
-            payload=None,
-        )
-        return payload
+        return self._strategy.get_pull_request(owner, repo, pull_number)
 
     def update_pull_request(
         self, owner: str, repo: str, pull_number: int, *, title: str, body: str
     ) -> str:
-        gh_url = self._update_pull_request_via_gh(owner, repo, pull_number, title=title, body=body)
-        if gh_url is not None:
-            return gh_url
-
-        payload = self._request_json(
-            method="PATCH",
-            url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
-            payload={"title": title, "body": body},
-        )
-        html_url = payload.get("html_url")
-        if not isinstance(html_url, str):
-            raise GitHubClientError("GitHub pull request response did not include html_url.")
-        return html_url
+        return self._strategy.update_pull_request(owner, repo, pull_number, title=title, body=body)
 
     def mark_pull_request_ready(self, owner: str, repo: str, pull_number: int) -> None:
-        self._request_json(
-            method="PATCH",
-            url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
-            payload={"draft": False},
-        )
+        self._strategy.patch_pull_request(owner, repo, pull_number, {"draft": False})
 
     def get_pull_request_head_branch(self, owner: str, repo: str, pull_number: int) -> str | None:
         payload = self.get_pull_request(owner, repo, pull_number)
@@ -432,299 +754,25 @@ class GitHubWriteClient:
         return ref if isinstance(ref, str) else None
 
     def get_pull_request_head_sha(self, owner: str, repo: str, pull_number: int) -> str | None:
-        try:
-            completed = subprocess.run(
-                ["gh", "api", f"repos/{owner}/{repo}/pulls/{pull_number}"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            completed = None
-
-        if completed is not None and completed.returncode == 0:
-            payload = json.loads(completed.stdout)
-            return _extract_pull_head_sha(payload)
-
-        payload = self._request_json(
-            method="GET",
-            url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
-            payload=None,
-        )
+        payload = self.get_pull_request(owner, repo, pull_number)
         return _extract_pull_head_sha(payload)
 
     def reopen_issue(self, reference: IssueReference) -> None:
-        gh_success = self._reopen_issue_via_gh(reference)
-        if gh_success:
-            return
-
-        self._request_json(
-            method="PATCH",
-            url=(
-                f"https://api.github.com/repos/{reference.owner}/"
-                f"{reference.repo}/issues/{reference.number}"
-            ),
-            payload={"state": "open"},
-        )
+        self._strategy.reopen_issue(reference)
 
     def close_issue(self, reference: IssueReference) -> None:
-        gh_success = self._close_issue_via_gh(reference)
-        if gh_success:
-            return
-
-        self._request_json(
-            method="PATCH",
-            url=(
-                f"https://api.github.com/repos/{reference.owner}/"
-                f"{reference.repo}/issues/{reference.number}"
-            ),
-            payload={"state": "closed"},
-        )
+        self._strategy.close_issue(reference)
 
     def merge_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
-        gh_success = self._merge_pull_request_via_gh(owner, repo, pull_number)
-        if gh_success:
-            return
-
-        try:
-            self._request_json(
-                method="PUT",
-                url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/merge",
-                payload={},
-            )
-        except GitHubClientError as exc:
-            if "409" in str(exc):
-                return
-            raise
+        self._strategy.merge_pull_request(owner, repo, pull_number)
 
     def close_pull_request(self, owner: str, repo: str, pull_number: int) -> None:
-        gh_success = self._close_pull_request_via_gh(owner, repo, pull_number)
-        if gh_success:
-            return
-
-        try:
-            self._request_json(
-                method="PATCH",
-                url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
-                payload={"state": "closed"},
-            )
-        except GitHubClientError as exc:
-            if "405" in str(exc):
-                return
-            raise
+        self._strategy.close_pull_request(owner, repo, pull_number)
 
     def update_pull_request_branch(
         self, owner: str, repo: str, pull_number: int
     ) -> None:
-        gh_success = self._update_pull_request_branch_via_gh(owner, repo, pull_number)
-        if gh_success:
-            return
-
-        self._request_json(
-            method="PUT",
-            url=f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/updateBranch",
-            payload={},
-        )
-
-    def _close_issue_via_gh(self, reference: IssueReference) -> bool:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}",
-                    "--method",
-                    "PATCH",
-                    "-f",
-                    "state=closed",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return False
-
-        return completed.returncode == 0
-
-    def _merge_pull_request_via_gh(
-        self, owner: str, repo: str, pull_number: int
-    ) -> bool:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{owner}/{repo}/pulls/{pull_number}/merge",
-                    "--method",
-                    "PUT",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return False
-
-        if completed.returncode != 0:
-            if "409" in completed.stderr or "already been merged" in completed.stderr.lower():
-                return True
-            return False
-
-        return True
-
-    def _close_pull_request_via_gh(
-        self, owner: str, repo: str, pull_number: int
-    ) -> bool:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{owner}/{repo}/pulls/{pull_number}",
-                    "--method",
-                    "PATCH",
-                    "-f",
-                    "state=closed",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return False
-
-        if completed.returncode != 0:
-            if "405" in completed.stderr or "Cannot change" in completed.stderr:
-                return True
-            return False
-
-        return True
-
-    def _update_pull_request_branch_via_gh(
-        self, owner: str, repo: str, pull_number: int
-    ) -> bool:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{owner}/{repo}/pulls/{pull_number}/updateBranch",
-                    "--method",
-                    "PUT",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return False
-
-        return completed.returncode == 0
-
-    def _reopen_issue_via_gh(self, reference: IssueReference) -> bool:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{reference.owner}/{reference.repo}/issues/{reference.number}",
-                    "--method",
-                    "PATCH",
-                    "-f",
-                    "state=open",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return False
-
-        return completed.returncode == 0
-
-    def _update_pull_request_via_gh(
-        self, owner: str, repo: str, pull_number: int, *, title: str, body: str
-    ) -> str | None:
-        try:
-            completed = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{owner}/{repo}/pulls/{pull_number}",
-                    "--method",
-                    "PATCH",
-                    "-f",
-                    f"title={title}",
-                    "-f",
-                    f"body={body}",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            return None
-
-        if completed.returncode != 0:
-            return None
-
-        payload = json.loads(completed.stdout)
-        html_url = payload.get("html_url")
-        return html_url if isinstance(html_url, str) else None
-
-    def _request_json(
-        self, method: str, url: str, payload: dict[str, object] | None
-    ) -> dict[str, object]:
-        request = urllib_request.Request(
-            url=url,
-            method=method,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self._token}",
-                "User-Agent": "precision-squad",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "Content-Type": "application/json",
-            },
-            data=(json.dumps(payload).encode("utf-8") if payload is not None else None),
-        )
-
-        try:
-            with urllib_request.urlopen(request) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib_error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise GitHubClientError(f"GitHub write failed: HTTP {exc.code}. {detail}") from exc
-        except urllib_error.URLError as exc:
-            raise GitHubClientError(f"GitHub write failed: {exc.reason}") from exc
-
-    def _list_repo_issues_via_http(self, owner: str, repo: str) -> list[dict[str, object]]:
-        request = urllib_request.Request(
-            url=f"https://api.github.com/repos/{owner}/{repo}/issues?state=open&per_page=100",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self._token}",
-                "User-Agent": "precision-squad",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-
-        try:
-            with urllib_request.urlopen(request) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib_error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise GitHubClientError(
-                f"GitHub issue list fetch failed for {owner}/{repo}: HTTP {exc.code}. {detail}"
-            ) from exc
-        except urllib_error.URLError as exc:
-            raise GitHubClientError(
-                f"GitHub issue list fetch failed for {owner}/{repo}: {exc.reason}"
-            ) from exc
-
-        if not isinstance(payload, list):
-            raise GitHubClientError(f"GitHub issue list payload for {owner}/{repo} is invalid.")
-        return payload
+        self._strategy.update_pull_request_branch(owner, repo, pull_number)
 
 
 def _extract_issue_comments(payload: list[dict[str, object]] | None) -> tuple[str, ...]:

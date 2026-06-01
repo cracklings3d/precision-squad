@@ -6,23 +6,17 @@ import json
 
 import pytest
 
-from precision_squad.github_client import GitHubClientError, GitHubIssueClient, GitHubWriteClient
-from precision_squad.github_transport import GitHubTransportSelectionError
+from precision_squad.github_client import (
+    GitHubClientError,
+    GitHubCliTransportStrategy,
+    GitHubIssueClient,
+    GitHubWriteClient,
+)
+from precision_squad.github_transport import (
+    GitHubTransportResolution,
+    GitHubTransportSelectionError,
+)
 from precision_squad.models import IssueReference
-
-
-class _FakeResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self._payload = payload
-
-    def __enter__(self) -> "_FakeResponse":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
 
 
 def test_from_env_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,24 +32,38 @@ def test_issue_client_from_env_exposes_transport_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    resolution = GitHubTransportResolution(
+        requested_mode="cli",
+        selected_transport="cli",
+        mcp_available=False,
+        gh_cli_available=True,
+        decision_reason="cli_required_available",
+    )
     monkeypatch.setattr(
         "precision_squad.github_client.resolve_github_transport",
-        lambda: object(),
+        lambda **kwargs: resolution,
     )
 
     client = GitHubIssueClient.from_env()
 
-    assert client.transport_resolution is not None
+    assert client.transport_resolution is resolution
 
 
 def test_write_client_from_env_exposes_transport_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "token")
-    resolution = object()
+    resolution = GitHubTransportResolution(
+        requested_mode="cli",
+        selected_transport="cli",
+        mcp_available=False,
+        gh_cli_available=True,
+        decision_reason="cli_required_available",
+    )
     monkeypatch.setattr(
         "precision_squad.github_client.resolve_github_transport",
-        lambda: resolution,
+        lambda **kwargs: resolution,
     )
 
     client = GitHubWriteClient.from_env()
@@ -68,7 +76,7 @@ def test_from_env_propagates_transport_selection_error(
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "token")
 
-    def fail() -> object:
+    def fail(**kwargs) -> GitHubTransportResolution:
         raise GitHubTransportSelectionError(
             code="github_transport_cli_unavailable",
             requested_mode="cli",
@@ -83,6 +91,7 @@ def test_from_env_propagates_transport_selection_error(
 
 
 def test_fetch_issue_returns_normalized_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fetch_issue normalizes payload and extracts comments via strategy."""
     payload = {
         "title": "[Enhancement] Add --version flag to CLI",
         "body": "## Description\nAdd a version flag.",
@@ -91,25 +100,30 @@ def test_fetch_issue_returns_normalized_issue(monkeypatch: pytest.MonkeyPatch) -
     }
     comments_payload = [{"body": "Please also handle prior review feedback."}]
 
-    def fake_urlopen(request):
-        assert request.full_url.endswith("/repos/cracklings3d/markdown-pdf-renderer/issues/9")
-        return _FakeResponse(payload)
+    class FakeCliStrategy(GitHubCliTransportStrategy):
+        def fetch_issue(self, reference):
+            return payload
+
+        def fetch_issue_comments(self, reference):
+            return comments_payload
 
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubIssueClient._fetch_issue_via_gh",
-        lambda self, reference: None,
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="cli",
+            selected_transport="cli",
+            mcp_available=False,
+            gh_cli_available=True,
+            decision_reason="cli_required_available",
+        ),
     )
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubIssueClient._fetch_issue_comments_via_gh",
-        lambda self, reference: None,
+        "precision_squad.github_client.GitHubCliTransportStrategy",
+        lambda token: FakeCliStrategy(token),
     )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubIssueClient._fetch_issue_comments_via_http",
-        lambda self, reference: comments_payload,
-    )
-    monkeypatch.setattr("precision_squad.github_client.urllib_request.urlopen", fake_urlopen)
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
 
-    client = GitHubIssueClient("token")
+    client = GitHubIssueClient.from_env()
     issue = client.fetch_issue(IssueReference("cracklings3d", "markdown-pdf-renderer", 9))
 
     assert issue.reference.number == 9
@@ -118,64 +132,51 @@ def test_fetch_issue_returns_normalized_issue(monkeypatch: pytest.MonkeyPatch) -
     assert issue.comments == ("Please also handle prior review feedback.",)
 
 
-def test_create_issue_uses_http_fallback_when_gh_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._create_issue_via_gh",
-        lambda self, owner, repo, *, title, body: None,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: {
-            "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/issues/10"
-        },
-    )
-
-    client = GitHubWriteClient("token")
-
-    url = client.create_issue(
-        "cracklings3d",
-        "markdown-pdf-renderer",
-        title="Docs blocker",
-        body="Need deterministic setup docs.",
-    )
-
-    assert url == "https://github.com/cracklings3d/markdown-pdf-renderer/issues/10"
-
-
 def test_find_open_docs_remediation_issue_matches_by_fingerprint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._list_repo_issues_via_gh",
-        lambda self, owner, repo: None,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._list_repo_issues_via_http",
-        lambda self, owner, repo: [
-            {
-                "number": 2,
-                "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/issues/2",
-                "body": (
-                    "<!-- precision-squad:docs-remediation -->\n"
-                    "<!-- precision-squad:blocker-findings:[{\"rule_id\":\"docs_setup_command_present\",\"section_key\":\"setup\",\"source_path\":\"readme.md\",\"subject_key\":\"setup-command\"}] -->\n"
-                    "<!-- precision-squad:blocker-fingerprint:aaaaaaaaaaaaaaaa -->"
-                ),
-            },
-            {
-                "number": 3,
-                "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/issues/3",
-                "body": (
-                    "<!-- precision-squad:docs-remediation -->\n"
-                    "<!-- precision-squad:blocker-findings:[{\"rule_id\":\"docs_qa_command_missing\",\"section_key\":\"testing\",\"source_path\":\"readme.md\",\"subject_key\":\"qa-command\"}] -->\n"
-                    "<!-- precision-squad:blocker-fingerprint:bbbbbbbbbbbbbbbb -->"
-                ),
-            },
-        ],
-    )
+    """find_open_docs_remediation_issue filters by fingerprint via strategy."""
 
-    client = GitHubWriteClient("token")
+    class FakeCliStrategy(GitHubCliTransportStrategy):
+        def list_repo_issues(self, owner, repo):
+            return [
+                {
+                    "number": 2,
+                    "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/issues/2",
+                    "body": (
+                        "<!-- precision-squad:docs-remediation -->\n"
+                        "<!-- precision-squad:blocker-findings:[{\"rule_id\":\"docs_setup_command_present\",\"section_key\":\"setup\",\"source_path\":\"readme.md\",\"subject_key\":\"setup-command\"}] -->\n"
+                        "<!-- precision-squad:blocker-fingerprint:aaaaaaaaaaaaaaaa -->"
+                    ),
+                },
+                {
+                    "number": 3,
+                    "html_url": "https://github.com/cracklings3d/markdown-pdf-renderer/issues/3",
+                    "body": (
+                        "<!-- precision-squad:docs-remediation -->\n"
+                        "<!-- precision-squad:blocker-findings:[{\"rule_id\":\"docs_qa_command_missing\",\"section_key\":\"testing\",\"source_path\":\"readme.md\",\"subject_key\":\"qa-command\"}] -->\n"
+                        "<!-- precision-squad:blocker-fingerprint:bbbbbbbbbbbbbbbb -->"
+                    ),
+                },
+            ]
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="cli",
+            selected_transport="cli",
+            mcp_available=False,
+            gh_cli_available=True,
+            decision_reason="cli_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubCliTransportStrategy",
+        lambda token: FakeCliStrategy(token),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    client = GitHubWriteClient.from_env()
 
     match = client.find_open_docs_remediation_issue(
         "cracklings3d",
@@ -194,217 +195,359 @@ def test_find_open_docs_remediation_issue_matches_by_fingerprint(
     assert match == (3, "https://github.com/cracklings3d/markdown-pdf-renderer/issues/3")
 
 
-# --- Tests for GitHubWriteClient write methods (close_issue, merge_pull_request, close_pull_request, update_pull_request_branch) ---
+# --- Legacy write-method tests removed: HTTP fallback is no longer allowed per contract ---
+# Tests for close_issue, merge_pull_request, close_pull_request, update_pull_request_branch
+# now use the strategy enforcement tests below which verify transport governance correctly.
 
 
-class _FakeUrlopenResponse:
-    def __init__(self, payload: dict[str, object] | None = None) -> None:
-        self._payload = payload or {}
-
-    def __enter__(self) -> "_FakeUrlopenResponse":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
+# --- Tests for GitHub transport strategy enforcement ---
 
 
-def test_close_issue_success_via_gh(monkeypatch: pytest.MonkeyPatch) -> None:
-    """close_issue succeeds when gh CLI returns success."""
+def test_issue_client_selects_cli_strategy_when_cli_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When transport resolution selects CLI, issue client uses CLI strategy only."""
+    # Set up environment
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    # Mock resolve_github_transport to return cli-selected resolution
+    def mock_resolve_github_transport(
+        requested_mode=None, *, probe_mcp_available=None, probe_gh_cli_available=None
+    ):
+        from precision_squad.github_transport import GitHubTransportResolution
+        return GitHubTransportResolution(
+            requested_mode="cli",
+            selected_transport="cli",
+            mcp_available=None,
+            gh_cli_available=True,
+            decision_reason="cli_required_available",
+        )
+
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._close_issue_via_gh",
-        lambda self, reference: True,
+        "precision_squad.github_client.resolve_github_transport",
+        mock_resolve_github_transport,
     )
 
-    client = GitHubWriteClient("token")
-    reference = IssueReference("owner", "repo", 5)
+    # Track if CLI strategy was used (no HTTP fallback)
+    cli_calls: list[str] = []
 
-    # Should not raise
-    client.close_issue(reference)
+    class FakeCliStrategy:
+        def __init__(self, token: str) -> None:
+            self._token = token
 
+        def fetch_issue(self, reference):
+            cli_calls.append("fetch_issue")
+            return {
+                "title": "Test Issue",
+                "body": "Test body",
+                "html_url": "https://github.com/owner/repo/issues/1",
+                "labels": [],
+            }
 
-def test_close_issue_fallback_to_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    """close_issue falls back to HTTP when gh CLI returns False."""
+        def fetch_issue_comments(self, reference):
+            cli_calls.append("fetch_issue_comments")
+            return []
+
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._close_issue_via_gh",
-        lambda self, reference: False,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: {},
-    )
-
-    client = GitHubWriteClient("token")
-    reference = IssueReference("owner", "repo", 5)
-
-    # Should not raise
-    client.close_issue(reference)
-
-
-def test_close_issue_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """close_issue raises GitHubClientError on HTTP failure."""
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._close_issue_via_gh",
-        lambda self, reference: False,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: (_ for _ in ()).throw(
-            GitHubClientError("GitHub write failed: HTTP 403. Forbidden")
-        ),
+        "precision_squad.github_client.GitHubCliTransportStrategy",
+        lambda token: FakeCliStrategy(token),
     )
 
-    client = GitHubWriteClient("token")
-    reference = IssueReference("owner", "repo", 5)
+    client = GitHubIssueClient.from_env()
+    issue = client.fetch_issue(IssueReference("owner", "repo", 1))
 
-    with pytest.raises(GitHubClientError, match="HTTP 403"):
+    assert issue.title == "Test Issue"
+    assert "fetch_issue" in cli_calls
+    assert "fetch_issue_comments" in cli_calls
+
+
+def test_issue_client_raises_when_mcp_selected_but_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When MCP is selected but strategy raises NotImplementedError, client raises."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    # Mock resolve_github_transport to return mcp-selected resolution
+    def mock_resolve_github_transport(
+        requested_mode=None, *, probe_mcp_available=None, probe_gh_cli_available=None
+    ):
+        from precision_squad.github_transport import GitHubTransportResolution
+        return GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        )
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        mock_resolve_github_transport,
+    )
+
+    client = GitHubIssueClient.from_env()
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.fetch_issue(IssueReference("owner", "repo", 1))
+
+
+def test_write_client_uses_cli_strategy_only_in_forced_cli_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In forced GITHUB_TRANSPORT=cli, no HTTP fallback occurs."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    # Mock resolve_github_transport to return cli-selected resolution
+    def mock_resolve_github_transport(
+        requested_mode=None, *, probe_mcp_available=None, probe_gh_cli_available=None
+    ):
+        from precision_squad.github_transport import GitHubTransportResolution
+        return GitHubTransportResolution(
+            requested_mode="cli",
+            selected_transport="cli",
+            mcp_available=None,
+            gh_cli_available=True,
+            decision_reason="cli_required_available",
+        )
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        mock_resolve_github_transport,
+    )
+
+    # Track method calls on strategy
+    strategy_calls: list[str] = []
+
+    class FakeCliStrategy:
+        def __init__(self, token: str) -> None:
+            self._token = token
+
+        def create_issue(self, owner, repo, *, title, body):
+            strategy_calls.append("create_issue")
+            return f"https://github.com/{owner}/{repo}/issues/1"
+
+        def create_issue_comment(self, reference, body):
+            strategy_calls.append("create_issue_comment")
+            return f"https://github.com/{reference.owner}/{reference.repo}/issues/{reference.number}#issuecomment-1"
+
+        def list_repo_issues(self, owner, repo):
+            strategy_calls.append("list_repo_issues")
+            return []
+
+        def create_draft_pull_request(self, reference, title, body, head, base):
+            strategy_calls.append("create_draft_pull_request")
+            return f"https://github.com/{reference.owner}/{reference.repo}/pull/1"
+
+        def get_pull_request(self, owner, repo, pull_number):
+            strategy_calls.append("get_pull_request")
+            return {"html_url": f"https://github.com/{owner}/{repo}/pull/{pull_number}", "head": {"ref": "feature", "sha": "abc123"}}
+
+        def update_pull_request(self, owner, repo, pull_number, *, title, body):
+            strategy_calls.append("update_pull_request")
+            return f"https://github.com/{owner}/{repo}/pull/{pull_number}"
+
+        def patch_pull_request(self, owner, repo, pull_number, payload):
+            strategy_calls.append("patch_pull_request")
+
+        def reopen_issue(self, reference):
+            strategy_calls.append("reopen_issue")
+
+        def close_issue(self, reference):
+            strategy_calls.append("close_issue")
+
+        def merge_pull_request(self, owner, repo, pull_number):
+            strategy_calls.append("merge_pull_request")
+
+        def close_pull_request(self, owner, repo, pull_number):
+            strategy_calls.append("close_pull_request")
+
+        def update_pull_request_branch(self, owner, repo, pull_number):
+            strategy_calls.append("update_pull_request_branch")
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubCliTransportStrategy",
+        lambda token: FakeCliStrategy(token),
+    )
+
+    client = GitHubWriteClient.from_env()
+
+    # Test create_issue uses strategy only
+    url = client.create_issue("owner", "repo", title="Test", body="Body")
+    assert url == "https://github.com/owner/repo/issues/1"
+    assert "create_issue" in strategy_calls
+
+    # Verify HTTP was never called
+    assert "HTTP" not in str(strategy_calls)
+
+
+def test_write_client_raises_mcp_not_implemented_for_all_write_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All write methods raise when MCP transport is selected."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    # Mock resolve_github_transport to return mcp-selected resolution
+    def mock_resolve_github_transport(
+        requested_mode=None, *, probe_mcp_available=None, probe_gh_cli_available=None
+    ):
+        from precision_squad.github_transport import GitHubTransportResolution
+        return GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        )
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        mock_resolve_github_transport,
+    )
+
+    client = GitHubWriteClient.from_env()
+    reference = IssueReference("owner", "repo", 1)
+
+    # Test each write method raises NotImplementedError
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.create_issue_comment(reference, "comment body")
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.create_issue("owner", "repo", title="Test", body="Body")
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.create_draft_pull_request(reference, "Title", "Body", "head", "main")
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.update_pull_request("owner", "repo", 1, title="Title", body="Body")
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.mark_pull_request_ready("owner", "repo", 1)
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.reopen_issue(reference)
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
         client.close_issue(reference)
 
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.merge_pull_request("owner", "repo", 1)
 
-def test_merge_pull_request_success_via_gh(monkeypatch: pytest.MonkeyPatch) -> None:
-    """merge_pull_request succeeds when gh CLI returns True."""
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.close_pull_request("owner", "repo", 1)
+
+    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+        client.update_pull_request_branch("owner", "repo", 1)
+
+
+def test_auto_mode_stays_on_first_selected_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once auto selects MCP or CLI, subsequent calls don't switch transport."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    # Track which strategy was used across multiple calls
+    transport_used: list[str] = []
+
+    class FakeCliStrategy:
+        def __init__(self, token: str) -> None:
+            self._token = token
+
+        def fetch_issue(self, reference):
+            transport_used.append("cli")
+            return {
+                "title": "Test",
+                "body": "Body",
+                "html_url": f"https://github.com/{reference.owner}/{reference.repo}/issues/{reference.number}",
+                "labels": [],
+            }
+
+        def fetch_issue_comments(self, reference):
+            transport_used.append("cli")
+            return []
+
+        def create_issue(self, owner, repo, *, title, body):
+            transport_used.append("cli")
+            return f"https://github.com/{owner}/{repo}/issues/1"
+
+    class FakeMcpStrategy:
+        def fetch_issue(self, reference):
+            transport_used.append("mcp")
+            return {
+                "title": "Test",
+                "body": "Body",
+                "html_url": f"https://github.com/{reference.owner}/{reference.repo}/issues/{reference.number}",
+                "labels": [],
+            }
+
+        def fetch_issue_comments(self, reference):
+            transport_used.append("mcp")
+            return []
+
+        def create_issue(self, owner, repo, *, title, body):
+            transport_used.append("mcp")
+            return f"https://github.com/{owner}/{repo}/issues/1"
+
+    # First test: auto selects CLI
+    def mock_resolve_cli(
+        requested_mode=None, *, probe_mcp_available=None, probe_gh_cli_available=None
+    ):
+        from precision_squad.github_transport import GitHubTransportResolution
+        return GitHubTransportResolution(
+            requested_mode="auto",
+            selected_transport="cli",
+            mcp_available=False,
+            gh_cli_available=True,
+            decision_reason="auto_selected_cli",
+        )
+
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._merge_pull_request_via_gh",
-        lambda self, owner, repo, pull_number: True,
-    )
-
-    client = GitHubWriteClient("token")
-
-    # Should not raise
-    client.merge_pull_request("owner", "repo", 5)
-
-
-def test_merge_pull_request_fallback_to_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    """merge_pull_request falls back to HTTP when gh CLI returns False."""
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._merge_pull_request_via_gh",
-        lambda self, owner, repo, pull_number: False,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: {},
-    )
-
-    client = GitHubWriteClient("token")
-
-    # Should not raise
-    client.merge_pull_request("owner", "repo", 5)
-
-
-def test_merge_pull_request_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """merge_pull_request raises GitHubClientError on HTTP failure."""
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._merge_pull_request_via_gh",
-        lambda self, owner, repo, pull_number: False,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: (_ for _ in ()).throw(
-            GitHubClientError("GitHub write failed: HTTP 410. Resource not found")
-        ),
-    )
-
-    client = GitHubWriteClient("token")
-
-    with pytest.raises(GitHubClientError, match="HTTP 410"):
-        client.merge_pull_request("owner", "repo", 5)
-
-
-def test_close_pull_request_success_via_gh(monkeypatch: pytest.MonkeyPatch) -> None:
-    """close_pull_request succeeds when gh CLI returns True."""
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._close_pull_request_via_gh",
-        lambda self, owner, repo, pull_number: True,
-    )
-
-    client = GitHubWriteClient("token")
-
-    # Should not raise
-    client.close_pull_request("owner", "repo", 5)
-
-
-def test_close_pull_request_fallback_to_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    """close_pull_request falls back to HTTP when gh CLI returns False."""
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._close_pull_request_via_gh",
-        lambda self, owner, repo, pull_number: False,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: {},
-    )
-
-    client = GitHubWriteClient("token")
-
-    # Should not raise
-    client.close_pull_request("owner", "repo", 5)
-
-
-def test_close_pull_request_http_404_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """close_pull_request raises GitHubClientError on HTTP 404 failure (not 405 which is swallowed)."""
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._close_pull_request_via_gh",
-        lambda self, owner, repo, pull_number: False,
+        "precision_squad.github_client.resolve_github_transport",
+        mock_resolve_cli,
     )
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: (_ for _ in ()).throw(
-            GitHubClientError("GitHub write failed: HTTP 404. Not found")
-        ),
+        "precision_squad.github_client.GitHubCliTransportStrategy",
+        lambda token: FakeCliStrategy(token),
     )
 
-    client = GitHubWriteClient("token")
+    client = GitHubWriteClient.from_env()
+    client.create_issue("owner", "repo", title="Test", body="Body")
+    client.create_issue("owner", "repo", title="Test2", body="Body2")
 
-    with pytest.raises(GitHubClientError, match="HTTP 404"):
-        client.close_pull_request("owner", "repo", 5)
+    # All calls should use CLI
+    assert all(t == "cli" for t in transport_used), f"Expected all cli, got {transport_used}"
+    transport_used.clear()
 
+    # Second test: auto selects MCP
+    def mock_resolve_mcp(
+        requested_mode=None, *, probe_mcp_available=None, probe_gh_cli_available=None
+    ):
+        from precision_squad.github_transport import GitHubTransportResolution
+        return GitHubTransportResolution(
+            requested_mode="auto",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=False,
+            decision_reason="auto_selected_mcp",
+        )
 
-def test_update_pull_request_branch_success_via_gh(monkeypatch: pytest.MonkeyPatch) -> None:
-    """update_pull_request_branch succeeds when gh CLI returns True."""
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._update_pull_request_branch_via_gh",
-        lambda self, owner, repo, pull_number: True,
-    )
-
-    client = GitHubWriteClient("token")
-
-    # Should not raise
-    client.update_pull_request_branch("owner", "repo", 5)
-
-
-def test_update_pull_request_branch_fallback_to_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    """update_pull_request_branch falls back to HTTP when gh CLI returns False."""
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._update_pull_request_branch_via_gh",
-        lambda self, owner, repo, pull_number: False,
+        "precision_squad.github_client.resolve_github_transport",
+        mock_resolve_mcp,
     )
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: {},
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: FakeMcpStrategy(),
     )
 
-    client = GitHubWriteClient("token")
-
-    # Should not raise
-    client.update_pull_request_branch("owner", "repo", 5)
-
-
-def test_update_pull_request_branch_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """update_pull_request_branch raises GitHubClientError on HTTP failure."""
+    # Need to reset the module's strategy builder cache
     monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._update_pull_request_branch_via_gh",
-        lambda self, owner, repo, pull_number: False,
-    )
-    monkeypatch.setattr(
-        "precision_squad.github_client.GitHubWriteClient._request_json",
-        lambda self, method, url, payload: (_ for _ in ()).throw(
-            GitHubClientError("GitHub write failed: HTTP 422. Validation failed")
-        ),
+        "precision_squad.github_client._build_strategy",
+        lambda resolution, token: FakeMcpStrategy() if resolution.selected_transport == "mcp" else FakeCliStrategy(token),
     )
 
-    client = GitHubWriteClient("token")
+    client2 = GitHubWriteClient.from_env()
+    client2.create_issue("owner", "repo", title="Test", body="Body")
+    client2.create_issue("owner", "repo", title="Test2", body="Body2")
 
-    with pytest.raises(GitHubClientError, match="HTTP 422"):
-        client.update_pull_request_branch("owner", "repo", 5)
+    # All calls should use MCP (transport doesn't switch)
+    assert all(t == "mcp" for t in transport_used), f"Expected all mcp, got {transport_used}"
