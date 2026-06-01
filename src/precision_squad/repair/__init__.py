@@ -4,7 +4,6 @@ import subprocess
 
 from ..github_client import GitHubWriteClient
 from .adapter import OpenCodeRepairAdapter, RepairAdapter
-from .llm_adapter import VercelAIRepairAdapter
 from .orchestration import (
     RepairStage,
     _resolve_rerun_branch,
@@ -22,7 +21,6 @@ __all__ = [
     "RepairAdapter",
     "OpenCodeRepairAdapter",
     "RepairStage",
-    "VercelAIRepairAdapter",
     "WorkspaceQaVerifier",
     "GitHubWriteClient",
     "_failure_signature",

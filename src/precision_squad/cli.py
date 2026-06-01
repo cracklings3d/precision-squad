@@ -57,7 +57,6 @@ from .publish_executor import execute_publish_plan
 from .repair import (
     OpenCodeRepairAdapter,
     RepairAdapter,
-    VercelAIRepairAdapter,
     evaluate_docs_remediation_validation,
     merge_docs_remediation_execution_result,
     merge_execution_result,
@@ -70,7 +69,7 @@ from .run_store import ApprovedPlanError, RunStore, load_approved_plan_artifact
 # Keep a local alias so tests can monkeypatch the shared executor class through this module.
 _CLI_DOCS_FIRST_EXECUTOR = DocsFirstExecutor
 
-_REPAIR_AGENT_CHOICES = ("opencode", "none", "vercel-ai")
+_REPAIR_AGENT_CHOICES = ("opencode", "none")
 _DISPLAYED_REPAIR_AGENT_CHOICES = ("opencode", "none")
 _RETRY_RESUME_STAGES: tuple[RetryResumeStage, ...] = (
     "review issue",
@@ -106,7 +105,6 @@ def _build_repair_adapter(*, repair_agent: str, repair_model: str | None) -> Rep
 
     adapter_factories: dict[str, Callable[[str | None], RepairAdapter]] = {
         "opencode": lambda model: OpenCodeRepairAdapter(model=model),
-        "vercel-ai": lambda model: VercelAIRepairAdapter(model=model),
     }
     return adapter_factories[repair_agent](repair_model)
 
@@ -158,8 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="{" + ",".join(_DISPLAYED_REPAIR_AGENT_CHOICES) + "}",
         help=(
             "Repair agent adapter to run after the documented execution contract is prepared. "
-            "Defaults to opencode when omitted. Normal choices: opencode, none. "
-            "Legacy compatibility input: vercel-ai (retired compatibility path)."
+            "Defaults to opencode when omitted. Normal choices: opencode, none."
         ),
     )
     issue_parser.add_argument(
@@ -314,8 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="{" + ",".join(_DISPLAYED_REPAIR_AGENT_CHOICES) + "}",
         help=(
             "Repair agent adapter to run after implement ingress succeeds. "
-            "Defaults to opencode when omitted. Normal choices: opencode, none. "
-            "Legacy compatibility input: vercel-ai (retired compatibility path)."
+            "Defaults to opencode when omitted. Normal choices: opencode, none."
         ),
     )
     implement_parser.add_argument(

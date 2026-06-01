@@ -46,7 +46,6 @@ from precision_squad.models import (
 from precision_squad.repair import (
     OpenCodeRepairAdapter,
     RepairAdapter,
-    VercelAIRepairAdapter,
 )
 from precision_squad.run_store import RunStore
 
@@ -873,7 +872,7 @@ def test_plan_run_rejects_non_approved_issue_review(
 
 
 def test_repair_agent_choices_include_legacy_compatibility_input() -> None:
-    assert _REPAIR_AGENT_CHOICES == ("opencode", "none", "vercel-ai")
+    assert _REPAIR_AGENT_CHOICES == ("opencode", "none")
 
 
 def test_build_repair_adapter_returns_none_for_none_agent() -> None:
@@ -885,14 +884,6 @@ def test_build_repair_adapter_returns_opencode_as_primary_concrete_implementatio
 
     assert isinstance(adapter, RepairAdapter)
     assert isinstance(adapter, OpenCodeRepairAdapter)
-    assert adapter.model == "test-model"
-
-
-def test_build_repair_adapter_returns_compatibility_vercel_ai_implementation() -> None:
-    adapter = _build_repair_adapter(repair_agent="vercel-ai", repair_model="test-model")
-
-    assert isinstance(adapter, RepairAdapter)
-    assert isinstance(adapter, VercelAIRepairAdapter)
     assert adapter.model == "test-model"
 
 
@@ -1014,9 +1005,6 @@ def test_repair_issue_help_shows_current_choices_and_legacy_note(capsys) -> None
     assert "--repair-agent {opencode,none}" in captured.out
     assert "Defaults to opencode" in captured.out
     assert "when omitted. Normal choices: opencode, none." in captured.out
-    assert "Legacy" in captured.out
-    assert "compatibility input: vercel-ai" in captured.out
-    assert "{opencode,none,vercel-ai}" not in captured.out
 
 
 def test_readme_documents_repair_agent_contract() -> None:
@@ -1024,8 +1012,6 @@ def test_readme_documents_repair_agent_contract() -> None:
 
     assert "default when omitted: `opencode`" in readme_text
     assert "normal supported choices: `opencode`, `none`" in readme_text
-    assert "`vercel-ai` is accepted only as a retired compatibility input" in readme_text
-    assert "not an active supported repair mode" in readme_text
 
 
 def test_install_skill_writes_skill_md(capsys, tmp_path: Path) -> None:
@@ -3072,7 +3058,7 @@ def test_invalid_cli_repair_agent_returns_shared_validator_error(capsys, tmp_pat
     assert status == 1
     assert "Invalid value for 'repair_agent' (--repair-agent):" in captured.err
     assert "'openai'" in captured.err
-    assert "Expected one of: opencode, none, vercel-ai" in captured.err
+    assert "Expected one of: opencode, none" in captured.err
     assert "invalid choice" not in captured.err
     assert "usage:" not in captured.err
 
@@ -3657,7 +3643,7 @@ def test_repair_issue_uses_explicit_repo_path_as_config_discovery_root(
         (
             "[repair.issue]\n"
             f'runs_dir = "{(workspace / "runs-from-cwd").as_posix()}"\n'
-            'repair_agent = "vercel-ai"\n'
+            'repair_agent = "none"\n'
         ),
         encoding="utf-8",
     )
