@@ -168,7 +168,7 @@ class _ApprovedTestDependencies:
     ) -> ImplReviewResult:
         del intake, run_record, run_dir, publish_plan, review_model
         return ImplReviewResult(
-            review_status="approved",
+            verdict="approved",
             summary="Implementation review approved in integration test.",
             pull_request_url=publish_result.url,
             pull_number=publish_result.pull_number,

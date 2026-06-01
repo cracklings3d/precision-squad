@@ -50,7 +50,7 @@ def test_build_publish_plan_creates_draft_pr_for_approved() -> None:
         run_dir=".precision-squad/runs/run-123",
     )
     verdict = GovernanceVerdict(
-        status="approved",
+        verdict="approved",
         summary="QA passed.",
         reason_codes=(),
     )
@@ -101,7 +101,7 @@ def test_build_publish_plan_includes_design_decisions_from_persisted_artifact(tm
         ),
     )
     verdict = GovernanceVerdict(
-        status="approved",
+        verdict="approved",
         summary="QA passed.",
         reason_codes=(),
     )
@@ -142,7 +142,7 @@ def test_build_publish_plan_omits_design_decisions_when_artifact_empty(tmp_path:
         DecisionLogArtifact(attempt=1, entries=()),
     )
     verdict = GovernanceVerdict(
-        status="approved",
+        verdict="approved",
         summary="QA passed.",
         reason_codes=(),
     )
@@ -178,7 +178,7 @@ def test_build_publish_plan_fails_when_completed_repair_missing_decision_log_art
         run_dir=str(run_dir),
     )
     verdict = GovernanceVerdict(
-        status="approved",
+        verdict="approved",
         summary="QA passed.",
         reason_codes=(),
     )
@@ -236,7 +236,7 @@ def test_build_publish_plan_embeds_blocker_fingerprint_for_follow_up_issue() -> 
         encoding="utf-8",
     )
     verdict = GovernanceVerdict(
-        status="blocked",
+        verdict="blocked",
         summary="Missing documented QA command.",
         reason_codes=("docs_qa_command_missing",),
     )
@@ -296,7 +296,7 @@ def test_build_publish_plan_uses_specific_contract_findings_for_umbrella_docs_re
         encoding="utf-8",
     )
     verdict = GovernanceVerdict(
-        status="blocked",
+        verdict="blocked",
         summary="Prerequisites are ambiguous.",
         reason_codes=("docs_setup_prerequisites_ambiguous",),
     )
@@ -331,7 +331,7 @@ def test_build_publish_plan_does_not_recurse_follow_up_issue_for_docs_remediatio
         run_dir=".precision-squad/runs/run-123",
     )
     verdict = GovernanceVerdict(
-        status="blocked",
+        verdict="blocked",
         summary="Missing documented QA command.",
         reason_codes=("docs_qa_command_missing",),
     )
@@ -364,7 +364,7 @@ def test_build_publish_plan_creates_follow_up_issue_for_side_issues() -> None:
     )
     run_dir = Path(run_record.run_dir)
     verdict = GovernanceVerdict(
-        status="blocked",
+        verdict="blocked",
         summary="QA failed.",
         reason_codes=("qa_failed",),
     )
@@ -424,7 +424,7 @@ def test_build_publish_plan_returns_issue_comment_when_no_side_issues() -> None:
     )
     run_dir = Path(run_record.run_dir)
     verdict = GovernanceVerdict(
-        status="blocked",
+        verdict="blocked",
         summary="QA failed.",
         reason_codes=("qa_failed",),
     )

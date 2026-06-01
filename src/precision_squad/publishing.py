@@ -59,7 +59,7 @@ def build_publish_plan(
     repair_result: RepairResult | None = None,
 ) -> PublishPlan:
     """Prepare the first publish plan without calling GitHub yet."""
-    if verdict.status == "approved":
+    if verdict.verdict == "approved":
         context_heading = "## Summary\n"
         context_note = ""
         rejected_pr = latest_rejected_pull_request(intake.issue.comments)
@@ -70,7 +70,7 @@ def build_publish_plan(
                 context_heading
                 + f"- Run ID: `{run_record.run_id}`\n"
                 + f"- Issue: `{intake.issue.reference}`\n"
-                + f"- Governance verdict: `{verdict.status}`\n"
+                + f"- Governance verdict: `{verdict.verdict}`\n"
                 + context_note
                 + _render_design_decisions_section(
                     run_record,
@@ -129,7 +129,7 @@ def build_publish_plan(
             reason_codes=verdict.reason_codes,
         )
 
-    if verdict.status == "blocked":
+    if verdict.verdict == "blocked":
         side_issues = repair_result.side_issues if repair_result else ()
         if side_issues:
             side_issues_lines = []
@@ -154,7 +154,7 @@ def build_publish_plan(
                     f"- Source issue URL: {intake.issue.html_url}\n"
                     f"- Requested change: {intake.summary}\n"
                     f"- Run ID: `{run_record.run_id}`\n"
-                    f"- Governance verdict: `{verdict.status}`\n"
+                    f"- Governance verdict: `{verdict.verdict}`\n"
                     f"- Summary: {verdict.summary}\n"
                     "\n"
                     "## Side Issues\n"
@@ -171,7 +171,7 @@ def build_publish_plan(
             "## Blocked\n"
             f"- Run ID: `{run_record.run_id}`\n"
             f"- Issue: `{intake.issue.reference}`\n"
-            f"- Verdict: `{verdict.status}`\n"
+            f"- Verdict: `{verdict.verdict}`\n"
             f"- Summary: {verdict.summary}\n"
             "\n"
             "## Reasons\n"
@@ -185,7 +185,7 @@ def _should_create_follow_up_issue(
     intake: IssueIntake, verdict: GovernanceVerdict
 ) -> bool:
     return (
-        verdict.status == "blocked"
+        verdict.verdict == "blocked"
         and not is_docs_remediation_issue(intake)
         and intake.assessment.status == "runnable"
         and bool(verdict.reason_codes)

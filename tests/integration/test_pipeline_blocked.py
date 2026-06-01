@@ -57,7 +57,7 @@ def test_plan_issue_blocks_before_executor(
 
     assert report.execution_result is None, "executor should not run for blocked intake"
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "blocked"
+    assert report.governance_verdict.verdict == "blocked"
     assert report.publish_plan is not None
     assert report.publish_plan.status == "issue_comment"
     assert report.publish_result is not None
@@ -120,14 +120,14 @@ def test_missing_docs_blocks_pipeline(
     )
 
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert report.execution_result is not None, "explicit approval path should continue into execution"
     assert report.execution_result.status == "missing_docs"
     assert (Path(report.run_record.run_dir) / "approved-plan.json").exists()
     assert (Path(report.run_record.run_dir) / "plan-review.json").exists()
     # Missing docs blocks at governance after execution; publish is not reached.
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "blocked"
+    assert report.governance_verdict.verdict == "blocked"
     assert report.publish_plan is None
     assert report.publish_result is None
     assert report.exit_code == 4
@@ -181,7 +181,7 @@ def test_missing_docs_persists_execution_artifacts(
     run_dir = Path(report.run_record.run_dir)
 
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert report.execution_result is not None
     assert report.execution_result.status == "missing_docs"
     assert (run_dir / "approved-plan.json").exists()
@@ -195,7 +195,7 @@ def test_missing_docs_persists_execution_artifacts(
     assert not (run_dir / "publish-plan.json").exists()
     assert not (run_dir / "publish-result.json").exists()
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "blocked"
+    assert report.governance_verdict.verdict == "blocked"
     assert report.publish_plan is None
     assert report.publish_result is None
     assert report.exit_code == 4
@@ -251,11 +251,11 @@ def test_ambiguous_docs_blocks_pipeline(
     )
 
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert report.execution_result is not None
     assert report.execution_result.status == "ambiguous_docs"
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "blocked"
+    assert report.governance_verdict.verdict == "blocked"
     assert report.publish_plan is None
     assert report.publish_result is None
     assert report.exit_code == 4
@@ -307,13 +307,13 @@ def test_clean_docs_without_repair_completes_pipeline(
     )
 
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert report.execution_result is not None
     assert report.execution_result.status == "completed"
     assert report.repair_result is None
     assert report.qa_result is None
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "approved"
+    assert report.governance_verdict.verdict == "approved"
     assert report.publish_plan is not None
     assert report.publish_plan.status == "draft_pr"
     assert report.publish_result is not None
@@ -372,14 +372,14 @@ def test_qa_failed_blocks_pipeline(
     )
 
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert report.repair_result is not None, "repair should run with explicit approved plan"
     assert report.qa_result is not None, "QA should run with explicit approved plan"
     assert report.qa_result.status == "failed"
     assert report.execution_result is not None, "implementation result should reflect the QA failure"
     assert report.execution_result.status == "blocked"
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "blocked"
+    assert report.governance_verdict.verdict == "blocked"
     assert report.publish_plan is None
     assert report.publish_result is None
     assert report.exit_code == 4

@@ -100,7 +100,7 @@ def test_evaluate_run_maps_ambiguous_docs_to_blocked() -> None:
 def test_apply_governance_blocks_plan_issue_without_execution() -> None:
     verdict = apply_governance(_plan_intake(), execution_result=None, evaluation_result=None)
 
-    assert verdict.status == "blocked"
+    assert verdict.verdict == "blocked"
     assert "issue_marked_as_plan" in verdict.reason_codes
 
 
@@ -116,7 +116,7 @@ def test_apply_governance_approves_successful_run() -> None:
 
     verdict = apply_governance(intake, execution, evaluation)
 
-    assert verdict.status == "approved"
+    assert verdict.verdict == "approved"
 
 
 def test_apply_governance_approves_run_with_baseline_improved_detail_code() -> None:
@@ -132,7 +132,7 @@ def test_apply_governance_approves_run_with_baseline_improved_detail_code() -> N
 
     verdict = apply_governance(intake, execution, evaluation)
 
-    assert verdict.status == "approved"
+    assert verdict.verdict == "approved"
     assert verdict.reason_codes == ("qa_baseline_improved",)
 
 
@@ -148,7 +148,7 @@ def test_apply_governance_approves_run_with_approximated_qa_detail_code() -> Non
 
     verdict = apply_governance(intake, execution, evaluation)
 
-    assert verdict.status == "approved"
+    assert verdict.verdict == "approved"
     assert verdict.reason_codes == ()
 
 
@@ -164,7 +164,7 @@ def test_apply_governance_blocks_unrunnable_qa_run() -> None:
 
     verdict = apply_governance(intake, execution, evaluation)
 
-    assert verdict.status == "blocked"
+    assert verdict.verdict == "blocked"
     assert verdict.reason_codes == ("repair_stage_completed", "qa_command_unrunnable")
 
 

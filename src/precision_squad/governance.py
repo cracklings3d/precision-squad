@@ -41,21 +41,21 @@ def apply_governance(
     if intake.assessment.status == "blocked":
         reason_codes.extend(intake.assessment.reason_codes)
         return GovernanceVerdict(
-            status="blocked",
+            verdict="blocked",
             summary="Issue intake is blocked and cannot proceed to execution.",
             reason_codes=tuple(reason_codes),
         )
 
     if execution_result is None:
         return GovernanceVerdict(
-            status="blocked",
+            verdict="blocked",
             summary="Missing execution result artifact.",
             reason_codes=("missing_execution_result",),
         )
 
     if evaluation_result is None:
         return GovernanceVerdict(
-            status="blocked",
+            verdict="blocked",
             summary="Missing evaluation result artifact.",
             reason_codes=("missing_evaluation_result",),
         )
@@ -63,20 +63,20 @@ def apply_governance(
     if evaluation_result.status != "success":
         reason_codes.extend(evaluation_result.detail_codes)
         return GovernanceVerdict(
-            status="blocked",
+            verdict="blocked",
             summary=evaluation_result.summary,
             reason_codes=tuple(reason_codes) or ("evaluation_not_successful",),
         )
 
     if execution_result.quality == "improved":
         return GovernanceVerdict(
-            status="approved",
+            verdict="approved",
             summary="Run improved on a broken baseline without introducing new failures.",
             reason_codes=("qa_baseline_improved",),
         )
 
     return GovernanceVerdict(
-        status="approved",
+        verdict="approved",
         summary="Required intake, execution, and evaluation evidence is present.",
         reason_codes=(),
     )

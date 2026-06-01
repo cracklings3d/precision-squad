@@ -367,10 +367,10 @@ class RunStore:
             raise ApprovedPlanGateError(
                 f"Approved plan persistence requires issue-review.json for {issue_ref}."
             ) from exc
-        if review.review_status != "approved":
+        if review.verdict != "approved":
             raise ApprovedPlanGateError(
-                "Approved plan persistence requires issue-review.json.review_status to be "
-                f"'approved'; found '{review.review_status}' for {issue_ref}."
+                "Approved plan persistence requires issue-review.json.verdict to be "
+                f"'approved'; found '{review.verdict}' for {issue_ref}."
             )
         return review
 
@@ -421,10 +421,10 @@ class RunStore:
             issue_ref=issue_ref,
             expected_run_id=record.run_id,
         )
-        if review.review_status != "approved":
+        if review.verdict != "approved":
             raise PlanReviewNotApprovedError(
-                "Implement ingress requires plan-review.json.review_status to be 'approved'; "
-                f"found '{review.review_status}' for {issue_ref}."
+                "Implement ingress requires plan-review.json.verdict to be 'approved'; "
+                f"found '{review.verdict}' for {issue_ref}."
             )
         return review
 
@@ -644,10 +644,11 @@ def _parse_issue_review_payload(
             f"'{run_id}' does not match expected run_id '{expected_run_id}'"
         )
 
-    review_status = payload.get("review_status")
-    if review_status not in {"approved", "changes_requested", "blocked"}:
+    # Accept legacy 'review_status' key and normalize to 'verdict'
+    verdict = payload.get("verdict") or payload.get("review_status")
+    if verdict not in {"approved", "changes_requested", "blocked"}:
         raise IssueReviewValidationError(
-            "Issue review field 'review_status' must be 'approved', "
+            "Issue review field 'verdict' must be 'approved', "
             "'changes_requested', or 'blocked'"
         )
 
@@ -708,7 +709,7 @@ def _parse_issue_review_payload(
     return IssueReview(
         run_id=run_id,
         issue_ref=review_issue_ref,
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], verdict),
         summary=summary,
         feedback=tuple(feedback),
         provenance=IssueReviewProvenance(
@@ -746,10 +747,11 @@ def _parse_plan_review_payload(
             f"Plan review run_id '{run_id}' does not match expected run_id '{expected_run_id}'"
         )
 
-    review_status = payload.get("review_status")
-    if review_status not in {"approved", "changes_requested", "blocked"}:
+    # Accept legacy 'review_status' key and normalize to 'verdict'
+    verdict = payload.get("verdict") or payload.get("review_status")
+    if verdict not in {"approved", "changes_requested", "blocked"}:
         raise PlanReviewValidationError(
-            "Plan review field 'review_status' must be 'approved', "
+            "Plan review field 'verdict' must be 'approved', "
             "'changes_requested', or 'blocked'"
         )
 
@@ -810,7 +812,7 @@ def _parse_plan_review_payload(
     return PlanReview(
         run_id=run_id,
         issue_ref=review_issue_ref,
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], verdict),
         summary=summary,
         feedback=tuple(feedback),
         provenance=PlanReviewProvenance(
@@ -825,10 +827,11 @@ def _parse_impl_review_payload(payload: object, *, path: Path) -> ImplReviewResu
     if not isinstance(payload, dict):
         raise ValueError(f"Expected JSON object in {path}")
 
-    review_status = payload.get("review_status")
-    if review_status not in {"approved", "changes_requested", "blocked"}:
+    # Accept legacy 'review_status' key and normalize to 'verdict'
+    verdict = payload.get("verdict") or payload.get("review_status")
+    if verdict not in {"approved", "changes_requested", "blocked"}:
         raise ValueError(
-            "Implementation review field 'review_status' must be 'approved', "
+            "Implementation review field 'verdict' must be 'approved', "
             "'changes_requested', or 'blocked'"
         )
 
@@ -868,7 +871,7 @@ def _parse_impl_review_payload(payload: object, *, path: Path) -> ImplReviewResu
         )
 
     return ImplReviewResult(
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], review_status),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], verdict),
         summary=summary,
         pull_request_url=cast(str | None, payload.get("pull_request_url")),
         pull_number=cast(int | None, payload.get("pull_number")),
