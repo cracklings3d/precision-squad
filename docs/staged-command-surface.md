@@ -63,7 +63,7 @@ create issue → review issue → plan → review plan → implement → publish
 - `issue-draft.json`
 
 **Outputs:**
-- `issue-review.json` — contains `verdict` field (`approved` | `blocked`)
+- `issue-review.json` — contains `verdict` field (`approved` | `changes_requested` | `blocked`)
 
 **Gate Behavior:** Stage chain stops if verdict is not `approved`. `plan` is not invoked.
 
@@ -92,7 +92,7 @@ create issue → review issue → plan → review plan → implement → publish
 - `approved-plan.json`
 
 **Outputs:**
-- `plan-review.json` — contains `verdict` field (`approved` | `blocked`)
+- `plan-review.json` — contains `verdict` field (`approved` | `changes_requested` | `blocked`)
 
 **Gate Behavior:** Stage chain stops if verdict is not `approved`. `implement` is not invoked.
 
@@ -152,7 +152,7 @@ create issue → review issue → plan → review plan → implement → publish
 - `publish-result.json` for a published draft PR with URL / PR number metadata
 
 **Outputs:**
-- `impl-review.json`
+- `impl-review.json` — contains `verdict` field (`approved` | `changes_requested` | `blocked`)
 - `post-publish-review-result.json` — consumed by GitHub automation
 
 **Gate Behavior:** n/a (final review stage; outcomes handled by GitHub automation).
