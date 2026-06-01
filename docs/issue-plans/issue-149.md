@@ -8,9 +8,9 @@ source: issue
 owner: cracklings3d
 created_at: 2026-06-01
 updated_at: 2026-06-01
-approved_by: "canonical-issue-resolver stage-D review"
-approved_at: 2026-06-01T02:02:00Z
-review_artifact: "C:/Users/The_u/.opencode/projects/github-com-cracklings3d-precision-squad/runs/canonical-issue-resolver-parallel/cirp-20260601-020131-8bi7ja/reviews/issue-149/loop-2-stage-D.json"
+approved_by: canonical-issue-resolver stage-D review
+approved_at: 2026-06-01T06:00:00Z
+review_artifact: C:\Users\The_u\.opencode\projects\github-com-cracklings3d-precision-squad\runs\canonical-issue-resolver-parallel\cirp-20260601-020131-8bi7ja\reviews\issue-149\loop-3-stage-D.json
 related_branch: issue/149
 related_pr: null
 replaces: null
@@ -36,6 +36,9 @@ change_scope:
     - tests/integration/test_stage_artifacts.py
     - tests/integration/test_pipeline_gate_chain.py
     - tests/integration/test_pipeline_blocked.py
+    - tests/integration/test_pipeline_approved.py
+    - tests/integration/test_pipeline_quality_tag.py
+    - tests/integration/test_pipeline_docs_remediation.py
     - tests/integration/support.py
   directories: []
   modules:
@@ -55,11 +58,13 @@ change_scope:
 
 # Summary
 
-Issue #149 aligns canonical review and governance contracts on the single term `verdict`. The intended outcome is a narrow terminology and schema normalization across models, persistence/loaders, CLI/reporting, focused docs, and tests, while treating previously persisted legacy `review_status`/`status` artifacts as backward-compatible read inputs rather than a separate migration project.
+Issue #149 aligns canonical review and governance contracts on the single term `verdict`. This revision keeps the issue narrowly focused on that normalization while expanding the governed test surface just enough to cover the remaining stale `GovernanceVerdict.status` assertions in three integration tests that were identified during PR #156 review.
 
 # Problem
 
 Current review artifacts use `review_status`, governance artifacts use `status`, and active artifact documentation already refers to `verdict`. That mismatch creates avoidable translation between code, persisted JSON, loaders, CLI/reporting, and docs, and it blocks dependent documentation issues that need one settled review/governance contract.
+
+Fresh implementation review on PR #156 also confirmed three remaining integration tests still assert the stale `GovernanceVerdict.status` field in `tests/integration/test_pipeline_approved.py`, `tests/integration/test_pipeline_quality_tag.py`, and `tests/integration/test_pipeline_docs_remediation.py`. Those files are part of the same verdict-normalization remediation surface, but they fall outside the previously approved machine-readable `change_scope.files`, so the tracked plan must be revised before that narrow follow-up implementation work is governable.
 
 # Acceptance Criteria
 
@@ -69,6 +74,7 @@ Current review artifacts use `review_status`, governance artifacts use `status`,
 - Loaders, validation, gating logic, CLI/reporting, and related publish/review reporting surfaces agree on the same canonical field name and value sets end-to-end.
 - Focused active docs that define artifact schema describe the same `verdict` terminology, including review-stage `changes_requested` where applicable, without broad operator/workflow rewrites.
 - Unit and integration tests assert the unified review/governance terminology end-to-end.
+- The remaining integration assertions in `tests/integration/test_pipeline_approved.py`, `tests/integration/test_pipeline_quality_tag.py`, and `tests/integration/test_pipeline_docs_remediation.py` are governed by this plan revision and validate the canonical `verdict` contract instead of stale `status` access.
 - `docs/issue-plans/issue-149.md` exists in-repo as the canonical tracked plan artifact for this issue, and implementation review does not pass until actual stage-D approval metadata has been recorded on that tracked plan artifact.
 
 # In Scope
@@ -79,6 +85,7 @@ Current review artifacts use `review_status`, governance artifacts use `status`,
 - Update CLI/reporting and related publish/review messaging that currently surfaces review status or governance status so operator-facing output matches `verdict` terminology.
 - Update the narrow active doc surface required to describe the renamed artifact schema, centered on `docs/staged-command-surface.md`.
 - Update focused unit and integration coverage for the renamed contract.
+- Remediate the remaining stale `GovernanceVerdict.status` assertions in `tests/integration/test_pipeline_approved.py`, `tests/integration/test_pipeline_quality_tag.py`, and `tests/integration/test_pipeline_docs_remediation.py` as part of the same verdict-normalization test surface.
 - Maintain `docs/issue-plans/issue-149.md` as governed in-repo scope and carry it through actual stage-D approval metadata before downstream implementation review passes.
 
 # Out Of Scope
@@ -105,7 +112,8 @@ Current review artifacts use `review_status`, governance artifacts use `status`,
 2. Update run-store serialization, JSON validation/loaders, gate checks, and coordinator/CLI/reporting code so all canonical persisted and operator-facing review/governance surfaces use `verdict` consistently, while legacy persisted `review_status` / `status` inputs are accepted only long enough to normalize them into the canonical in-memory and re-persisted shape during loader, validation, and retry/resume flows.
 3. Update the narrow active artifact-schema documentation surface in `docs/staged-command-surface.md` so it matches the renamed fields and the current review/governance value sets, while leaving broader staged-workflow and operator-guide cleanup to #151 and #152.
 4. Update focused unit and integration tests covering artifact persistence/loading, retry/resume, stage gating, publishing/reporting, and implementation review mapping so they assert the unified terminology end-to-end.
-5. Before implementation review is treated as passing, revise this tracked plan artifact with actual stage-D approval metadata so the in-repo plan remains a governable prerequisite rather than a placeholder.
+5. Update the remaining integration-test assertions in `tests/integration/test_pipeline_approved.py`, `tests/integration/test_pipeline_quality_tag.py`, and `tests/integration/test_pipeline_docs_remediation.py` so the last stale governance-field references align with the canonical `verdict` contract already being normalized elsewhere in scope.
+6. Because this approved plan is being revised to expand governed file scope, keep this tracked artifact in a review-pending state until a real stage-D re-review records fresh approval metadata; downstream implementation review must not treat the prior approval metadata as still valid.
 
 # Impacted Areas
 
@@ -118,6 +126,9 @@ Current review artifacts use `review_status`, governance artifacts use `status`,
 - `src/precision_squad/post_publish_review.py` (canonical impl-review/reporting surface only)
 - `docs/staged-command-surface.md`
 - Focused contract tests under `tests/` and `tests/integration/` named in `change_scope.files`
+- `tests/integration/test_pipeline_approved.py`
+- `tests/integration/test_pipeline_quality_tag.py`
+- `tests/integration/test_pipeline_docs_remediation.py`
 - `docs/issue-plans/issue-149.md`
 
 # Validation Plan
@@ -127,8 +138,10 @@ Current review artifacts use `review_status`, governance artifacts use `status`,
 - Verify previously persisted artifacts using legacy `review_status` / `status` keys still load for validation and retry/resume, normalize to `verdict`, and do not reintroduce legacy keys when re-persisted.
 - Verify planning, implementation, publish gating, and CLI/reporting consume and display `verdict` consistently end-to-end.
 - Verify the focused active doc surface describes the same field names and value sets as the code and persisted artifacts.
-- Verify targeted unit and integration tests pass for artifact persistence/loading, retry/resume, stage gating, publishing/reporting, and implementation review mapping.
-- Verify `docs/issue-plans/issue-149.md` remains in-repo and is updated with actual stage-D approval metadata before implementation review is treated as passing.
+- Run `pyright` for the repository and confirm verdict normalization changes do not reintroduce type errors.
+- Run targeted integration pytest coverage for `tests/integration/test_pipeline_approved.py`, `tests/integration/test_pipeline_quality_tag.py`, and `tests/integration/test_pipeline_docs_remediation.py`, alongside the already-scoped verdict-normalization integration surfaces, and confirm no stale `GovernanceVerdict.status` assertions remain.
+- Verify the PR's required CI surfaces that cover pyright and the affected integration pytest jobs pass for this revised scope.
+- Verify `docs/issue-plans/issue-149.md` remains in-repo, stays review-pending after this scope revision, and is updated with fresh stage-D approval metadata before implementation review is treated as passing.
 
 # Risks
 
@@ -142,4 +155,6 @@ Current review artifacts use `review_status`, governance artifacts use `status`,
 
 # Approval Notes
 
-This plan is intentionally narrow within umbrella issue #144. It standardizes the canonical review/governance contract on `verdict`, remains distinct from #145, #146, and #147, and establishes the terminology floor that later doc issues #151 and #152 depend on. Because this tracked plan artifact is itself part of governed scope, `docs/issue-plans/issue-149.md` must remain in-repo and receive actual stage-D approval metadata (`approved_by`, `approved_at`, `review_artifact`, and corresponding approved frontmatter status fields) before implementation review for #149 may pass.
+This plan remains intentionally narrow within umbrella issue #144. It standardizes the canonical review/governance contract on `verdict`, remains distinct from #145, #146, and #147, and establishes the terminology floor that later doc issues #151 and #152 depend on.
+
+This revision expands governed file scope only far enough to include the remaining verdict-normalization integration-test remediation in `tests/integration/test_pipeline_approved.py`, `tests/integration/test_pipeline_quality_tag.py`, and `tests/integration/test_pipeline_docs_remediation.py`. Because that scope changed after a previously approved version, the prior approval metadata has been cleared and this tracked plan is intentionally back in a review-pending state. `docs/issue-plans/issue-149.md` must receive fresh stage-D approval metadata (`approved_by`, `approved_at`, `review_artifact`, and corresponding approved frontmatter status fields) before downstream implementation review for #149 may pass.
