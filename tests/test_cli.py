@@ -3063,6 +3063,27 @@ def test_invalid_cli_repair_agent_returns_shared_validator_error(capsys, tmp_pat
     assert "usage:" not in captured.err
 
 
+def test_repair_agent_vercel_ai_is_rejected_on_cli(capsys, tmp_path: Path) -> None:
+    """Verify that --repair-agent vercel-ai is explicitly rejected via the shared validator."""
+    status = main(
+        [
+            "repair",
+            "issue",
+            "owner/repo#1",
+            "--repo-path",
+            str(tmp_path),
+            "--repair-agent",
+            "vercel-ai",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Invalid value for 'repair_agent' (--repair-agent):" in captured.err
+    assert "'vercel-ai'" in captured.err
+    assert "Expected one of: opencode, none" in captured.err
+
+
 def test_missing_repo_path_error_lists_supported_config_locations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
