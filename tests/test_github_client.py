@@ -10,6 +10,7 @@ from precision_squad.github_client import (
     GitHubClientError,
     GitHubCliTransportStrategy,
     GitHubIssueClient,
+    GitHubMcpTransportStrategy,
     GitHubWriteClient,
 )
 from precision_squad.github_transport import (
@@ -261,11 +262,12 @@ def test_issue_client_selects_cli_strategy_when_cli_resolved(
     assert "fetch_issue_comments" in cli_calls
 
 
-def test_issue_client_raises_when_mcp_selected_but_unavailable(
+def test_issue_client_raises_when_mcp_selected_but_mcp_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When MCP is selected but strategy raises NotImplementedError, client raises."""
+    """When MCP is selected but MCP transport fails, client raises GitHubClientError."""
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.delenv("MCP_GITHUB_SERVER", raising=False)
 
     # Mock resolve_github_transport to return mcp-selected resolution
     def mock_resolve_github_transport(
@@ -287,7 +289,7 @@ def test_issue_client_raises_when_mcp_selected_but_unavailable(
 
     client = GitHubIssueClient.from_env()
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.fetch_issue(IssueReference("owner", "repo", 1))
 
 
@@ -380,11 +382,12 @@ def test_write_client_uses_cli_strategy_only_in_forced_cli_mode(
     assert "HTTP" not in str(strategy_calls)
 
 
-def test_write_client_raises_mcp_not_implemented_for_all_write_methods(
+def test_write_client_raises_mcp_error_for_all_write_methods(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """All write methods raise when MCP transport is selected."""
+    """All write methods raise GitHubClientError when MCP transport fails."""
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.delenv("MCP_GITHUB_SERVER", raising=False)
 
     # Mock resolve_github_transport to return mcp-selected resolution
     def mock_resolve_github_transport(
@@ -407,35 +410,35 @@ def test_write_client_raises_mcp_not_implemented_for_all_write_methods(
     client = GitHubWriteClient.from_env()
     reference = IssueReference("owner", "repo", 1)
 
-    # Test each write method raises NotImplementedError
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    # Test each write method raises GitHubClientError when MCP fails
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.create_issue_comment(reference, "comment body")
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.create_issue("owner", "repo", title="Test", body="Body")
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.create_draft_pull_request(reference, "Title", "Body", "head", "main")
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.update_pull_request("owner", "repo", 1, title="Title", body="Body")
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.mark_pull_request_ready("owner", "repo", 1)
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.reopen_issue(reference)
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.close_issue(reference)
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.merge_pull_request("owner", "repo", 1)
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.close_pull_request("owner", "repo", 1)
 
-    with pytest.raises(NotImplementedError, match="MCP transport not implemented"):
+    with pytest.raises(GitHubClientError, match="MCP"):
         client.update_pull_request_branch("owner", "repo", 1)
 
 
@@ -551,3 +554,146 @@ def test_auto_mode_stays_on_first_selected_transport(
 
     # All calls should use MCP (transport doesn't switch)
     assert all(t == "mcp" for t in transport_used), f"Expected all mcp, got {transport_used}"
+
+
+def test_mcp_strategy_handles_mark_pull_request_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mark_pull_request_ready uses MCP transport when selected."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    mcp_calls: list[str] = []
+
+    class FakeMcpStrategy:
+        def patch_pull_request(self, owner, repo, pull_number, payload):
+            mcp_calls.append(f"patch_pull_request/{owner}/{repo}/{pull_number}")
+            assert payload == {"draft": False}
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: FakeMcpStrategy(),
+    )
+
+    client = GitHubWriteClient.from_env()
+    client.mark_pull_request_ready("owner", "repo", 5)
+
+    assert "patch_pull_request/owner/repo/5" in mcp_calls
+
+
+def test_mcp_strategy_handles_get_pull_request_head_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_pull_request_head_branch uses MCP transport when selected."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    mcp_calls: list[str] = []
+
+    class FakeMcpStrategy:
+        def get_pull_request(self, owner, repo, pull_number):
+            mcp_calls.append(f"get_pull_request/{owner}/{repo}/{pull_number}")
+            return {
+                "html_url": f"https://github.com/{owner}/{repo}/pull/{pull_number}",
+                "head": {"ref": "feature-branch", "sha": "abc123"},
+            }
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: FakeMcpStrategy(),
+    )
+
+    client = GitHubWriteClient.from_env()
+    branch = client.get_pull_request_head_branch("owner", "repo", 5)
+
+    assert branch == "feature-branch"
+    assert "get_pull_request/owner/repo/5" in mcp_calls
+
+
+def test_mcp_strategy_handles_get_pull_request_head_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_pull_request_head_sha uses MCP transport when selected."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    mcp_calls: list[str] = []
+
+    class FakeMcpStrategy:
+        def get_pull_request(self, owner, repo, pull_number):
+            mcp_calls.append(f"get_pull_request/{owner}/{repo}/{pull_number}")
+            return {
+                "html_url": f"https://github.com/{owner}/{repo}/pull/{pull_number}",
+                "head": {"ref": "feature-branch", "sha": "def456"},
+            }
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: FakeMcpStrategy(),
+    )
+
+    client = GitHubWriteClient.from_env()
+    sha = client.get_pull_request_head_sha("owner", "repo", 5)
+
+    assert sha == "def456"
+    assert "get_pull_request/owner/repo/5" in mcp_calls
+
+
+def test_mcp_strategy_fails_explicitly_not_implemented(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP transport raises GitHubClientError, not NotImplementedError."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.delenv("MCP_GITHUB_SERVER", raising=False)
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+
+    client = GitHubIssueClient.from_env()
+
+    # Should raise GitHubClientError, NOT NotImplementedError
+    with pytest.raises(GitHubClientError, match="MCP"):
+        client.fetch_issue(IssueReference("owner", "repo", 1))
+
+    # Verify it's not a NotImplementedError
+    try:
+        client.fetch_issue(IssueReference("owner", "repo", 1))
+    except GitHubClientError:
+        pass  # Expected
+    except NotImplementedError:
+        pytest.fail("MCP transport raised NotImplementedError instead of GitHubClientError")
