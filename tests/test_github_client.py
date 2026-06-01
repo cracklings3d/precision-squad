@@ -699,23 +699,20 @@ def test_mcp_strategy_fails_explicitly_not_implemented(
         pytest.fail("MCP transport raised NotImplementedError instead of GitHubClientError")
 
 
-def test_mcp_transport_uses_real_github_update_pull_request_tool(
+def test_mcp_transport_raises_for_mark_pull_request_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MCP transport must use github_update_pull_request, not speculative github_patch_pull_request.
+    """MCP transport raises GitHubClientError for mark_pull_request_ready.
 
-    The GitHub MCP server does not have a 'github_patch_pull_request' tool.
-    The correct tool is 'github_update_pull_request' which supports draft state changes.
+    The MCP server does not support PR draft state changes via patch_pull_request.
+    Per issue requirements, this operation must raise an explicit error.
     """
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
 
-    mcp_tool_calls: list[tuple[str, dict]] = []
-
-    class SpyMcpStrategy(GitHubMcpTransportStrategy):
-        def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
-            mcp_tool_calls.append((tool_name, arguments))
-            return {}
+    class FakeMcpStrategy(GitHubMcpTransportStrategy):
+        """Fake strategy that doesn't need real MCP connection for error-case tests."""
+        pass
 
     monkeypatch.setattr(
         "precision_squad.github_client.resolve_github_transport",
@@ -729,29 +726,14 @@ def test_mcp_transport_uses_real_github_update_pull_request_tool(
     )
     monkeypatch.setattr(
         "precision_squad.github_client.GitHubMcpTransportStrategy",
-        lambda: SpyMcpStrategy(),
+        lambda: FakeMcpStrategy(),
     )
 
     client = GitHubWriteClient.from_env()
-    client.mark_pull_request_ready("owner", "repo", 5)
 
-    # Verify the tool name is github_update_pull_request (the real tool)
-    tool_names = [name for name, _ in mcp_tool_calls]
-    assert "github_update_pull_request" in tool_names, (
-        f"Expected 'github_update_pull_request' in tool calls, got {tool_names}"
-    )
-    # Ensure speculative 'github_patch_pull_request' was NOT used
-    assert "github_patch_pull_request" not in tool_names, (
-        "Speculative 'github_patch_pull_request' tool must not be used"
-    )
-    # Verify draft: false was passed
-    update_calls = [
-        (name, args) for name, args in mcp_tool_calls
-        if name == "github_update_pull_request"
-    ]
-    assert len(update_calls) == 1
-    _, update_args = update_calls[0]
-    assert update_args.get("draft") is False
+    # mark_pull_request_ready uses patch_pull_request which raises error for MCP
+    with pytest.raises(GitHubClientError, match="not supported via MCP"):
+        client.mark_pull_request_ready("owner", "repo", 5)
 
 
 def test_cli_transport_mark_pull_request_ready_uses_gh_api_with_draft_false(
@@ -840,3 +822,196 @@ def test_auto_does_not_select_mcp_when_only_package_importable(
     assert transport_calls == ["cli"], (
         f"Expected CLI transport to be used when MCP not runnable, got {transport_calls}"
     )
+
+
+def test_mcp_transport_uses_real_tool_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP transport uses real GitHub MCP tool names (not prefixed with 'github_')."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
+
+    mcp_tool_calls: list[tuple[str, dict]] = []
+
+    class SpyMcpStrategy(GitHubMcpTransportStrategy):
+        def _call_mcp_tool(self, tool_name: str, arguments: dict) -> object:
+            mcp_tool_calls.append((tool_name, arguments))
+            # Return appropriate type based on tool
+            if tool_name in ("get_issue", "create_issue", "add_issue_comment", "create_pull_request"):
+                return {"html_url": "https://github.com/owner/repo/issues/1"}
+            elif tool_name == "list_issues":
+                return [{"number": 1, "html_url": "https://github.com/owner/repo/issues/1"}]
+            return {}
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: SpyMcpStrategy(),
+    )
+
+    client = GitHubWriteClient.from_env()
+    reference = IssueReference("owner", "repo", 1)
+
+    # Test fetch_issue uses 'get_issue' (not 'github_get_issue')
+    client._strategy.fetch_issue(reference)
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "get_issue" in tool_names, f"Expected 'get_issue', got {tool_names}"
+    assert "github_get_issue" not in tool_names, "Should not use 'github_' prefixed tool name"
+
+    mcp_tool_calls.clear()
+
+    # Test create_issue_comment uses 'add_issue_comment' (not 'github_create_issue_comment')
+    client._strategy.create_issue_comment(reference, "body")
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "add_issue_comment" in tool_names, f"Expected 'add_issue_comment', got {tool_names}"
+    assert "github_create_issue_comment" not in tool_names, "Should not use 'github_' prefixed tool name"
+
+    mcp_tool_calls.clear()
+
+    # Test create_issue uses 'create_issue' (not 'github_create_issue')
+    client._strategy.create_issue("owner", "repo", title="Title", body="Body")
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "create_issue" in tool_names, f"Expected 'create_issue', got {tool_names}"
+    assert "github_create_issue" not in tool_names, "Should not use 'github_' prefixed tool name"
+
+    mcp_tool_calls.clear()
+
+    # Test list_repo_issues uses 'list_issues' (not 'github_list_issues')
+    client._strategy.list_repo_issues("owner", "repo")
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "list_issues" in tool_names, f"Expected 'list_issues', got {tool_names}"
+    assert "github_list_issues" not in tool_names, "Should not use 'github_' prefixed tool name"
+
+    mcp_tool_calls.clear()
+
+    # Test create_draft_pull_request uses 'create_pull_request' (not 'github_create_pull_request')
+    client._strategy.create_draft_pull_request(reference, "Title", "Body", "head", "base")
+    tool_names = [name for name, _ in mcp_tool_calls]
+    assert "create_pull_request" in tool_names, f"Expected 'create_pull_request', got {tool_names}"
+    assert "github_create_pull_request" not in tool_names, "Should not use 'github_' prefixed tool name"
+
+
+def test_mcp_strategy_raises_for_unsupported_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP transport raises GitHubClientError for operations not supported by the real MCP server."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("MCP_GITHUB_SERVER", "npx -y @modelcontextprotocol/server-github")
+
+    class FakeMcpStrategy(GitHubMcpTransportStrategy):
+        """Fake strategy that doesn't need real MCP connection for error-case tests."""
+        pass
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="mcp",
+            selected_transport="mcp",
+            mcp_available=True,
+            gh_cli_available=None,
+            decision_reason="mcp_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubMcpTransportStrategy",
+        lambda: FakeMcpStrategy(),
+    )
+
+    client = GitHubWriteClient.from_env()
+    reference = IssueReference("owner", "repo", 1)
+
+    # Test fetch_issue_comments raises GitHubClientError
+    with pytest.raises(GitHubClientError, match="not supported via MCP"):
+        client._strategy.fetch_issue_comments(reference)
+
+    # Test update_pull_request raises GitHubClientError
+    with pytest.raises(GitHubClientError, match="not supported via MCP"):
+        client._strategy.update_pull_request("owner", "repo", 1, title="Title", body="Body")
+
+    # Test patch_pull_request raises GitHubClientError
+    with pytest.raises(GitHubClientError, match="not supported via MCP"):
+        client._strategy.patch_pull_request("owner", "repo", 1, {"draft": False})
+
+    # Test close_pull_request raises GitHubClientError
+    with pytest.raises(GitHubClientError, match="not supported via MCP"):
+        client._strategy.close_pull_request("owner", "repo", 1)
+
+
+def test_backward_compatible_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHubIssueClient and GitHubWriteClient work without strategy= argument."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    cli_strategy_used: list[str] = []
+
+    class FakeCliStrategy:
+        def __init__(self, token: str) -> None:
+            self._token = token
+
+        def fetch_issue(self, reference):
+            cli_strategy_used.append("fetch_issue")
+            return {
+                "title": "Test Issue",
+                "body": "Test body",
+                "html_url": "https://github.com/owner/repo/issues/1",
+                "labels": [],
+            }
+
+        def fetch_issue_comments(self, reference):
+            cli_strategy_used.append("fetch_issue_comments")
+            return []
+
+        def create_issue(self, owner, repo, *, title, body):
+            cli_strategy_used.append("create_issue")
+            return f"https://github.com/{owner}/{repo}/issues/1"
+
+        def list_repo_issues(self, owner, repo):
+            cli_strategy_used.append("list_repo_issues")
+            return []
+
+        def create_issue_comment(self, reference, body):
+            cli_strategy_used.append("create_issue_comment")
+            return f"https://github.com/{reference.owner}/{reference.repo}/issues/{reference.number}#issuecomment-1"
+
+    monkeypatch.setattr(
+        "precision_squad.github_client.resolve_github_transport",
+        lambda **kwargs: GitHubTransportResolution(
+            requested_mode="cli",
+            selected_transport="cli",
+            mcp_available=False,
+            gh_cli_available=True,
+            decision_reason="cli_required_available",
+        ),
+    )
+    monkeypatch.setattr(
+        "precision_squad.github_client.GitHubCliTransportStrategy",
+        lambda token: FakeCliStrategy(token),
+    )
+
+    # GitHubIssueClient(token="test-token") should work without strategy=
+    issue_client = GitHubIssueClient(token="test-token")
+    assert issue_client._token == "test-token"
+    assert issue_client._strategy is not None
+
+    # GitHubWriteClient(token="test-token") should work without strategy=
+    write_client = GitHubWriteClient(token="test-token")
+    assert write_client._token == "test-token"
+    assert write_client._strategy is not None
+
+    # Verify the auto-resolved strategy works correctly
+    issue_client.fetch_issue(IssueReference("owner", "repo", 1))
+    assert "fetch_issue" in cli_strategy_used
+
+    cli_strategy_used.clear()
+    write_client.create_issue("owner", "repo", title="Test", body="Body")
+    assert "create_issue" in cli_strategy_used
