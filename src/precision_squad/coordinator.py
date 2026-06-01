@@ -1728,6 +1728,14 @@ def _load_governance_verdict_artifact(run_dir: Path) -> GovernanceVerdict:
     )
     # Accept legacy 'status' key and normalize to 'verdict'
     verdict = payload.get("verdict") or payload.get("status")
+    if verdict is None:
+        raise ValueError(
+            "governance-verdict.json must contain either 'verdict' or legacy 'status' key."
+        )
+    if verdict not in ("approved", "blocked"):
+        raise ValueError(
+            f"governance-verdict.json verdict must be 'approved' or 'blocked', got '{verdict}'."
+        )
     return GovernanceVerdict(
         verdict=cast(Literal["approved", "blocked"], verdict),
         summary=cast(str, payload["summary"]),
