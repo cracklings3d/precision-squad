@@ -85,7 +85,7 @@ def test_approved_happy_path(
     assert report.governance_verdict is not None
     assert report.publish_plan is not None
     assert report.publish_result is not None
-    assert report.governance_verdict.status == "approved"
+    assert report.governance_verdict.verdict == "approved"
     assert report.publish_plan.status == "draft_pr"
     assert report.publish_result.status == "dry_run"
     assert report.exit_code == 0

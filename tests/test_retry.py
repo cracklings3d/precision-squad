@@ -209,7 +209,7 @@ def test_retry_governance_blocked_after_escalation(tmp_path: Path) -> None:
     assert report.governance_verdict is not None
     verdict = report.governance_verdict
     assert isinstance(verdict, GovernanceVerdict)
-    assert verdict.status == "blocked"
+    assert verdict.verdict == "blocked"
     assert "escalated_after_retries" in verdict.reason_codes
 
 
@@ -505,7 +505,7 @@ def _make_issue_review_approved(run_id: str, issue_ref: str) -> IssueReview:
     return IssueReview(
         run_id=run_id,
         issue_ref=issue_ref,
-        review_status="approved",
+        verdict="approved",
         summary="Issue review approved",
         feedback=(),
         provenance=IssueReviewProvenance(
@@ -520,7 +520,7 @@ def _make_plan_review_approved(run_id: str, issue_ref: str) -> PlanReview:
     return PlanReview(
         run_id=run_id,
         issue_ref=issue_ref,
-        review_status="approved",
+        verdict="approved",
         summary="Plan review approved",
         feedback=(),
         provenance=PlanReviewProvenance(
@@ -633,7 +633,7 @@ def _create_publish_resume_source_run(
             review = IssueReview(
                 run_id=review.run_id,
                 issue_ref=review.issue_ref,
-                review_status="changes_requested",
+                verdict="changes_requested",
                 summary=review.summary,
                 feedback=review.feedback,
                 provenance=review.provenance,
@@ -651,7 +651,7 @@ def _create_publish_resume_source_run(
             review = PlanReview(
                 run_id=review.run_id,
                 issue_ref=review.issue_ref,
-                review_status="changes_requested",
+                verdict="changes_requested",
                 summary=review.summary,
                 feedback=review.feedback,
                 provenance=review.provenance,
@@ -663,7 +663,7 @@ def _create_publish_resume_source_run(
         verdict_status = "approved" if governance_verdict_approved else "blocked"
         store.write_governance_verdict(
             run_dir,
-            GovernanceVerdict(status=verdict_status, summary="Reviewed", reason_codes=()),
+            GovernanceVerdict(verdict=verdict_status, summary="Reviewed", reason_codes=()),
         )
 
     # Write execution-result.json
@@ -1026,6 +1026,79 @@ def test_retry_from_publish_with_non_approved_governance_verdict_fails(tmp_path:
         )
 
 
+def test_retry_from_publish_with_malformed_governance_verdict_missing_verdict_fails(
+    tmp_path: Path,
+) -> None:
+    """Test that --from publish fails when governance-verdict.json has neither verdict nor status."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        # Include a valid governance-verdict.json initially, then overwrite with malformed
+    )
+    previous_run_dir = Path(previous.run_dir)
+
+    # Overwrite with malformed governance-verdict.json: file exists but no verdict/status key
+    (previous_run_dir / "governance-verdict.json").write_text(
+        json.dumps(
+            {
+                "summary": "Malformed: missing both verdict and status keys",
+                "reason_codes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="governance-verdict.json must contain either 'verdict' or legacy 'status'"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
+def test_retry_from_publish_with_malformed_governance_verdict_invalid_value_fails(
+    tmp_path: Path,
+) -> None:
+    """Test that --from publish fails when governance-verdict.json has an invalid verdict value."""
+    store = RunStore(tmp_path / "runs")
+    store.root.mkdir(parents=True, exist_ok=True)
+    _, previous = _create_publish_resume_source_run(
+        store,
+        attempt=1,
+        # Include a valid governance-verdict.json initially, then overwrite with malformed
+    )
+    previous_run_dir = Path(previous.run_dir)
+
+    # Overwrite with malformed governance-verdict.json: verdict value is invalid
+    (previous_run_dir / "governance-verdict.json").write_text(
+        json.dumps(
+            {
+                "verdict": "unknown_value",
+                "summary": "Malformed: invalid verdict value",
+                "reason_codes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coordinator = RunCoordinator()
+
+    with pytest.raises(
+        ValueError, match="governance-verdict.json verdict must be 'approved' or 'blocked', got 'unknown_value'"
+    ):
+        coordinator.repair_issue(
+            params=_make_params_for_resume(tmp_path, previous.run_id, resume_from="publish"),
+            intake=_make_intake(),
+            dependencies=MagicMock(),
+        )
+
+
 def test_retry_from_publish_without_repair_result_fails(tmp_path: Path) -> None:
     """Test that --from publish fails when repair-result.json is missing."""
     store = RunStore(tmp_path / "runs")
@@ -1178,7 +1251,7 @@ def test_retry_from_review_plan_succeeds_with_correct_ingress(tmp_path: Path) ->
     mock_dependencies.run_plan_review.return_value = PlanReview(
         run_id=previous.run_id,
         issue_ref="owner/repo#1",
-        review_status="approved",
+        verdict="approved",
         summary="Plan looks good",
         feedback=(),
         provenance=PlanReviewProvenance(
@@ -1242,7 +1315,7 @@ def test_retry_from_review_impl_succeeds_with_correct_ingress_and_writes_both_ar
     # result that fails later with asdict() errors.
     mock_dependencies.run_impl_review = None
     mock_dependencies.run_post_publish_review_if_needed.return_value = ImplReviewResult(
-        review_status="approved",
+        verdict="approved",
         summary="Implementation looks good",
         pull_request_url="https://github.com/owner/repo/pull/1",
         pull_number=1,
@@ -1302,7 +1375,7 @@ def test_retry_context_pack_materialization(tmp_path: Path) -> None:
     mock_dependencies.run_plan_review.return_value = PlanReview(
         run_id=previous.run_id,
         issue_ref="owner/repo#1",
-        review_status="approved",
+        verdict="approved",
         summary="Plan looks good",
         feedback=(),
         provenance=PlanReviewProvenance(
@@ -1390,7 +1463,7 @@ def test_retry_publish_resume_carries_forward_repair_workspace(tmp_path: Path) -
     # run_post_publish_review_if_needed to return a valid ImplReviewResult
     from precision_squad.models import ImplReviewResult
     mock_dependencies.run_post_publish_review_if_needed.return_value = ImplReviewResult(
-        review_status="approved",
+        verdict="approved",
         summary="Implementation looks good",
         pull_request_url="https://github.com/owner/repo/pull/1",
         pull_number=1,

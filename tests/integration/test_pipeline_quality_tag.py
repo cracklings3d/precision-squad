@@ -162,8 +162,8 @@ def test_broken_baseline_improved_to_approved(
 
     assert report.governance_verdict is not None
     assert report.publish_plan is not None
-    assert report.governance_verdict.status == "approved", (
-        f"Expected approved, got {report.governance_verdict.status}: "
+    assert report.governance_verdict.verdict == "approved", (
+        f"Expected approved, got {report.governance_verdict.verdict}: "
         f"{report.governance_verdict.summary}"
     )
     assert report.publish_plan.status == "draft_pr"

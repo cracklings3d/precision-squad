@@ -280,8 +280,8 @@ def test_docs_remediation_succeeds_after_fix(
         f"{report.execution_result.summary}"
     )
     assert "docs_remediation_issue" in report.execution_result.detail_codes
-    assert report.governance_verdict.status == "approved", (
-        f"Expected approved, got {report.governance_verdict.status}: "
+    assert report.governance_verdict.verdict == "approved", (
+        f"Expected approved, got {report.governance_verdict.verdict}: "
         f"{report.governance_verdict.summary}"
     )
     assert report.publish_plan.status == "draft_pr"
@@ -325,8 +325,8 @@ def test_docs_remediation_stays_blocked_without_fix(
         f"Expected missing_docs or blocked, got {report.execution_result.status}: "
         f"{report.execution_result.summary}"
     )
-    assert report.governance_verdict.status == "blocked", (
-        f"Expected blocked, got {report.governance_verdict.status}: "
+    assert report.governance_verdict.verdict == "blocked", (
+        f"Expected blocked, got {report.governance_verdict.verdict}: "
         f"{report.governance_verdict.summary}"
     )
     assert report.publish_plan.status in {"issue_comment", "follow_up_issue"}

@@ -85,7 +85,7 @@ def test_chain_blocks_fresh_run_without_explicit_plan(
     # Fresh run without approved plan must block
     assert report.exit_code == 3, "fresh run should block at review_plan"
     assert report.plan_review is not None, "review_plan should run"
-    assert report.plan_review.review_status == "blocked", "review_plan should be blocked"
+    assert report.plan_review.verdict == "blocked", "review_plan should be blocked"
     assert not (run_dir / "approved-plan.json").exists(), \
         "no approved-plan.json should exist for fresh run without explicit plan"
     assert report.execution_result is None, "implement should not run when blocked"
@@ -128,7 +128,7 @@ def test_chain_preserves_explicit_plan_gating_without_approved_plan(
     assert not (run_dir / "approved-plan.json").exists()
     assert report.execution_result is None
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "blocked"
+    assert report.plan_review.verdict == "blocked"
     assert report.publish_plan is None
     assert report.publish_result is None
 
@@ -186,7 +186,7 @@ def test_chain_stops_at_governance_not_approved(
 
     assert report.exit_code != 0, "chain should stop at governance gate"
     assert report.governance_verdict is not None, "governance should run"
-    assert report.governance_verdict.status == "blocked", "governance should be blocked"
+    assert report.governance_verdict.verdict == "blocked", "governance should be blocked"
     assert report.publish_plan is None, "publish_plan should not run"
     assert report.publish_result is None, "publish_result should not run"
 
@@ -230,15 +230,15 @@ def test_happy_path_chain_complete(
     )
 
     assert report.issue_review is not None
-    assert report.issue_review.review_status == "approved"
+    assert report.issue_review.verdict == "approved"
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert report.execution_result is not None
     assert report.repair_result is not None
     assert report.qa_result is not None
     assert report.baseline_qa_result is not None
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "approved"
+    assert report.governance_verdict.verdict == "approved"
     assert report.publish_plan is not None
     assert report.publish_plan.status == "draft_pr"
     assert report.publish_result is not None
@@ -308,7 +308,7 @@ def test_publish_only_after_approved_verdict(
     )
 
     assert report_blocked.governance_verdict is not None
-    assert report_blocked.governance_verdict.status == "blocked"
+    assert report_blocked.governance_verdict.verdict == "blocked"
     # Cannot directly observe that execute_publish_plan was not called using
     # _GovernanceBlockedTestDependencies, but we can verify the chain stopped
     assert report_blocked.publish_plan is None
@@ -335,7 +335,7 @@ def test_publish_only_after_approved_verdict(
     )
 
     assert report_approved.governance_verdict is not None
-    assert report_approved.governance_verdict.status == "approved"
+    assert report_approved.governance_verdict.verdict == "approved"
     assert spy_deps.publish_called is True, "execute_publish_plan should be called when approved"
     assert report_approved.publish_plan is not None
     assert report_approved.publish_result is not None

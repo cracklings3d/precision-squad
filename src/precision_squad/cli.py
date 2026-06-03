@@ -412,11 +412,11 @@ def _repair_issue(args: argparse.Namespace) -> int:
 
     if report.execution_result is None and report.issue_review is not None:
         issue_review = report.issue_review
-        print(f"Issue Review: {issue_review.review_status}")
+        print(f"Issue Review: {issue_review.verdict}")
         print(f"Issue Review Summary: {issue_review.summary}")
         if report.plan_review is not None:
             plan_review = report.plan_review
-            print(f"Plan Review: {plan_review.review_status}")
+            print(f"Plan Review: {plan_review.verdict}")
             print(f"Plan Review Summary: {plan_review.summary}")
         return report.exit_code
 
@@ -424,7 +424,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
         verdict = report.governance_verdict
         publish_plan = cast(PublishPlan, report.publish_plan)
         publish_result = cast(PublishResult, report.publish_result)
-        print(f"Governance: {verdict.status if verdict else 'N/A'}")
+        print(f"Governance: {verdict.verdict if verdict else 'N/A'}")
         print(f"Governance Summary: {verdict.summary if verdict else 'N/A'}")
         print(f"Publish Plan: {publish_plan.status}")
         print(f"Publish Result: {publish_result.status}")
@@ -452,7 +452,7 @@ def _repair_issue(args: argparse.Namespace) -> int:
         print(f"QA Status: {qa_result.status}")
         print(f"QA Summary: {qa_result.summary}")
     print(f"Evaluation Status: {evaluation_result.status}")
-    print(f"Governance: {verdict.status if verdict else 'N/A'}")
+    print(f"Governance: {verdict.verdict if verdict else 'N/A'}")
     if publish_plan is not None and publish_result is not None:
         print(f"Publish Plan: {publish_plan.status}")
         print(f"Publish Result: {publish_result.status}")
@@ -535,7 +535,7 @@ def _review_issue(args: argparse.Namespace) -> int:
     print(f"Run ID: {report.run_record.run_id}")
     print(f"Run Dir: {report.run_record.run_dir}")
     print(f"Issue: {report.run_record.issue_ref}")
-    print(f"Review Status: {review.review_status}")
+    print(f"Review Verdict: {review.verdict}")
     print(f"Review Summary: {review.summary}")
     print("Artifacts: issue-review.json")
     if review.feedback:
@@ -558,7 +558,7 @@ def _review_plan(args: argparse.Namespace) -> int:
     print(f"Run ID: {report.run_record.run_id}")
     print(f"Run Dir: {report.run_record.run_dir}")
     print(f"Issue: {report.run_record.issue_ref}")
-    print(f"Review Status: {review.review_status}")
+    print(f"Review Verdict: {review.verdict}")
     print(f"Review Summary: {review.summary}")
     print("Artifacts: plan-review.json")
     if review.feedback:
@@ -583,7 +583,7 @@ def _review_impl(args: argparse.Namespace) -> int:
     print(f"Run ID: {report.run_record.run_id}")
     print(f"Run Dir: {report.run_record.run_dir}")
     print(f"Issue: {report.run_record.issue_ref}")
-    print(f"Review Status: {review.review_status}")
+    print(f"Review Verdict: {review.verdict}")
     print(f"Review Summary: {review.summary}")
     if review.pull_request_url:
         print(f"Publish URL: {review.pull_request_url}")
@@ -642,7 +642,7 @@ def _implement_run(args: argparse.Namespace) -> int:
         print(f"QA Status: {report.qa_result.status}")
         print(f"QA Summary: {report.qa_result.summary}")
     print(f"Evaluation Status: {report.evaluation_result.status}")
-    print(f"Governance: {report.governance_verdict.status}")
+    print(f"Governance: {report.governance_verdict.verdict}")
     print(
         "Artifacts: execution-result.json, repair-result.json, qa-baseline-result.json, "
         "qa-result.json, evaluation-result.json, governance-verdict.json"

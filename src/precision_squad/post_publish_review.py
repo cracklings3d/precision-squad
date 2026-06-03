@@ -491,7 +491,7 @@ def run_impl_review(
     mapped_review = _map_post_publish_to_impl_review(legacy_result)
     if mapped_review.pull_head_sha != live_head_sha:
         mapped_review = ImplReviewResult(
-            review_status=mapped_review.review_status,
+            verdict=mapped_review.verdict,
             summary=mapped_review.summary,
             pull_request_url=mapped_review.pull_request_url,
             pull_number=mapped_review.pull_number,
@@ -519,7 +519,7 @@ def mirror_impl_review_to_post_publish(review: ImplReviewResult) -> PostPublishR
         "approved": "approved",
         "changes_requested": "rejected",
         "blocked": "failed_infra",
-        }[review.review_status],
+        }[review.verdict],
     )
     return PostPublishReviewResult(
         status=status,
@@ -686,7 +686,7 @@ def _blocked_impl_review(
     pull_head_sha: str | None = None,
 ) -> ImplReviewResult:
     return ImplReviewResult(
-        review_status="blocked",
+        verdict="blocked",
         summary=summary,
         pull_request_url=pull_request_url,
         pull_number=pull_number,
@@ -826,7 +826,7 @@ def _validate_review_provenance(
 def _map_post_publish_to_impl_review(result: PostPublishReviewResult) -> ImplReviewResult:
     if result.status == "approved":
         return ImplReviewResult(
-            review_status="approved",
+            verdict="approved",
             summary=result.summary,
             pull_request_url=result.pull_request_url,
             pull_number=result.pull_number,
@@ -869,7 +869,7 @@ def _map_post_publish_to_impl_review(result: PostPublishReviewResult) -> ImplRev
                 )
             )
         return ImplReviewResult(
-            review_status="changes_requested",
+            verdict="changes_requested",
             summary=result.summary,
             pull_request_url=result.pull_request_url,
             pull_number=result.pull_number,
@@ -883,7 +883,7 @@ def _map_post_publish_to_impl_review(result: PostPublishReviewResult) -> ImplRev
             issue_reopened=result.issue_reopened,
         )
     return ImplReviewResult(
-        review_status="blocked",
+        verdict="blocked",
         summary=result.summary,
         pull_request_url=result.pull_request_url,
         pull_number=result.pull_number,
@@ -923,7 +923,7 @@ def _finalize_non_approved_impl_review(
         pull_number=pull_number,
         pull_head_sha=pull_head_sha,
     )
-    if result.review_status == "approved":
+    if result.verdict == "approved":
         return result
 
     client = GitHubWriteClient.from_env(token_env)
@@ -935,7 +935,7 @@ def _finalize_non_approved_impl_review(
     issue_comment_url = client.create_issue_comment(intake.issue.reference, body)
     client.reopen_issue(intake.issue.reference)
     return ImplReviewResult(
-        review_status=result.review_status,
+        verdict=result.verdict,
         summary=result.summary,
         pull_request_url=result.pull_request_url,
         pull_number=result.pull_number,
@@ -960,7 +960,7 @@ def _build_impl_review_issue_comment(
         "## Precision Squad Implementation Review",
         f"- Run ID: `{run_record.run_id}`",
         f"- Issue: `{intake.issue.reference}`",
-        f"- Review status: `{review.review_status}`",
+        f"- Review verdict: `{review.verdict}`",
         f"- PR: {review.pull_request_url or '(unavailable)'}",
         f"- PR Head SHA: `{review.pull_head_sha or '(unavailable)'}`",
         "",

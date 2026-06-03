@@ -21,6 +21,7 @@ from precision_squad.models import (
     ApprovedPlan,
     ExecutionResult,
     GitHubIssue,
+    GovernanceVerdict,
     ImplReviewResult,
     IssueAssessment,
     IssueIntake,
@@ -93,7 +94,7 @@ def test_repair_issue_happy_path_runs_staged_chain_and_persists_review_artifacts
     )
     dependencies.run_post_publish_review_if_needed.return_value = None
     dependencies.run_impl_review.return_value = ImplReviewResult(
-        review_status="approved",
+        verdict="approved",
         summary="Implementation review approved.",
         pull_request_url="https://github.com/owner/repo/pull/1",
         pull_number=1,
@@ -135,9 +136,9 @@ def test_repair_issue_happy_path_runs_staged_chain_and_persists_review_artifacts
     run_dir = Path(report.run_record.run_dir)
     assert report.exit_code == 0
     assert report.issue_review is not None
-    assert report.issue_review.review_status == "approved"
+    assert report.issue_review.verdict == "approved"
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert report.publish_result is not None
     assert report.publish_result.status == "published"
     assert report.post_publish_review_result is not None
@@ -181,7 +182,7 @@ def test_repair_issue_stops_after_failed_issue_review(tmp_path: Path, monkeypatc
     run_dir = Path(report.run_record.run_dir)
     assert report.exit_code == 2
     assert report.issue_review is not None
-    assert report.issue_review.review_status == "changes_requested"
+    assert report.issue_review.verdict == "changes_requested"
     assert not (run_dir / "approved-plan.json").exists()
     assert not (run_dir / "plan-review.json").exists()
     assert not (run_dir / "execution-result.json").exists()
@@ -212,9 +213,9 @@ def test_repair_issue_stops_after_failed_plan_review(tmp_path: Path, monkeypatch
     run_dir = Path(report.run_record.run_dir)
     assert report.exit_code == 2
     assert report.issue_review is not None
-    assert report.issue_review.review_status == "approved"
+    assert report.issue_review.verdict == "approved"
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "changes_requested"
+    assert report.plan_review.verdict == "changes_requested"
     assert not (run_dir / "execution-result.json").exists()
     assert not (run_dir / "publish-plan.json").exists()
     dependencies.execute_publish_plan.assert_not_called()
@@ -271,7 +272,7 @@ def test_repair_issue_blocks_fresh_attempt_one_without_explicit_plan(
     # Fresh run without approved plan must block
     assert report.exit_code == 3, "fresh run should block at review plan"
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "blocked"
+    assert report.plan_review.verdict == "blocked"
     assert not (run_dir / "approved-plan.json").exists()
     assert not (run_dir / "execution-result.json").exists()
 
@@ -302,7 +303,7 @@ def test_repair_issue_respects_explicit_review_stage_gating_without_plan(
     run_dir = Path(report.run_record.run_dir)
     assert report.exit_code == 3
     assert report.plan_review is not None
-    assert report.plan_review.review_status == "blocked"
+    assert report.plan_review.verdict == "blocked"
     assert not (run_dir / "approved-plan.json").exists()
     assert not (run_dir / "execution-result.json").exists()
     dependencies.execute_publish_plan.assert_not_called()
@@ -364,7 +365,7 @@ def test_repair_issue_stops_before_publish_when_governance_blocked(
     run_dir = Path(report.run_record.run_dir)
     assert report.exit_code == 4
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "blocked"
+    assert report.governance_verdict.verdict == "blocked"
     assert not (run_dir / "publish-plan.json").exists()
     assert not (run_dir / "publish-result.json").exists()
     assert not (run_dir / "impl-review.json").exists()
@@ -583,7 +584,7 @@ def test_repair_issue_marks_missing_decision_log_artifact_as_failed_infra(
     assert report.execution_result.status == "failed_infra"
     assert "missing_decision_log_artifact" in report.execution_result.detail_codes
     assert report.governance_verdict is not None
-    assert report.governance_verdict.status == "blocked"
+    assert report.governance_verdict.verdict == "blocked"
     assert report.publish_plan is None
 
 
@@ -676,7 +677,7 @@ def test_review_impl_persists_canonical_and_compatibility_review_artifacts(tmp_p
 
     dependencies = MagicMock()
     dependencies.run_impl_review.return_value = ImplReviewResult(
-        review_status="changes_requested",
+        verdict="changes_requested",
         summary="Published PR needs changes.",
         pull_request_url="https://github.com/owner/repo/pull/1",
         pull_number=1,
@@ -695,7 +696,7 @@ def test_review_impl_persists_canonical_and_compatibility_review_artifacts(tmp_p
     impl_payload = json.loads((run_dir / "impl-review.json").read_text(encoding="utf-8"))
     legacy_payload = json.loads((run_dir / "post-publish-review-result.json").read_text(encoding="utf-8"))
     assert report.exit_code == 2
-    assert impl_payload["review_status"] == "changes_requested"
+    assert impl_payload["verdict"] == "changes_requested"
     assert legacy_payload["status"] == "rejected"
 
 
@@ -730,7 +731,7 @@ def test_publish_run_compatibility_path_persists_shared_canonical_review_and_leg
 
     dependencies = MagicMock()
     dependencies.run_post_publish_review_if_needed.return_value = ImplReviewResult(
-        review_status="blocked",
+        verdict="blocked",
         summary="Implementation review could not validate provenance.",
         pull_request_url="https://github.com/owner/repo/pull/1",
         pull_number=1,
@@ -759,7 +760,7 @@ def test_publish_run_compatibility_path_persists_shared_canonical_review_and_leg
     impl_payload = json.loads((run_dir / "impl-review.json").read_text(encoding="utf-8"))
     legacy_payload = json.loads((run_dir / "post-publish-review-result.json").read_text(encoding="utf-8"))
     assert report.post_publish_review_result is not None
-    assert impl_payload["review_status"] == "blocked"
+    assert impl_payload["verdict"] == "blocked"
     assert legacy_payload["status"] == "failed_infra"
     assert legacy_payload["pull_head_sha"] == "head-sha"
 
@@ -785,7 +786,7 @@ def test_implement_run_refuses_when_plan_review_not_approved(
 
     monkeypatch.setattr(coord_module.DocsFirstExecutor, "execute", fail_if_execute)
 
-    with pytest.raises(ValueError, match="review_status"):
+    with pytest.raises(ValueError, match="verdict"):
         RunCoordinator().implement_run(
             params=_make_implement_params(tmp_path, record.run_id),
             dependencies=MagicMock(),
@@ -958,7 +959,7 @@ def test_persist_approved_plan_for_planning_writes_same_run_artifact(tmp_path: P
         IssueReview(
             run_id=record.run_id,
             issue_ref="owner/repo#1",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -1023,7 +1024,7 @@ def test_review_plan_persists_same_run_plan_review_artifact(tmp_path: Path) -> N
         IssueReview(
             run_id=record.run_id,
             issue_ref="owner/repo#1",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -1041,7 +1042,7 @@ def test_review_plan_persists_same_run_plan_review_artifact(tmp_path: Path) -> N
 
     assert report.exit_code == 0
     assert isinstance(report.plan_review, PlanReview)
-    assert report.plan_review.review_status == "approved"
+    assert report.plan_review.verdict == "approved"
     assert (run_dir / "plan-review.json").exists()
 
 
@@ -1058,7 +1059,7 @@ def test_review_plan_returns_changes_requested_for_correctable_plan_findings(tmp
         IssueReview(
             run_id=record.run_id,
             issue_ref="owner/repo#1",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -1085,7 +1086,7 @@ def test_review_plan_returns_changes_requested_for_correctable_plan_findings(tmp
     )
 
     assert report.exit_code == 2
-    assert report.plan_review.review_status == "changes_requested"
+    assert report.plan_review.verdict == "changes_requested"
     assert report.plan_review.feedback[0].code == "missing_retrieval_surface_summary"
 
 
@@ -1172,7 +1173,7 @@ def test_review_plan_returns_changes_requested_for_required_implementation_safet
         IssueReview(
             run_id=record.run_id,
             issue_ref="owner/repo#1",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -1192,7 +1193,7 @@ def test_review_plan_returns_changes_requested_for_required_implementation_safet
     )
 
     assert report.exit_code == expected_exit_code
-    assert report.plan_review.review_status == "changes_requested"
+    assert report.plan_review.verdict == "changes_requested"
     assert report.plan_review.feedback[0].code == expected_code
 
 
@@ -1211,7 +1212,7 @@ def test_review_plan_returns_blocked_for_non_string_implementation_step_even_wit
         IssueReview(
             run_id=record.run_id,
             issue_ref="owner/repo#1",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -1240,7 +1241,7 @@ def test_review_plan_returns_blocked_for_non_string_implementation_step_even_wit
     )
 
     assert report.exit_code == 3
-    assert report.plan_review.review_status == "blocked"
+    assert report.plan_review.verdict == "blocked"
     assert report.plan_review.feedback[0].code == "approved_plan_invalid"
     assert "implementation_steps[2] must be a string" in report.plan_review.feedback[0].message
 
@@ -1260,7 +1261,7 @@ def test_review_plan_returns_blocked_when_prerequisite_issue_review_missing(tmp_
     )
 
     assert report.exit_code == 3
-    assert report.plan_review.review_status == "blocked"
+    assert report.plan_review.verdict == "blocked"
     assert report.plan_review.feedback[0].code == "issue_review_missing"
 
 
@@ -1279,7 +1280,7 @@ def test_review_plan_returns_blocked_when_schema_invalid_plan_also_has_change_le
         IssueReview(
             run_id=record.run_id,
             issue_ref="owner/repo#1",
-            review_status="approved",
+            verdict="approved",
             summary="Planning may proceed because issue-draft.json passed the local planner-safety review.",
             feedback=(),
             provenance=IssueReviewProvenance(
@@ -1307,6 +1308,76 @@ def test_review_plan_returns_blocked_when_schema_invalid_plan_also_has_change_le
     )
 
     assert report.exit_code == 3
-    assert report.plan_review.review_status == "blocked"
+    assert report.plan_review.verdict == "blocked"
     assert report.plan_review.feedback[0].code == "approved_plan_invalid"
     assert "named_references" in report.plan_review.feedback[0].message
+
+
+# ---------------------------------------------------------------------
+# Tests for _load_governance_verdict_artifact
+# ---------------------------------------------------------------------
+
+
+def _write_governance_verdict(run_dir: Path, **kwargs: object) -> None:
+    (run_dir).mkdir(parents=True, exist_ok=True)
+    (run_dir / "governance-verdict.json").write_text(
+        json.dumps(kwargs),
+        encoding="utf-8",
+    )
+
+
+def test_load_governance_verdict_artifact_canonical_verdict_key(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        verdict="approved",
+        summary="All checks passed.",
+        reason_codes=["clean-diff"],
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    result = _load_governance_verdict_artifact(tmp_path)
+    assert result == GovernanceVerdict(
+        verdict="approved",
+        summary="All checks passed.",
+        reason_codes=("clean-diff",),
+    )
+
+
+def test_load_governance_verdict_artifact_legacy_status_key(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        status="blocked",
+        summary="Governance blocked due to risk.",
+        reason_codes=["risk-detected"],
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    result = _load_governance_verdict_artifact(tmp_path)
+    assert result == GovernanceVerdict(
+        verdict="blocked",
+        summary="Governance blocked due to risk.",
+        reason_codes=("risk-detected",),
+    )
+
+
+def test_load_governance_verdict_artifact_missing_verdict_fails(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        summary="Summary only, no verdict.",
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    with pytest.raises(ValueError, match="must contain either 'verdict' or legacy 'status'"):
+        _load_governance_verdict_artifact(tmp_path)
+
+
+def test_load_governance_verdict_artifact_invalid_verdict_fails(tmp_path: Path) -> None:
+    _write_governance_verdict(
+        tmp_path,
+        verdict="unknown",
+        summary="Invalid verdict value.",
+    )
+    from precision_squad.coordinator import _load_governance_verdict_artifact
+
+    with pytest.raises(ValueError, match="must be 'approved' or 'blocked', got 'unknown'"):
+        _load_governance_verdict_artifact(tmp_path)

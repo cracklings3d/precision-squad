@@ -377,9 +377,9 @@ class RunCoordinator:
         record = store.load_run(params.run_id)
         review = _derive_issue_review(store=store, record=record)
         store.write_issue_review(Path(record.run_dir).resolve(), review)
-        if review.review_status == "approved":
+        if review.verdict == "approved":
             exit_code = 0
-        elif review.review_status == "changes_requested":
+        elif review.verdict == "changes_requested":
             exit_code = 2
         else:
             exit_code = 3
@@ -390,9 +390,9 @@ class RunCoordinator:
         record = store.load_run(params.run_id)
         review = _derive_plan_review(store=store, record=record)
         store.write_plan_review(Path(record.run_dir).resolve(), review)
-        if review.review_status == "approved":
+        if review.verdict == "approved":
             exit_code = 0
-        elif review.review_status == "changes_requested":
+        elif review.verdict == "changes_requested":
             exit_code = 2
         else:
             exit_code = 3
@@ -425,9 +425,9 @@ class RunCoordinator:
             run_dir,
             mirror_impl_review_to_post_publish(impl_review),
         )
-        if impl_review.review_status == "approved":
+        if impl_review.verdict == "approved":
             exit_code = 0
-        elif impl_review.review_status == "changes_requested":
+        elif impl_review.verdict == "changes_requested":
             exit_code = 2
         else:
             exit_code = 3
@@ -718,7 +718,7 @@ class RunCoordinator:
                 baseline_qa_result=implementation_report.baseline_qa_result,
                 qa_result=implementation_report.qa_result,
             )
-            if implementation_report.governance_verdict.status != "approved":
+            if implementation_report.governance_verdict.verdict != "approved":
                 return state
         elif resume_from != "review impl":
             preserved_stage = _load_preserved_implement_stage(run_dir, record=record, intake=intake)
@@ -786,16 +786,16 @@ class RunCoordinator:
                     governance_verdict=implementation_report.governance_verdict,
                     repair_result=implementation_report.repair_result,
                     baseline_qa_result=implementation_report.baseline_qa_result,
-                    qa_result=implementation_report.qa_result,
+                qa_result=implementation_report.qa_result,
                 )
-                if implementation_report.governance_verdict.status != "approved":
-                    return state
-                publish_plan = build_publish_plan(
-                    intake,
-                    record,
-                    implementation_report.governance_verdict,
-                    implementation_report.repair_result,
-                )
+            if implementation_report.governance_verdict.verdict != "approved":
+                return state
+            publish_plan = build_publish_plan(
+                intake,
+                record,
+                implementation_report.governance_verdict,
+                implementation_report.repair_result,
+            )
             store.write_publish_plan(run_dir, publish_plan)
             publish_report = self.publish_run(
                 params=PublishRunParams(
@@ -945,7 +945,7 @@ class RunCoordinator:
         store.write_repair_result(run_dir, escalated_result)
 
         verdict = GovernanceVerdict(
-            status="blocked",
+            verdict="blocked",
             summary=f"Repair escalated after {attempt - 1} failed attempts.",
             reason_codes=("escalated_after_retries",),
         )
@@ -1110,7 +1110,7 @@ class RunCoordinator:
         )
 
         exit_code = 0
-        if verdict.status == "blocked":
+        if verdict.verdict == "blocked":
             exit_code = 4
 
         return ImplementRunReport(
@@ -1373,17 +1373,17 @@ def _resume_state_exit_code(state: _RetryStageState) -> int:
         if state.post_publish_review_result.status == "rejected":
             return 2
         return 3
-    if state.governance_verdict is not None and state.governance_verdict.status == "blocked":
+    if state.governance_verdict is not None and state.governance_verdict.verdict == "blocked":
         return 4
     if state.plan_review is not None:
-        if state.plan_review.review_status == "changes_requested":
+        if state.plan_review.verdict == "changes_requested":
             return 2
-        if state.plan_review.review_status == "blocked":
+        if state.plan_review.verdict == "blocked":
             return 3
     if state.issue_review is not None:
-        if state.issue_review.review_status == "changes_requested":
+        if state.issue_review.verdict == "changes_requested":
             return 2
-        if state.issue_review.review_status == "blocked":
+        if state.issue_review.verdict == "blocked":
             return 3
     return 0
 
@@ -1460,7 +1460,7 @@ def _validate_resume_prerequisites(
                 "Retry carry-forward failed because the prior issue-review.json failed "
                 f"structural validation: {exc}"
             ) from exc
-        if review.review_status != "approved":
+        if review.verdict != "approved":
             raise ValueError(
                 "Retry resume to "
                 f"{stage_name} requires approved issue-review.json for the same run."
@@ -1483,7 +1483,7 @@ def _validate_resume_prerequisites(
                 "Retry carry-forward failed because the prior plan-review.json failed "
                 f"structural validation: {exc}"
             ) from exc
-        if review.review_status != "approved":
+        if review.verdict != "approved":
             raise ValueError(
                 "Retry resume to "
                 f"{stage_name} requires approved plan-review.json for the same run."
@@ -1645,7 +1645,7 @@ def _load_preserved_implement_stage(
     execution_result = _load_execution_result_artifact(run_dir)
     evaluation_result = _load_evaluation_result_artifact(run_dir)
     governance_verdict = _load_governance_verdict_artifact(run_dir)
-    if governance_verdict.status != "approved":
+    if governance_verdict.verdict != "approved":
         raise ValueError("Retry resume to publish requires approved governance-verdict.json.")
     repair_result = _load_repair_result_artifact(run_dir)
     if repair_result.status != "completed" or not repair_result.workspace_path:
@@ -1726,8 +1726,18 @@ def _load_governance_verdict_artifact(run_dir: Path) -> GovernanceVerdict:
         run_dir / "governance-verdict.json",
         label="governance-verdict.json",
     )
+    # Accept legacy 'status' key and normalize to 'verdict'
+    verdict = payload.get("verdict") or payload.get("status")
+    if verdict is None:
+        raise ValueError(
+            "governance-verdict.json must contain either 'verdict' or legacy 'status' key."
+        )
+    if verdict not in ("approved", "blocked"):
+        raise ValueError(
+            f"governance-verdict.json verdict must be 'approved' or 'blocked', got '{verdict}'."
+        )
     return GovernanceVerdict(
-        status=cast(Literal["approved", "blocked"], payload["status"]),
+        verdict=cast(Literal["approved", "blocked"], verdict),
         summary=cast(str, payload["summary"]),
         reason_codes=tuple(cast(list[str], payload.get("reason_codes", []))),
     )
@@ -1814,7 +1824,7 @@ def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
         )
         return _issue_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
     except (JSONDecodeError, OSError, ValueError) as exc:
@@ -1827,7 +1837,7 @@ def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
         )
         return _issue_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
 
@@ -1840,16 +1850,16 @@ def _derive_issue_review(*, store: RunStore, record: RunRecord) -> IssueReview:
     if blocked_findings:
         return _issue_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
     if change_findings:
         return _issue_review_artifact(
             record=record,
-            status="changes_requested",
+            verdict="changes_requested",
             feedback=tuple(change_findings),
         )
-    return _issue_review_artifact(record=record, status="approved", feedback=())
+    return _issue_review_artifact(record=record, verdict="approved", feedback=())
 
 
 def _collect_issue_review_findings(
@@ -1939,14 +1949,14 @@ def _issue_review_feedback(*, code: str, message: str, field: str) -> IssueRevie
 def _issue_review_artifact(
     *,
     record: RunRecord,
-    status: str,
+    verdict: str,
     feedback: tuple[IssueReviewFeedback, ...],
 ) -> IssueReview:
     return IssueReview(
         run_id=record.run_id,
         issue_ref=record.issue_ref,
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
-        summary=_issue_review_summary(status=status, finding_count=len(feedback)),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], verdict),
+        summary=_issue_review_summary(verdict=verdict, finding_count=len(feedback)),
         feedback=feedback,
         provenance=IssueReviewProvenance(
             source_artifact="issue-draft.json",
@@ -1956,13 +1966,13 @@ def _issue_review_artifact(
     )
 
 
-def _issue_review_summary(*, status: str, finding_count: int) -> str:
-    if status == "approved":
+def _issue_review_summary(*, verdict: str, finding_count: int) -> str:
+    if verdict == "approved":
         return (
             "Planning may proceed because issue-draft.json passed the local "
             "planner-safety review."
         )
-    if status == "changes_requested":
+    if verdict == "changes_requested":
         noun = "finding" if finding_count == 1 else "findings"
         return (
             "Planning must stop because issue-draft.json has "
@@ -2001,7 +2011,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
     except IssueReviewValidationError as exc:
@@ -2015,25 +2025,25 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
 
-    if issue_review.review_status != "approved":
+    if issue_review.verdict != "approved":
         blocked_findings.append(
             _plan_review_feedback(
                 code="issue_review_not_approved",
                 message=(
-                    "review plan requires issue-review.json.review_status to be 'approved' "
+                    "review plan requires issue-review.json.verdict to be 'approved' "
                     "for the same run."
                 ),
                 artifact="issue-review.json",
-                field="review_status",
+                field="verdict",
             )
         )
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
 
@@ -2051,7 +2061,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
     try:
@@ -2071,7 +2081,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
     if not isinstance(approved_plan_payload, dict):
@@ -2088,7 +2098,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
 
@@ -2101,7 +2111,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
     if blocked_findings:
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
 
@@ -2121,7 +2131,7 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
         )
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
     except ApprovedPlanValidationError as exc:
@@ -2136,23 +2146,23 @@ def _derive_plan_review(*, store: RunStore, record: RunRecord) -> PlanReview:
             )
             return _plan_review_artifact(
                 record=record,
-                status="blocked",
+                verdict="blocked",
                 feedback=tuple(blocked_findings),
             )
 
     if blocked_findings:
         return _plan_review_artifact(
             record=record,
-            status="blocked",
+            verdict="blocked",
             feedback=tuple(blocked_findings),
         )
     if change_findings:
         return _plan_review_artifact(
             record=record,
-            status="changes_requested",
+            verdict="changes_requested",
             feedback=tuple(change_findings),
         )
-    return _plan_review_artifact(record=record, status="approved", feedback=())
+    return _plan_review_artifact(record=record, verdict="approved", feedback=())
 
 
 def _collect_plan_review_findings(
@@ -2275,14 +2285,14 @@ def _plan_review_feedback(
 def _plan_review_artifact(
     *,
     record: RunRecord,
-    status: str,
+    verdict: str,
     feedback: tuple[PlanReviewFeedback, ...],
 ) -> PlanReview:
     return PlanReview(
         run_id=record.run_id,
         issue_ref=record.issue_ref,
-        review_status=cast(Literal["approved", "changes_requested", "blocked"], status),
-        summary=_plan_review_summary(status=status, finding_count=len(feedback)),
+        verdict=cast(Literal["approved", "changes_requested", "blocked"], verdict),
+        summary=_plan_review_summary(verdict=verdict, finding_count=len(feedback)),
         feedback=feedback,
         provenance=PlanReviewProvenance(
             source_artifact="approved-plan.json",
@@ -2292,13 +2302,13 @@ def _plan_review_artifact(
     )
 
 
-def _plan_review_summary(*, status: str, finding_count: int) -> str:
-    if status == "approved":
+def _plan_review_summary(*, verdict: str, finding_count: int) -> str:
+    if verdict == "approved":
         return (
             "Implementation may proceed because approved-plan.json passed the same-run "
             "plan review gate."
         )
-    if status == "changes_requested":
+    if verdict == "changes_requested":
         noun = "finding" if finding_count == 1 else "findings"
         return (
             "Implementation must stop because approved-plan.json has "
