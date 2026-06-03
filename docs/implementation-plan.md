@@ -67,10 +67,6 @@ Remove the `qa_baseline_improved` and `qa_approximated` branches that returned `
 
 Check `publish_executor.py` for any provisional-specific handling and remove it.
 
-### 1.8 — `docs/project-status-report.md`
-
-Update to reflect the new two-verdict governance model.
-
 ---
 
 ## Phase 2 — Repair Agent JSON Schema and Side Issues
@@ -164,33 +160,56 @@ Add `openai` (or `@ai-sdk/openai`) to `pyproject.toml` dependencies.
 
 ## Phase 4 — GitHub Transport Layer
 
-**Goal:** Support `GITHUB_TRANSPORT=auto|mcp|cli` with probe-based transport selection and MCP availability caching.
+**Goal:** Support `GITHUB_TRANSPORT=auto|mcp|cli` with strict strategy dispatch. The selected transport is bound once at client construction and used exclusively for all calls; no silent fallback between transports.
 
-### 4.1 — `env.py` (or `github_client.py`)
+### 4.1 — `github_transport.py` — Transport strategy classes
 
-Add `GITHUB_TRANSPORT` env var support:
-- `auto` (default): probe MCP first, fall back to `gh` CLI, error if neither available.
-- `mcp`: require MCP; error if unavailable.
-- `cli`: require `gh` CLI; error if unavailable.
+`GitHubMcpTransportStrategy` (existing) wraps MCP GitHub tool calls. `GitHubGhCliTransportStrategy` (new) wraps `gh api` subprocess calls. Both implement the same interface:
 
-### 4.2 — `github_client.py` — Transport abstraction
+- `fetch_issue(owner, repo, issue_number) -> dict`
+- `fetch_issue_comments(owner, repo, issue_number) -> list[dict]`
+- `create_issue_comment(owner, repo, issue_number, body) -> str`
+- `create_issue(owner, repo, title, body) -> str`
+- `list_repo_issues(owner, repo) -> list[dict]`
+- `create_draft_pull_request(owner, repo, head, base, title, body) -> str`
+- `get_pull_request(owner, repo, pull_number) -> dict`
+- `update_pull_request(owner, repo, pull_number, title, body) -> str`
+- `patch_pull_request(owner, repo, pull_number) -> None`
+- `reopen_issue(owner, repo, issue_number) -> None`
+- `close_issue(owner, repo, issue_number) -> None`
+- `merge_pull_request(owner, repo, pull_number) -> None`
+- `close_pull_request(owner, repo, pull_number) -> None`
+- `update_pull_request_branch(owner, repo, pull_number) -> None`
+- `get_pull_request_head_sha(owner, repo, pull_number) -> str | None`
 
-Refactor `GitHubWriteClient` and `GitHubIssueClient` to select transport at instantiation:
+Each method raises `GitHubClientError` on failure. CLI strategy translates "already merged" (409) and "Cannot change" (405) into typed `GitHubClientError` codes instead of silently succeeding.
 
-- `MCPTransport`: use MCP protocol (server-sent events or JSON-RPC over stdio). Probe via a lightweight MCP "ping" tool call.
-- `GHCLITransport`: wrap `gh api` calls (already implemented as `_via_gh` methods).
-- `HTTPTransport`: direct REST API calls (already implemented as `_via_http` methods).
+### 4.2 — `github_transport.py` — Strategy factory
 
-`auto` mode:
-1. Try to list MCP tools (call a known MCP endpoint or probe via `python -c "import mcp"` — exact mechanism TBD). Cache result per-run.
-2. If MCP unavailable, try `gh api --help` to confirm `gh` CLI is present.
-3. If neither, raise an error.
+`select_github_transport_strategy(resolution, *, mcp_strategy=None)` returns:
+- `mcp_strategy` when `resolution.selected_transport == "mcp"`
+- A new `GitHubGhCliTransportStrategy` when `resolution.selected_transport == "cli"`
+- Raises `GitHubTransportSelectionError(code="github_transport_unavailable")` when `selected_transport == "mcp"` but no `mcp_strategy` is provided
 
-The selected transport is stored on the client instance and used for all subsequent calls.
+The factory is the single binding point. Clients call it once at construction and use the returned strategy exclusively.
 
-### 4.3 — `publish_executor.py` / `publishing.py`
+### 4.3 — `github_client.py` — Client refactor
 
-If MCP is the active transport, use MCP tools for `create_draft_pull_request`, `create_issue_comment`, etc., instead of `gh` CLI or HTTP.
+`GitHubIssueClient` and `GitHubWriteClient` now:
+1. Accept `transport_strategy` in `__init__` (injected or built via the factory)
+2. Route ALL public methods through `self._transport_strategy`
+3. Remove all `_via_gh`, `_via_http`, and `_request_json` private helpers
+4. Remove `subprocess` and `urllib` imports from this module
+
+`from_env()` classmethods are unchanged: they call `resolve_github_transport()` and build the strategy via the factory.
+
+### 4.4 — `GITHUB_TRANSPORT` semantics
+
+- `auto` (default): probe MCP first, fall back to `gh` CLI, error if neither available. Resolution is cached per-run; all clients in the same run use the same transport.
+- `mcp`: require MCP; raises `GitHubTransportSelectionError` at construction if MCP strategy is not injected.
+- `cli`: require `gh` CLI; raises `GitHubTransportSelectionError` at construction if `gh` is unavailable.
+
+There is no silent fallback. If a transport fails, the call raises `GitHubClientError` with the transport's error details.
 
 ---
 
@@ -247,10 +266,6 @@ status: Literal["not_configured", "blocked", "failed_infra", "completed", "escal
 
 - [ ] If any test checks for `provisional` in publish plan body, update accordingly.
 
-### 6.5 — `docs/project-status-report.md`
-
-Update pytest count to reflect all 27 integration tests.
-
 ---
 
 ## Phase 7 — ADRs
@@ -274,7 +289,7 @@ Create:
 | 3 | `side_issues` field on `RepairResult` — store as `tuple[str, ...]` of titles (body/labels in publish plan), or store structured dicts? | TBD |
 | 4 | Does the coordinator need to parse `side_issues` from the adapter JSON, or does it flow through via the store? | TBD |
 | 5 | `docs-fix-prompt.txt` filename — keep as-is or rename conceptually? (Filename in code can stay; conceptual rename is in CONTEXT.md) | TBD |
-| 6 | `GITHUB_TRANSPORT=mcp` — how to error gracefully if MCP tools are not available at runtime? | TBD |
+| 6 | ~~`GITHUB_TRANSPORT=mcp` — how to error gracefully if MCP tools are not available at runtime?~~ **Resolved**: `select_github_transport_strategy` raises `GitHubTransportSelectionError(code="github_transport_unavailable")` at construction time. | Resolved in Phase 4 |
 
 ---
 

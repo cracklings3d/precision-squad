@@ -20,7 +20,6 @@ change_scope:
     - pyproject.toml
     - README.md
     - docs/architecture.md
-    - docs/project-status-report.md
     - docs/issue-plans/issue-147.md
   directories: []
   modules: []
@@ -74,7 +73,6 @@ First create this canonical tracked plan artifact so downstream work is governed
 - `pyproject.toml`
 - `README.md`
 - `docs/architecture.md`
-- `docs/project-status-report.md`
 - `docs/issue-plans/issue-147.md`
 - Historical-reference verification context only: `docs/archive/*`, `docs/adr/*`
 
