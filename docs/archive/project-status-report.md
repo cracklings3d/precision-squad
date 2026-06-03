@@ -1,4 +1,14 @@
-# Project Status Report
+# ARCHIVED — Project Status Report
+
+> **⚠️ ARCHIVAL SNAPSHOT — NOT AUTHORITATIVE**
+>
+> This file was archived as part of issue #150 resolution.
+> - **Snapshot date:** 2026-04-30
+> - **Repository state it described:** precision-squad version 0.1.0
+> - **This file is not authoritative.** The repository has evolved since this snapshot.
+> - **Do not reference this file as current documentation.**
+
+---
 
 **Date:** 2026-04-30  
 **Repository:** precision-squad  
