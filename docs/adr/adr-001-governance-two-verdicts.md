@@ -85,4 +85,5 @@ Quality tags are **informational only**. The verdict (approved/blocked) is what 
 
 - [CONTEXT.md](../../CONTEXT.md) — Governance Verdicts, Quality Tag
 - [Implementation Plan](../implementation-plan.md) — Phase 1
-- [architecture.md](../architecture.md) — Governance section (updated)
+- [architecture.md](../architecture.md) — Governance section
+- [staged-command-surface.md](../staged-command-surface.md) — Artifact Inventory and run-level vs stage-level artifact classification; `governance-verdict.json` uses `verdict: approved | blocked` per this ADR

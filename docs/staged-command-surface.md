@@ -112,7 +112,7 @@ create issue → review issue → plan → review plan → implement → publish
 - `qa-baseline-result.json`
 - `qa-result.json`
 - `evaluation-result.json`
-- `governance-verdict.json` — contains `verdict` field (`approved` | `blocked`)
+- `governance-verdict.json` — contains `verdict` field (`approved` | `blocked`) per [ADR-001](./adr/adr-001-governance-two-verdicts.md)
 - `decision-log.attempt-{attempt}.json`
 
 **Gate Behavior:** Governance check after implement. If `governance-verdict.json` does not contain `verdict: approved`, `publish` is not invoked.
@@ -159,7 +159,9 @@ create issue → review issue → plan → review plan → implement → publish
 
 ---
 
-## Artifact Inventory
+## Artifact Inventory (stage-produced artifacts)
+
+This table lists only stage-produced artifacts. Run-level context artifacts are listed separately in the "Non-stage context artifacts" sub-section under the resume contract.
 
 | Artifact | Stage Produced |
 |---|---|
@@ -194,7 +196,9 @@ create issue → review issue → plan → review plan → implement → publish
 
 `--from` is valid only with `--retry-from`. It is not supported on standalone stage commands.
 
-### Non-stage context artifacts on resumed retries
+### Non-stage context artifacts (run-level)
+
+This sub-section is the canonical run-level artifact inventory. These artifacts are distinct from the stage-produced artifacts listed in the Artifact Inventory table above.
 
 Every resumed retry attempt materializes a complete same-run context pack before the selected stage runs:
 
@@ -203,6 +207,10 @@ Every resumed retry attempt materializes a complete same-run context pack before
 - `issue.md` — regenerated from the preserved intake for the new attempt
 
 Earlier-stage history is preserved by copying only the artifacts before the selected resume point into the new attempt directory. Prior run directories remain unchanged.
+
+Per [ADR-001](./adr/adr-001-governance-two-verdicts.md), `governance-verdict.json` uses `verdict: approved | blocked` (two-state governance).
+
+Per [ADR-008](./adr/adr-008-resolve-implement-and-review-impl-stage-semantics.md), the `implement` / `publish` / `review impl` stage contract is: `implement` produces local artifacts, `publish` creates the draft PR after `approved` governance verdict, and `review impl` reviews the published draft PR.
 
 ### Resume matrix
 
