@@ -162,4 +162,4 @@ Before requesting review:
 
 ## Getting Help
 
-If you are unsure whether a contribution is in scope, open a discussion issue first. For questions about the repair workflow, governance model, or the docs-first principle, the `docs/operator-skill.md` provides a practical walkthrough.
+If you are unsure whether a contribution is in scope, open a discussion issue first. For questions about the current workflow, governance model, or the docs-first principle, see `docs/architecture.md` and the ADRs in `docs/adr/`.

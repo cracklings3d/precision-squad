@@ -281,9 +281,9 @@ If you use the `skills` ecosystem directly, this repo also exposes a skill packa
 ## Key Documents
 
 - `docs/architecture.md` - current docs-first architecture
-- `docs/operator-skill.md` - practical operator/agent workflow guide for GitHub + precision-squad
 - `docs/archive/architecture-v1.md` - archived bootstrap architecture for historical reference
 - `docs/archive/PRECISION_SQUAD_HANDOFF.md` - archived handoff from the earlier `orchestrator` exploration
+- `docs/archive/operator-skill.md` - **retired** operator guide (pre-canonical-resolver era; see architecture.md for current model)
 
 ## Issue Workflow
 
