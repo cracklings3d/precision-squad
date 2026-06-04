@@ -120,7 +120,7 @@ The FSM state set, event alphabet, and transition table are documentation. The o
 
 ### Inspectability of run state
 
-Under the current implicit model, "what stage is run X in?" requires scanning the run directory for the most-recently-produced artifact and inferring the current stage from the artifact inventory. Under the FSM model, the current state is an explicit label (one of the nine states) stored alongside the run metadata. A reviewer or operator can answer the question by reading the state label without re-deriving from artifacts. **This axis supports Go**: the FSM improves inspectability. If implemented in a subsequent code slice, the run record would gain an explicit `fsm_state` field.
+Under the current implicit model, "what stage is run X in?" requires scanning the run directory for the most-recently-produced artifact and inferring the current stage from the artifact inventory. Under the FSM model, the current state is an explicit label (one of the eleven states) stored alongside the run metadata. A reviewer or operator can answer the question by reading the state label without re-deriving from artifacts. **This axis supports Go**: the FSM improves inspectability. If implemented in a subsequent code slice, the run record would gain an explicit `fsm_state` field.
 
 ### Stage-boundary preservation
 
