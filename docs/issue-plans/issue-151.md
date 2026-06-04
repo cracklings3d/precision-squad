@@ -1,18 +1,18 @@
 ---
 issue: github.com/cracklings3d/precision-squad#151
 title: Refresh staged workflow documentation to match actual artifacts and review semantics
-status: draft
-plan_status: proposed
-review_status: pending
+status: approved
+plan_status: approved
+review_status: approved
 source: issue
 owner: cracklings3d
 created_at: 2026-06-03
-updated_at: 2026-04
-approved_by: null
-approved_at: null
-review_artifact: null
+updated_at: 2026-06-04
+approved_by: issue-plan-reviewer
+approved_at: 2026-06-03
+review_artifact: ~/.opencode/projects/precision-squad/runs/canonical-issue-resolver-parallel/2026-06-03T00-00-04Z/reviews/issue-151/loop-1-stage-D.json
 related_branch: issue/151-refresh-staged-workflow-docs
-related_pr: null
+related_pr: "https://github.com/cracklings3d/precision-squad/pull/162"
 replaces: null
 supersedes: null
 change_scope:
