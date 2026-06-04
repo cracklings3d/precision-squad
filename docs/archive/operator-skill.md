@@ -1,3 +1,14 @@
+# ⚠️ RETIRED — Precision Squad Operator Skill
+
+> **This document has been retired as of 2026-06-04.**
+> The content below describes the pre-canonical-resolver era of `precision-squad`, when the primary interface was a single-shot `repair issue` CLI with provisional governance. That era has ended.
+>
+> The project now uses a **7-stage canonical issue resolver** (create → review issue → plan → review plan → implement → publish → review impl) with only two governance verdicts: `approved` and `blocked`. There is no provisional.
+>
+> To contribute or operate in this project, file a well-scoped GitHub issue and let the resolver work it. For architecture context, see `docs/architecture.md` and `docs/adr/`.
+
+---
+
 # Precision Squad Operator Skill
 
 Use this document when an AI agent or human operator is driving normal development work with GitHub and `precision-squad` together.
