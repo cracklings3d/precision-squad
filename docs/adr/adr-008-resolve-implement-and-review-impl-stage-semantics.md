@@ -112,3 +112,4 @@ The workflow timing is locked down as follows:
 - [CONTEXT.md](../../CONTEXT.md) — Governance Verdicts
 - [ADR-001: Governance Two-Verdict Model](./adr-001-governance-two-verdicts.md)
 - [architecture.md](../architecture.md) — Publishing And Review
+- [staged-command-surface.md](../staged-command-surface.md) — Stage chain overview, `implement` / `publish` / `review impl` stage contract, and Artifact Inventory

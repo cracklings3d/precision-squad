@@ -229,7 +229,7 @@ Baseline-tolerant repair no longer introduces a provisional governance verdict. 
 
 ## Governance
 
-Governance has two outcomes:
+Per [ADR-001](./adr/adr-001-governance-two-verdicts.md), governance has two outcomes:
 
 - `approved`
 - `blocked`
@@ -240,6 +240,8 @@ Current intent:
 - `blocked`: governance says no; intake, documentation, execution, or QA evidence is missing, ambiguous, unrunnable, or failed
 
 Quality is informational on `ExecutionResult`, not a governance verdict. A baseline-tolerant repair may therefore be quality-tagged as `improved` while governance still resolves to either `approved` or `blocked`.
+
+Review artifacts (`issue-review.json`, `plan-review.json`, `impl-review.json`) use `verdict: approved | changes_requested | blocked`. The `governance-verdict.json` uses `verdict: approved | blocked` only, per the two-verdict contract in ADR-001.
 
 Publish behavior:
 
@@ -293,25 +295,39 @@ Draft PR creation does not itself close the issue.
 
 Run state is filesystem-backed and transparent.
 
-Important persisted artifacts include:
+Artifacts are classified into two groups:
+
+- **Stage-produced artifacts** — produced by specific stages in the seven-stage chain; listed in the Artifact Inventory in `docs/staged-command-surface.md`
+- **Run-level context artifacts** — produced by `create issue` but not stage-produced; listed in the "Non-stage context artifacts" sub-section in `docs/staged-command-surface.md`
+
+### Run-level context artifacts (canonical inventory)
+
+Per `docs/staged-command-surface.md`, the "Non-stage context artifacts" sub-section is the canonical source for run-level artifacts:
 
 - `run-request.json`
 - `issue-intake.json`
-- `issue-draft.json`
-- `issue-review.json`
-- `approved-plan.json`
-- `plan-review.json`
+- `issue.md`
 - `run-record.json`
-- `execution-result.json`
-- `evaluation-result.json`
-- `governance-verdict.json`
-- `publish-plan.json`
-- `publish-result.json`
-- `repair-result.json`
-- `qa-baseline-result.json`
-- `qa-result.json`
-- `impl-review.json`
-- `post-publish-review-result.json` (derived compatibility mirror only)
+
+### Important persisted artifacts
+
+**Stage-produced artifacts:**
+
+- `issue-draft.json` — created by `create issue`; normalized issue artifact
+- `issue-review.json` — created by `review issue`; contains `verdict: approved | changes_requested | blocked`
+- `approved-plan.json` — created by `plan`
+- `plan-review.json` — created by `review plan`; contains `verdict: approved | changes_requested | blocked`
+- `execution-result.json` — created by `implement`
+- `governance-verdict.json` — created by `implement`; contains `verdict: approved | blocked` per ADR-001
+- `repair-result.json` — created by `implement`
+- `qa-baseline-result.json` — created by `implement`
+- `qa-result.json` — created by `implement`
+- `evaluation-result.json` — created by `implement`
+- `decision-log.attempt-{attempt}.json` — created by `implement`
+- `publish-plan.json` — created by `publish`
+- `publish-result.json` — created by `publish`
+- `impl-review.json` — created by `review impl`; contains `verdict: approved | changes_requested | blocked`
+- `post-publish-review-result.json` — created by `review impl` (derived compatibility mirror only)
 
 This is deliberate. The system prefers inspectability and replayability over hidden state.
 
@@ -335,7 +351,7 @@ When those answers are missing, the system should make the missing documentation
 
 ### Why Exact Execution
 
-The system no longer tries to normalize commands into a supposedly equivalent form.
+The current design no longer tries to normalize commands into a supposedly equivalent form.
 
 Reason:
 

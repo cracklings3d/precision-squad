@@ -225,25 +225,22 @@ Legacy alias still supported:
 python -m precision_squad.cli run issue owner/repo#number --repo-path <local-repo>
 ```
 
-`create issue` stops after writing the bounded issue-preparation artifacts:
+`create issue` stops after writing run-level context artifacts and the stage-produced issue artifact:
 
-- `run-request.json`
-- `issue-intake.json`
-- `issue-draft.json`
-- `issue.md`
-- `run-record.json`
+- **Run-level context artifacts:** `run-request.json`, `issue-intake.json`, `issue.md`, `run-record.json`
+- **Stage-produced artifact:** `issue-draft.json`
 
-`review issue` stops after reading the same run's `issue-draft.json` and writing the bounded review artifact:
+`review issue` stops after reading the same run's `issue-draft.json` and writing the stage-produced review artifact:
 
-- `issue-review.json`
+- `issue-review.json` — contains `verdict` field (`approved` | `changes_requested` | `blocked`)
 
-`plan` stops after validating the operator-supplied approved plan and writing the same run's canonical planning artifact, gated by `issue-review.json` approval:
+`plan` stops after validating the operator-supplied approved plan and writing the same run's stage-produced planning artifact, gated by `issue-review.json` approval:
 
 - `approved-plan.json`
 
-`review plan` stops after reading the same run's canonical `approved-plan.json` and writing the bounded pre-implementation review artifact:
+`review plan` stops after reading the same run's canonical `approved-plan.json` and writing the stage-produced pre-implementation review artifact:
 
-- `plan-review.json`
+- `plan-review.json` — contains `verdict` field (`approved` | `changes_requested` | `blocked`)
 
 `implement` stops after validating the same run's `approved-plan.json` plus stage-approved `plan-review.json`, then running the local execution / repair / QA / evaluation / governance flow without publish artifacts:
 
@@ -253,7 +250,7 @@ python -m precision_squad.cli run issue owner/repo#number --repo-path <local-rep
 - `qa-baseline-result.json`
 - `qa-result.json`
 - `evaluation-result.json`
-- `governance-verdict.json`
+- `governance-verdict.json` — contains `verdict` field (`approved` | `blocked`)
 
 `plan <run-id> --approved-plan-path <path>` is the canonical planning ingress. `repair issue --approved-plan-path` remains supported as a compatibility ingress for repair-oriented flows.
 
