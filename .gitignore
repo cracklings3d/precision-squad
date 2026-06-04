@@ -11,3 +11,4 @@ build/
 .worktrees/
 logs/
 tests/.test-repos/
+graphify-out/
