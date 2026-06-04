@@ -37,15 +37,24 @@ The MVP control loop is:
 
 ## V1 Operating Assumptions
 
+### Authentication (Credential Supply)
+- PAT-only credential supply for GitHub operations
+
+### Transport (How GitHub Operations Are Executed)
+- `GITHUB_TRANSPORT=auto|mcp|cli` — transport model is independent of credential supply
 - CLI/service first
-- PAT-only GitHub authentication
 - filesystem-backed run persistence
 - docs-first execution wrapped behind a narrow adapter boundary
 
 ## Non-Goals For V1
 
+### Authentication
 - GitHub App authentication
-- MCP or remote runner support
+
+### Transport
+- (MCP/CLI are already supported — no transport non-goals in V1)
+
+### Other
 - deep repo-specific inference machinery
 - database-backed persistence
 - multi-tenant or broad parallel execution
