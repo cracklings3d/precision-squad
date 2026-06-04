@@ -351,7 +351,7 @@ When those answers are missing, the system should make the missing documentation
 
 ### Why Exact Execution
 
-The current design no longer tries to normalize commands into a supposedly equivalent form.
+The system no longer tries to normalize commands into a supposedly equivalent form.
 
 Reason:
 
