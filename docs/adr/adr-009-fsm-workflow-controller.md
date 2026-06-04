@@ -47,6 +47,7 @@ The FSM models seven operational states (one per completed stage) plus four term
 | `IMPLEMENTED` | `implement` completed with `governance-verdict: approved`; `governance-verdict.json` is present |
 | `PUBLISHED` | `publish` created draft PR; `publish-result.json` is present with PR metadata |
 | `IMPL_REVIEWED` | `review impl` returned `approved`; `impl-review.json` is present with `verdict: approved` |
+| `SUCCESS` | Terminal; `review impl` returned `approved` and the run completed successfully |
 | `BLOCKED` | Terminal; a stage returned a non-advance verdict |
 | `CHANGES_REQUESTED` | Terminal; `review impl` or `review issue` returned `changes_requested` |
 | `ABANDONED` | Terminal; run was explicitly abandoned or timed out |
@@ -69,6 +70,7 @@ The FSM models seven operational states (one per completed stage) plus four term
 | `impl_review_approved` | `impl-review.json` contains `verdict: approved` |
 | `impl_review_blocked` | `impl-review.json` contains `verdict: blocked` |
 | `impl_review_changes_requested` | `impl-review.json` contains `verdict: changes_requested` |
+| `run_completed` | Controller confirms all post-review steps finished; run is complete |
 | `repair_accepted` | Controller accepted a `repair issue --retry-from` command |
 | `run_abandoned` | Run was explicitly marked abandoned |
 
@@ -90,11 +92,15 @@ Every transition is named in `(state, event) -> state` form and mapped to either
 | 10 | `PLAN_REVIEWED` | `governance_blocked` | `BLOCKED` | Governance logic (controller) | Terminal; publish is gated on `approved` |
 | 11 | `IMPLEMENTED` | `publish_ready` | `PUBLISHED` | Merge Coordinator subagent | Subagent creates draft PR; this event fires after all implement artifacts are persisted |
 | 12 | `PUBLISHED` | `impl_review_approved` | `IMPL_REVIEWED` | Reviewer subagent | Subagent produces `impl-review.json` with `verdict: approved` |
-| 13 | `PUBLISHED` | `impl_review_blocked` | `BLOCKED` | Reviewer subagent | Terminal; issue reopen/keep-open handled by GitHub automation |
-| 14 | `PUBLISHED` | `impl_review_changes_requested` | `CHANGES_REQUESTED` | Reviewer subagent | Terminal per governance vocabulary |
-| 15 | `*` | `repair_accepted` | Resume target | Controller logic | Deterministic: resume target is derived from `--from` argument; run/attempt split is applied per resume matrix |
+| 13 | `IMPL_REVIEWED` | `run_completed` | `SUCCESS` | Controller logic | Terminal; run completed successfully after `review impl` approved |
+| 14 | `PUBLISHED` | `impl_review_blocked` | `BLOCKED` | Reviewer subagent | Terminal; issue reopen/keep-open handled by GitHub automation |
+| 15 | `PUBLISHED` | `impl_review_changes_requested` | `CHANGES_REQUESTED` | Reviewer subagent | Terminal per governance vocabulary |
+| 16 | `*` | `repair_accepted` | Resume target | Controller logic | Deterministic: resume target is derived from `--from` argument; run/attempt split is applied per resume matrix |
+| 17 | `*` | `run_abandoned` | `ABANDONED` | Controller logic | Universal abandonment; fires from any non-terminal state |
 
-Transition #15 is the repair/resume path. It applies from any non-terminal state and targets the stage named by `--from`. The new attempt is a fresh run directory; prior run directories remain unchanged. This is the only transition that can fire from multiple source states and is handled entirely by controller logic.
+Transition #16 is the repair/resume path. It applies from any non-terminal state and targets the stage named by `--from`. The new attempt is a fresh run directory; prior run directories remain unchanged. This is the only transition that can fire from multiple source states and is handled entirely by controller logic.
+
+Transition #17 (`run_abandoned`) fires universally from any non-terminal state to ABANDONED, covering the explicit abandonment path that was previously not modeled.
 
 The FSM preserves the stage boundaries defined by [ADR-008](./adr-008-resolve-implement-and-review-impl-stage-semantics.md): `implement` is local-only (no branch, no PR), `publish` is the boundary that creates a draft PR, and `review impl` reviews the published draft PR.
 
@@ -108,7 +114,7 @@ However, the subagent-owned transitions (Architect, Plan Reviewer, Developer, Me
 
 ### Retry and resume behavior
 
-The FSM treats `repair_accepted` as a first-class event (transition #15) that can fire from any non-terminal state and advance to the designated resume target. This is compatible with the existing `repair issue --retry-from RUN_ID --from STAGE_NAME` contract in [staged-command-surface.md](./staged-command-surface.md), which supports resume from `review issue`, `plan`, `review plan`, `implement`, `publish`, and `review impl`. The run/attempt split is preserved: each `--retry-from` creates a new attempt directory with fresh `run-request.json`, copied `issue-intake.json`, and regenerated `issue.md`, while artifacts before the resume point are copied from the source run per the resume matrix. **This axis supports Go**: the FSM models retry as an explicit event without requiring changes to the resume contract or the run/attempt split.
+The FSM treats `repair_accepted` as a first-class event (transition #16) that can fire from any non-terminal state and advance to the designated resume target. This is compatible with the existing `repair issue --retry-from RUN_ID --from STAGE_NAME` contract in [staged-command-surface.md](./staged-command-surface.md), which supports resume from `review issue`, `plan`, `review plan`, `implement`, `publish`, and `review impl`. The run/attempt split is preserved: each `--retry-from` creates a new attempt directory with fresh `run-request.json`, copied `issue-intake.json`, and regenerated `issue.md`, while artifacts before the resume point are copied from the source run per the resume matrix. **This axis supports Go**: the FSM models retry as an explicit event without requiring changes to the resume contract or the run/attempt split.
 
 ### Gate-verdict clarity
 
