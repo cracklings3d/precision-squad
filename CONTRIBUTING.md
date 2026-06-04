@@ -139,7 +139,6 @@ python -m precision_squad.cli repair issue owner/repo#number --retry-from <run-i
 Please do not open PRs for the following unless discussed in an issue first:
 
 - GitHub App authentication
-- MCP or remote runner support
 - Database-backed persistence
 - Multi-tenant or broad parallel execution
 - Deep repo-specific inference machinery
