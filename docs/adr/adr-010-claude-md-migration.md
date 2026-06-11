@@ -110,3 +110,5 @@ Not all agentic runtimes support cascading prompts in the same way. The implemen
 - [CONTEXT.md](./CONTEXT.md) — current custom context file (to be migrated)
 - [architecture.md](../architecture.md) — workspace persistence model
 - [staged-command-surface.md](./staged-command-surface.md) — workflow stages and repair contract
+- Issue #166 — downstream implementation issue (Migrate from CONTEXT.md to standard CLAUDE.md)
+- Issue #167 — this ADR's tracking issue
