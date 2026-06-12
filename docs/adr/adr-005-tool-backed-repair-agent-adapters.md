@@ -148,8 +148,8 @@ The tool implementations may vary, but the rest of the system should not.
 
 ### Affected Paths
 
-- `docs/adr/adr-002-llm-abstraction.md`
-- `docs/implementation-plan.md`
+- `docs/adr/adr-002-SUPERSEDED.md`
+- `docs/archive/implementation-plan.md`
 - `src/precision_squad/cli.py`
 - `src/precision_squad/repair/__init__.py`
 - `src/precision_squad/repair/adapter.py`

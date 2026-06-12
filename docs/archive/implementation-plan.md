@@ -1,3 +1,19 @@
+# Archived Implementation Plan
+
+This file is retained for historical reference only.
+
+It describes an earlier implementation plan that is no longer the active forward plan for `precision-squad`.
+
+The current authoritative sources are:
+- `docs/adr/` — Architecture Decision Records
+- `docs/architecture.md` — Current architecture
+- `docs/staged-command-surface.md` — Current stage chain
+- `README.md` — Project overview
+
+The original archived content begins below.
+
+---
+
 # Implementation Plan: precision-squad
 
 Phases are ordered by dependency. Within each phase, items are unordered unless one implies another.

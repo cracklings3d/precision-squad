@@ -4,9 +4,11 @@ Terms resolved through grill-with-docs session.
 
 ## Repair Agent
 
-Single-shot code modifier. The LLM API (Vercel AI SDK or equivalent) is called directly — no `opencode` binary dependency. Agent makes one set of changes and stops. QA verifier runs separately. Governance decides when to stop.
+Single-shot code modifier behind a `RepairAdapter` protocol. The active primary path is tool-backed: `OpenCodeRepairAdapter` is the first implementation, calling the `opencode` binary to perform repairs. Direct LLM SDK integration is deferred and not the current architecture target. Agent makes one set of changes and stops. QA verifier runs separately. Governance decides when to stop.
 
-Retry: manual via `repair issue --retry-from <run-id>`. Up to 3 attempts before `escalated` status.
+See [ADR-005](../docs/adr/adr-005-tool-backed-repair-agent-adapters.md) for the tool-backed seam design.
+
+Retry: manual via `repair issue --retry-from <run-id>`. The `escalated` status is a coordinator-level retry cap, not a repair-agent semantic.
 
 ## Docs Fix Prompt
 
