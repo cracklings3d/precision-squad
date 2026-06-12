@@ -37,6 +37,8 @@ That means:
 - a hidden substitute for missing setup or test docs
 - a platform-normalization layer that rewrites one command into another and quietly trusts the result
 
+For V1 non-goals, see [`scope.md`](../instructions/scope.md).
+
 ## Execution Model
 
 The explicit local stage chain is:
@@ -374,6 +376,8 @@ The active architecture does not try to provide:
 - automatic derivation of the right test command when the docs do not say it
 - a database-backed execution service
 - remote runner orchestration
+
+For complete V1 non-goals, see [`scope.md`](../instructions/scope.md).
 
 ## Archived Designs
 
