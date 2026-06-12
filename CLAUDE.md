@@ -1,0 +1,10 @@
+# precision-squad
+
+`precision-squad` is a docs-first workflow control system for issue repair.
+
+See the linked instruction files below for topic-specific guidance.
+
+- [Governance](./instructions/governance.md) — Governance verdicts and quality tags
+- [Workflow](./instructions/workflow.md) — Issue-driven workflow and side issues
+- [Vocabulary](./instructions/vocabulary.md) — Repair agent, docs fix prompt, project scope, and graph refresh policy
+- [GitHub Transport](./instructions/github-transport.md) — GitHub transport configuration

@@ -288,7 +288,7 @@ Create:
 | 2 | What happens at attempt 4 — same as blocked? Is there a different exit code? | TBD |
 | 3 | `side_issues` field on `RepairResult` — store as `tuple[str, ...]` of titles (body/labels in publish plan), or store structured dicts? | TBD |
 | 4 | Does the coordinator need to parse `side_issues` from the adapter JSON, or does it flow through via the store? | TBD |
-| 5 | `docs-fix-prompt.txt` filename — keep as-is or rename conceptually? (Filename in code can stay; conceptual rename is in CONTEXT.md) | TBD |
+| 5 | `docs-fix-prompt.txt` filename — keep as-is or rename conceptually? (Filename in code can stay; conceptual rename is in [instructions/vocabulary.md](./instructions/vocabulary.md)) | TBD |
 | 6 | ~~`GITHUB_TRANSPORT=mcp` — how to error gracefully if MCP tools are not available at runtime?~~ **Resolved**: `select_github_transport_strategy` raises `GitHubTransportSelectionError(code="github_transport_unavailable")` at construction time. | Resolved in Phase 4 |
 
 ---
