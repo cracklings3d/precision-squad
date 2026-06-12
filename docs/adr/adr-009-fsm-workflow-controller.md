@@ -156,6 +156,12 @@ If a subsequent issue implements the FSM controller in code, it must and must no
 
 If this ADR were to recommend No-go, the dominant reason would be: the current implicit orchestration is functional and low-risk, and the FSM model's inspectability and testability benefits do not justify the code-slice implementation cost unless a concrete use case (e.g., deterministic transition test fixtures) demands it. The smallest useful follow-up would be to add an informal state-diagram section to [architecture.md](../architecture.md) so the implicit model is at least documented visually.
 
+## Verification
+
+- [ ] This ADR is the only output of the slice (no production code, no run-store schema change, no edits to staged-command-surface or architecture docs)
+- [ ] The eleven FSM states and seventeen events named in the ADR are the reference design for any future code-slice implementation
+- [ ] The Must / Must-not rules in the "Future code-slice envelope" are falsifiable checks for the future code slice
+
 ## References
 
 - [CONTEXT.md](../../CONTEXT.md) — Governance verdicts, `approved` gates `publish`
