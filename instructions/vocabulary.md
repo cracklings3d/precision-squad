@@ -16,7 +16,7 @@ Retry: manual via `repair issue --retry-from <run-id>`. The `escalated` status i
 
 ## Project Scope
 
-Any project with a documented QA command — code or non-code (e.g., Unreal Engine blueprints). The system does not build test infrastructure; it executes whatever the project owner already documented. Language-agnostic at the architecture level.
+The MVP shape, V1 operating assumptions, and V1 non-goals are documented in [`scope.md`](./scope.md). In brief: any project with a documented QA command — code or non-code (e.g., Unreal Engine blueprints). The system does not build test infrastructure; it executes whatever the project owner already documented. Language-agnostic at the architecture level.
 
 ## Graph Refresh Policy
 
