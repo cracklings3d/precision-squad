@@ -37,6 +37,8 @@ That means:
 - a hidden substitute for missing setup or test docs
 - a platform-normalization layer that rewrites one command into another and quietly trusts the result
 
+For V1 non-goals, see [`scope.md`](../instructions/scope.md).
+
 ## Execution Model
 
 The explicit local stage chain is:
@@ -259,7 +261,7 @@ The active fingerprint is no longer based only on a human-facing summary. It is 
 
 ## Publishing And Review
 
-Per [ADR-008](./adr/adr-008-resolve-implement-and-review-impl-stage-semantics.md), `publish` sits between local `implement` work and `review impl`.
+Per [ADR-008](./adr/adr-adr-008-resolve-implement-and-review-impl-stage-semantics.md), `publish` sits between local `implement` work and `review impl`.
 
 Publishing uses the stored implementation result rather than rerunning repair.
 
@@ -374,6 +376,8 @@ The active architecture does not try to provide:
 - automatic derivation of the right test command when the docs do not say it
 - a database-backed execution service
 - remote runner orchestration
+
+For complete V1 non-goals, see [`scope.md`](../instructions/scope.md).
 
 ## Archived Designs
 
