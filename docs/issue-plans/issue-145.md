@@ -74,7 +74,7 @@ The repository still exposes a retired compatibility path as if it were part of 
 - General stale-product-metadata cleanup tracked by #147, including broad ADR or historical plan rewrites.
 - GitHub transport semantics tracked by #146.
 - `verdict` terminology normalization tracked by #149.
-- Rewriting `docs/implementation-plan.md`, `docs/adr/adr-002-llm-abstraction.md`, or other historical/archival material except where a currently active surface would otherwise still present retired behavior as current.
+- Rewriting `docs/implementation-plan.md`, `docs/adr/adr-002-SUPERSEDED.md`, or other historical/archival material except where a currently active surface would otherwise still present retired behavior as current.
 - Introducing a new direct-LLM replacement adapter or expanding the supported repair-agent matrix beyond the current OpenCode-first surface.
 
 # Constraints

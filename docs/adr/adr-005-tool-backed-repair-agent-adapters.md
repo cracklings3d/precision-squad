@@ -10,7 +10,7 @@ Accepted
 
 ## Supersedes
 
-[ADR-002: LLM Abstraction - Direct API Over Agent Binary](./adr-002-llm-abstraction.md)
+[ADR-002: LLM Abstraction](./adr-002-SUPERSEDED.md)
 
 ## Context
 
@@ -148,7 +148,7 @@ The tool implementations may vary, but the rest of the system should not.
 
 ### Affected Paths
 
-- `docs/adr/adr-002-llm-abstraction.md`
+- `docs/adr/adr-002-SUPERSEDED.md`
 - `docs/implementation-plan.md`
 - `src/precision_squad/cli.py`
 - `src/precision_squad/repair/__init__.py`
@@ -194,7 +194,7 @@ Add or update tests so they cover:
 ## References
 
 - [CONTEXT.md](../../CONTEXT.md)
-- [ADR-002: LLM Abstraction - Direct API Over Agent Binary](./adr-002-llm-abstraction.md)
+- [ADR-002: LLM Abstraction](./adr-002-SUPERSEDED.md)
 - [Issue #57](https://github.com/cracklings3d/precision-squad/issues/57)
 - [Issue #58](https://github.com/cracklings3d/precision-squad/issues/58)
 - [Issue #59](https://github.com/cracklings3d/precision-squad/issues/59)
