@@ -105,7 +105,7 @@ Read-only references (cited by the ADR, not modified):
 - `docs/staged-command-surface.md`
 - `docs/architecture.md`
 - `docs/adr/adr-001-governance-two-verdicts.md`
-- `docs/adr/adr-002-llm-abstraction.md`
+- `docs/adr/adr-002-SUPERSEDED.md`
 - `docs/adr/adr-005-tool-backed-repair-agent-adapters.md`
 - `docs/adr/adr-008-resolve-implement-and-review-impl-stage-semantics.md`
 - `CONTEXT.md`

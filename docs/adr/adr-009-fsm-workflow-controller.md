@@ -162,7 +162,7 @@ If this ADR were to recommend No-go, the dominant reason would be: the current i
 - [architecture.md](../architecture.md) — Persistence model, run state, stage chain
 - [staged-command-surface.md](./staged-command-surface.md) — Seven-stage chain, per-stage subagents, resume matrix, repair contract
 - [ADR-001: Governance Two-Verdict Model](./adr-001-governance-two-verdicts.md) — Two-state governance vocabulary
-- [ADR-002: LLM Abstraction](./adr-002-llm-abstraction.md) — Per-stage subagent designation
+- [ADR-002: LLM Abstraction](./adr-002-SUPERSEDED.md) — Per-stage subagent designation
 - [ADR-005: Tool-Backed Repair Agent Adapters](./adr-005-tool-backed-repair-agent-adapters.md) — Repair agent architecture
 - [ADR-008: Resolve Implement and Review Impl Stage Semantics](./adr-008-resolve-implement-and-review-impl-stage-semantics.md) — implement/publish/review impl boundaries
 - [Canonical tracked plan for this issue](./issue-plans/issue-153.md)
