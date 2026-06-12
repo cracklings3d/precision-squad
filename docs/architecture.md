@@ -262,7 +262,7 @@ The active fingerprint is no longer based only on a human-facing summary. It is 
 
 ## Publishing And Review
 
-Per [ADR-008](./adr/adr-008-resolve-implement-and-review-impl-stage-semantics.md), `publish` sits between local `implement` work and `review impl`.
+Per [ADR-008](./adr/adr-adr-008-resolve-implement-and-review-impl-stage-semantics.md), `publish` sits between local `implement` work and `review impl`.
 
 Publishing uses the stored implementation result rather than rerunning repair.
 
