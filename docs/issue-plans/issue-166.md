@@ -7,7 +7,7 @@ review_status: pending
 source: issue
 owner: architect
 created_at: 2026-06-12
-updated_at: 2026-06-12
+updated_at: 2026-06-13
 approved_by: null
 approved_at: null
 review_artifact: null
@@ -122,7 +122,9 @@ The project currently uses a bespoke `CONTEXT.md` convention. This convention:
 
 1. Scan for Markdown files (*.md) that contain `[CONTEXT.md]` or `CONTEXT.md` as a live reference
 2. Update each reference to point to `CLAUDE.md` or the appropriate `instructions/` file
-3. **Excluded**: `docs/issue-plans/*` — these are historical artifacts; their references to `CONTEXT.md` reflect the state at time of authoring and are not live documentation
+3. **Excluded — historical artifacts**:
+   - `docs/issue-plans/*` — frozen records of past planning decisions
+   - `docs/adr/*` — Architecture Decision Records are historical decision anchors; their CONTEXT.md references point to the redirect shim by design (see "ADR Reference Policy Decision" above)
 
 ## Phase 4: Validate cascading prompts
 
@@ -159,6 +161,28 @@ The project currently uses a bespoke `CONTEXT.md` convention. This convention:
 - **Doc-update boundary**: Is `docs/issue-plans/*` the correct exclusion set, or are there other historical artifacts that should be excluded?
 - **Validation automation**: The cascading prompt validation step requires a human or agentic runtime check. Should a scripted validation (e.g., link checker) be added to the PR checklist?
 - **CLAUDE.md top-level content**: Should `CLAUDE.md` contain any content beyond links to `instructions/` files (e.g., project name, purpose statement)?
+
+# Stage F Remediation Notes
+
+## ADR Reference Policy Decision
+
+**Chosen: Option B** — ADRs are historical decision records. Their CONTEXT.md links are historical anchors pointing to the redirect shim by design.
+
+**Rationale:**
+1. ADRs document decisions at a specific point in time — their References sections are historical anchors, not live documentation
+2. The plan's Out Of Scope explicitly excludes "Changes to ... existing ADRs"
+3. The redirect shim preserves backwards compatibility — clicking CONTEXT.md links from ADRs redirects to CLAUDE.md
+4. AC #5 says "no broken references" — the links are not broken; a working redirect is not a broken link
+5. Updating ADR references would violate the plan's own scope boundaries
+
+**ADRs affected** (historical anchors, not updated):
+- adr-001 — `[CONTEXT.md](../../CONTEXT.md)` for Governance Verdicts, Quality Tag
+- adr-002 — `[CONTEXT.md](../../CONTEXT.md)` for Repair Agent
+- adr-005 — `[CONTEXT.md](../../CONTEXT.md)` (general reference)
+- adr-008 — `[CONTEXT.md](../../CONTEXT.md)` for Governance Verdicts
+- adr-009 — `[CONTEXT.md](../../CONTEXT.md)` for Governance verdicts, `approved` gates `publish`
+
+These ADRs correctly point to the redirect shim. The content they reference has been migrated to `instructions/governance.md` and `instructions/vocabulary.md`, but the ADR references are historical anchors and are intentionally left unchanged.
 
 # Approval Notes
 
