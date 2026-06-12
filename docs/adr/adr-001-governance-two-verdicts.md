@@ -81,6 +81,14 @@ Quality tags are **informational only**. The verdict (approved/blocked) is what 
 - Integration tests verify quality tags separately from verdicts.
 - The publish plan body uses the quality tag for context but does not gate on it.
 
+## Verification
+
+- [ ] No source file under `src/precision_squad/` references `provisional` as a governance verdict
+- [ ] `ExecutionResult` carries the `quality` field with values `green | improved | degraded | None`
+- [ ] `apply_governance` returns only `approved` or `blocked`
+- [ ] `governance-verdict.json` artifacts contain `verdict` with values from `{approved, blocked}` only
+- [ ] Tests assert quality-tag behaviour independently of verdict
+
 ## References
 
 - [CONTEXT.md](../../CONTEXT.md) — Governance Verdicts, Quality Tag

@@ -156,13 +156,19 @@ If a subsequent issue implements the FSM controller in code, it must and must no
 
 If this ADR were to recommend No-go, the dominant reason would be: the current implicit orchestration is functional and low-risk, and the FSM model's inspectability and testability benefits do not justify the code-slice implementation cost unless a concrete use case (e.g., deterministic transition test fixtures) demands it. The smallest useful follow-up would be to add an informal state-diagram section to [architecture.md](../architecture.md) so the implicit model is at least documented visually.
 
+## Verification
+
+- [ ] This ADR is the only output of the slice (no production code, no run-store schema change, no edits to staged-command-surface or architecture docs)
+- [ ] The eleven FSM states and seventeen events named in the ADR are the reference design for any future code-slice implementation
+- [ ] The Must / Must-not rules in the "Future code-slice envelope" are falsifiable checks for the future code slice
+
 ## References
 
 - [CONTEXT.md](../../CONTEXT.md) — Governance verdicts, `approved` gates `publish`
 - [architecture.md](../architecture.md) — Persistence model, run state, stage chain
 - [staged-command-surface.md](./staged-command-surface.md) — Seven-stage chain, per-stage subagents, resume matrix, repair contract
 - [ADR-001: Governance Two-Verdict Model](./adr-001-governance-two-verdicts.md) — Two-state governance vocabulary
-- [ADR-002: LLM Abstraction](./adr-002-llm-abstraction.md) — Per-stage subagent designation
+- [ADR-002: LLM Abstraction](./adr-002-SUPERSEDED.md) — Per-stage subagent designation
 - [ADR-005: Tool-Backed Repair Agent Adapters](./adr-005-tool-backed-repair-agent-adapters.md) — Repair agent architecture
 - [ADR-008: Resolve Implement and Review Impl Stage Semantics](./adr-008-resolve-implement-and-review-impl-stage-semantics.md) — implement/publish/review impl boundaries
 - [Canonical tracked plan for this issue](./issue-plans/issue-153.md)

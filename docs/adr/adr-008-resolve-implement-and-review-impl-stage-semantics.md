@@ -107,6 +107,13 @@ The workflow timing is locked down as follows:
 - Documentation and future implementation work should treat persisted implementation artifacts and persisted publish artifacts as distinct handoff points.
 - Issue closure remains governed elsewhere and is not implied by `implement`, `publish`, or draft PR creation.
 
+## Verification
+
+- [ ] `implement` stage does not call the GitHub transport to create a branch or PR
+- [ ] `publish` stage is the only stage that produces `publish-plan.json` and `publish-result.json`
+- [ ] `review impl` consumes the published draft PR (URL or number + head SHA), not an unpublished local-only workspace
+- [ ] PR creation occurs after `governance-verdict.json` records `verdict: approved`
+
 ## References
 
 - [CONTEXT.md](../../CONTEXT.md) — Governance Verdicts
