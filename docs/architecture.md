@@ -48,7 +48,8 @@ The explicit local stage chain is:
 3. `plan`
 4. `review plan`
 5. `implement`
-6. `publish run`
+6. `publish`
+7. `review impl`
 
 `implement` is the local-only boundary between reviewed planning and publish-side behavior. It reuses the same docs-first execution, repair, QA, evaluation, and governance persistence flow as the compatibility `repair issue` path, but stops before publish planning, GitHub mutation, or post-publish review.
 
