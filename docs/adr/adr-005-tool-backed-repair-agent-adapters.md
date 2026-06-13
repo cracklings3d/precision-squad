@@ -193,7 +193,7 @@ Add or update tests so they cover:
 
 ## References
 
-- [CONTEXT.md](../../CONTEXT.md)
+- [VISION.md](../../VISION.md)
 - [ADR-002: LLM Abstraction](./adr-002-SUPERSEDED.md)
 - [Issue #57](https://github.com/cracklings3d/precision-squad/issues/57)
 - [Issue #58](https://github.com/cracklings3d/precision-squad/issues/58)
