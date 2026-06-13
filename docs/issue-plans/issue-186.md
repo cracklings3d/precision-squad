@@ -17,7 +17,7 @@ replaces: null
 supersedes: null
 change_scope:
   files:
-    - docs/adr/adr-010-github-transport-and-credential-supply.md
+    - docs/adr/adr-011-github-transport-and-credential-supply.md
     - README.md
   directories:
     - docs/adr
@@ -35,7 +35,7 @@ Create ADR-010 to formally record the V1 operating assumptions for GitHub transp
 
 # Acceptance Criteria
 
-- [ ] New ADR exists at `docs/adr/adr-010-github-transport-and-credential-supply.md` following the established section shape (`Status`, `Date`, `Context`, `Decision`, `Rationale`, `Consequences`, `References`)
+- [ ] New ADR exists at `docs/adr/adr-011-github-transport-and-credential-supply.md` following the established section shape (`Status`, `Date`, `Context`, `Decision`, `Rationale`, `Consequences`, `References`)
 - [ ] ADR records: `GITHUB_TRANSPORT=auto|mcp|cli` with resolution order per `instructions/github-transport.md`
 - [ ] ADR records: PAT-only credential supply is the V1 norm; GitHub App auth is explicitly out of scope for V1
 - [ ] ADR records: transport and credential supply are independent concerns
@@ -43,7 +43,7 @@ Create ADR-010 to formally record the V1 operating assumptions for GitHub transp
 
 # In Scope
 
-- Authoring `docs/adr/adr-010-github-transport-and-credential-supply.md` following the 7-section baseline (Status, Date, Context, Decision, Rationale, Consequences, References); richer sections (e.g., Trade-offs per ADR-005 precedent) are optional
+- Authoring `docs/adr/adr-011-github-transport-and-credential-supply.md` following the 7-section baseline (Status, Date, Context, Decision, Rationale, Consequences, References); richer sections (e.g., Trade-offs per ADR-005 precedent) are optional
 - Updating `README.md` to cross-reference the new ADR from the V1 Operating Assumptions section
 
 # Out Of Scope
@@ -63,7 +63,7 @@ Create ADR-010 to formally record the V1 operating assumptions for GitHub transp
 ## Phase 1 — Author ADR-010
 
 **1.1** ← CURRENT
-Draft `docs/adr/adr-010-github-transport-and-credential-supply.md` following the 7-section baseline (Status, Date, Context, Decision, Rationale, Consequences, References), drawing context from:
+Draft `docs/adr/adr-011-github-transport-and-credential-supply.md` following the 7-section baseline (Status, Date, Context, Decision, Rationale, Consequences, References), drawing context from:
 - `README.md:38-48` (V1 Operating Assumptions — transport and credential supply)
 - `README.md:50-55` (V1 Non-Goals — GitHub App auth exclusion)
 - `instructions/github-transport.md` (transport resolution order `auto|mcp|cli`)
@@ -81,12 +81,12 @@ Verify the README update does not alter the existing V1 Operating Assumptions te
 
 # Impacted Areas
 
-- `docs/adr/adr-010-github-transport-and-credential-supply.md` (new artifact)
+- `docs/adr/adr-011-github-transport-and-credential-supply.md` (new artifact)
 - `README.md` (inline reference addition)
 
 # Validation Plan
 
-- [ ] New ADR file exists at `docs/adr/adr-010-github-transport-and-credential-supply.md`
+- [ ] New ADR file exists at `docs/adr/adr-011-github-transport-and-credential-supply.md`
 - [ ] ADR contains all 7 baseline sections (Status, Date, Context, Decision, Rationale, Consequences, References)
 - [ ] ADR accurately represents the `auto|mcp|cli` transport model and its independence from credential supply
 - [ ] ADR explicitly records PAT-only as V1 norm and GitHub App as V1 out-of-scope
