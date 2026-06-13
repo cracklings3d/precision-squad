@@ -46,6 +46,8 @@ The MVP control loop is:
 - filesystem-backed run persistence
 - docs-first execution wrapped behind a narrow adapter boundary
 
+These decisions are recorded in [ADR-011](./docs/adr/adr-011-github-transport-and-credential-supply.md).
+
 ## Non-Goals For V1
 
 ### Authentication

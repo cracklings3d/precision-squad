@@ -216,7 +216,7 @@ Note: ccaeb88 was a sync/merge commit that may produce an empty diff after rebas
 
 ## ADR-010 Recut
 
-ADR-010 was originally filed against claude-md-migration but was recut as dr-010-github-transport-and-credential-supply.md and accepted as part of the #186 issue plan. The original dr-010-claude-md-migration.md was deleted in the same commit.
+ADR-010 was originally filed against claude-md-migration but was recut as dr-011-github-transport-and-credential-supply.md and accepted as part of the #186 issue plan. The original dr-011-claude-md-migration.md was deleted in the same commit.
 
 ## Branch Retirement
 
