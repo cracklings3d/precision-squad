@@ -18,7 +18,7 @@ Without that contract, downstream work can drift into conflicting interpretation
 - treating `review impl` as review of unpublished local workspace state
 - collapsing `publish` into `implement`
 
-Those interpretations would conflict with the already accepted governance rule in [CONTEXT.md](../../CONTEXT.md) and [ADR-001](./adr-001-governance-two-verdicts.md):
+Those interpretations would conflict with the already accepted governance rule in [VISION.md](../../VISION.md) and [ADR-001](./adr-001-governance-two-verdicts.md):
 
 - `approved` means governance says yes
 - `approved` creates `draft_pr` automatically
@@ -116,7 +116,7 @@ The workflow timing is locked down as follows:
 
 ## References
 
-- [CONTEXT.md](../../CONTEXT.md) — Governance Verdicts
+- [VISION.md](../../VISION.md) — Governance Verdicts
 - [ADR-001: Governance Two-Verdict Model](./adr-001-governance-two-verdicts.md)
 - [architecture.md](../architecture.md) — Publishing And Review
 - [staged-command-surface.md](../staged-command-surface.md) — Stage chain overview, `implement` / `publish` / `review impl` stage contract, and Artifact Inventory

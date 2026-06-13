@@ -118,7 +118,7 @@ The FSM treats `repair_accepted` as a first-class event (transition #16) that ca
 
 ### Gate-verdict clarity
 
-The FSM event alphabet names the gate verdicts explicitly (`governance_approved`, `governance_blocked`, `plan_review_approved`, etc.). The controller's transition function maps each (state, event) pair to exactly one next state, making the gate semantics unambiguous. The governance rule from [CONTEXT.md](../../CONTEXT.md) (that `approved` gates `publish`) is preserved: transition #11 (`IMPLEMENTED` + `publish_ready` -> `PUBLISHED`) fires only after `governance_approved` (transition #9) has already fired. The tri-state vocabulary (`approved` | `changes_requested` | `blocked`) from [ADR-001](./adr-001-governance-two-verdicts.md) is preserved as terminal event labels. **This axis supports Go**: the FSM makes gate verdicts explicit and eliminates the current implicit derivation from artifact presence.
+The FSM event alphabet names the gate verdicts explicitly (`governance_approved`, `governance_blocked`, `plan_review_approved`, etc.). The controller's transition function maps each (state, event) pair to exactly one next state, making the gate semantics unambiguous. The governance rule from [VISION.md](../../VISION.md) (that `approved` gates `publish`) is preserved: transition #11 (`IMPLEMENTED` + `publish_ready` -> `PUBLISHED`) fires only after `governance_approved` (transition #9) has already fired. The tri-state vocabulary (`approved` | `changes_requested` | `blocked`) from [ADR-001](./adr-001-governance-two-verdicts.md) is preserved as terminal event labels. **This axis supports Go**: the FSM makes gate verdicts explicit and eliminates the current implicit derivation from artifact presence.
 
 ### Migration cost
 
@@ -140,7 +140,7 @@ The FSM models the seven stages in their current order with their current bounda
 - The [canonical tracked plan artifact](./issue-plans/issue-153.md) for this issue is updated to reflect completion.
 - No production code under `src/precision_squad/` is created or modified.
 - No test files are created or modified.
-- No changes to [staged-command-surface.md](./staged-command-surface.md), [architecture.md](../architecture.md), [CONTEXT.md](../../CONTEXT.md), or any existing ADR.
+- No changes to [staged-command-surface.md](./staged-command-surface.md), [architecture.md](../architecture.md), [VISION.md](../../VISION.md), or any existing ADR.
 - The FSM model in this ADR becomes the reference design for any future code-slice implementation.
 
 ### Future code-slice envelope (out of scope for this slice)
@@ -164,7 +164,7 @@ If this ADR were to recommend No-go, the dominant reason would be: the current i
 
 ## References
 
-- [CONTEXT.md](../../CONTEXT.md) — Governance verdicts, `approved` gates `publish`
+- [VISION.md](../../VISION.md) — Governance verdicts, `approved` gates `publish`
 - [architecture.md](../architecture.md) — Persistence model, run state, stage chain
 - [staged-command-surface.md](./staged-command-surface.md) — Seven-stage chain, per-stage subagents, resume matrix, repair contract
 - [ADR-001: Governance Two-Verdict Model](./adr-001-governance-two-verdicts.md) — Two-state governance vocabulary
