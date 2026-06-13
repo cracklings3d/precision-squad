@@ -2,8 +2,8 @@
 issue: github.com/cracklings3d/precision-squad#166
 title: Migrate from CONTEXT.md to standard CLAUDE.md with cascading prompt support
 status: draft
-plan_status: proposed
-review_status: pending
+plan_status: accepted
+review_status: accepted
 source: issue
 owner: architect
 created_at: 2026-06-12
@@ -73,14 +73,12 @@ The project currently uses a bespoke `CONTEXT.md` convention. This convention:
 - Workflow controller logic changes
 - Changes to `skills/`, `src/`, `tests/`, or existing ADRs
 - Full `CONTEXT.md` removal
-- ADR-010 acceptance (ADR-010 remains in `Proposed` status; #166 proceeds in parallel)
 
 # Constraints
 
 - `CONTEXT.md` redirect shim content: preserve original header line, replace body with single redirect line `[](./CLAUDE.md)` — no custom parsing, no multi-line content
 - `instructions/*.md` files must be directly mappable to specific `CONTEXT.md` sections (no speculative content)
 - Doc-update boundary: update active documentation files (e.g., `.claude/settings.json` if present, root-level docs that reference CONTEXT.md as a current convention); exclude `docs/issue-plans/*` as historical artifacts
-- ADR-010 sequencing: #166 merges in parallel with ADR-010 remaining `Proposed`; ADR acceptance is a separate concern
 
 # Proposed Approach
 
@@ -153,7 +151,7 @@ The project currently uses a bespoke `CONTEXT.md` convention. This convention:
 
 # Risks
 
-- **ADR-010 sequencing ambiguity**: ADR-010 is `Proposed` but #166 proceeds in parallel. Mitigation: ADR-010 does not need to be `Accepted` before #166 merges; the ADR authorizes the *decision* while #166 handles *implementation*. ADR-010 explicitly states "Issue #166 owns the implementation."
+- **ADR-010 sequencing**: ADR-010 was recut from `claude-md-migration` to `github-transport-and-credential-supply` and accepted as part of this sync. See Resolution section below.
 - **Historical issue-plans**: Excluding `docs/issue-plans/*` from doc-update scope means some historical artifacts will still reference `CONTEXT.md`. This is acceptable as those are frozen records, not live documentation.
 
 # Open Questions
@@ -191,5 +189,35 @@ These ADRs correctly point to the redirect shim. The content they reference has 
   2. **instructions/*.md content**: Pin each file to specific CONTEXT.md sections (documented in In Scope above)
   3. **Doc-update boundary**: Active docs only; exclude `docs/issue-plans/*` as historical
   4. **Validation signal**: Manual or runtime check; cascading prompt chain must be navigable
-  5. **ADR-010 sequencing**: #166 proceeds in parallel with ADR-010 in `Proposed` status; ADR acceptance is separate
+  5. **ADR-010 sequencing**: Resolved — ADR-010 was recut and accepted as part of this sync (see Resolution section).
 - Stage B review confirmed issue passes acceptance with the above concerns addressed in this plan
+
+# Resolution
+
+## Merged Core Work
+
+The core CLAUDE.md migration was merged into master via PR #166 as commit 88ff7b ("feat: Migrate from CONTEXT.md to standard CLAUDE.md with cascading prompt support").
+
+## Follow-on Commits Brought Across in Sync
+
+The following commits from issue/166-claude-md-migration were replayed onto master via rebase:
+
+| SHA | Description |
+|-----|-------------|
+| 8def813 | #166 plan ADR reference policy decision |
+| 761031e | docs: add issue plan for #185 (VISION anchor) |
+| 15cd811 | sync: merge master into issue/166 (scope.md refs) |
+| 0844341 | docs: add issue plans for #184, #185, #186 |
+| b4221ac | docs(issue-166): mark plan accepted, record resolution |
+
+Commits 4b61002 (issues 185/186 implementation) and 1a497d7 (issue 184 implementation) were not brought across; the equivalent work landed on master in commits 6351d9e, 8646b74, and dca479a during parallel development.
+
+Note: ccaeb88 was a sync/merge commit that may produce an empty diff after rebasing onto origin/master (master content already present); it was dropped proactively to keep the commit log clean.
+
+## ADR-010 Recut
+
+ADR-010 was originally filed against claude-md-migration but was recut as dr-010-github-transport-and-credential-supply.md and accepted as part of the #186 issue plan. The original dr-010-claude-md-migration.md was deleted in the same commit.
+
+## Branch Retirement
+
+Branch issue/166-claude-md-migration is retired after this sync. See the tip commit on master for the final state.
