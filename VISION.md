@@ -8,6 +8,8 @@
 
 The vision is the only guideline. The architecture, the instructions, the code — all derive from it. The system is built on *separation of concerns*: each agent has a single concern and a deliberately bounded context, engineered to give it exactly the knowledge it needs to do its job and no more. Agents are not interchangeable; they are specialists.
 
+`VISION.md` is the system's *identity*. No agent may edit it without an explicit, audited permit from the user. The permit is granted, scoped, time-limited, and recorded. Enforcement is automatic — at the agent boundary, in CI, and at merge — so the rule cannot drift into a polite suggestion.
+
 ## Promise
 
 When the user provides a vision, the system breaks it into fragments, executes them in a predictable order, verifies each one against the project's documented contract, and publishes the result. The user comes back to a working project, not a stream of decisions. The user is the *source of soft constraints* the system cannot infer; the system is the *executor* of the work.
